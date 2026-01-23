@@ -13,14 +13,14 @@ wandb:
   project: "Pretrain-Qwen3-8B-Pancreas"
 
 lora:
-  r: 64
+  r: 16
   target_modules: ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
   lora_alpha: 32
   lora_dropout: 0.05
   bias: "none"
 
 training:
-  output_dir: "/data/scratch/qc25022/pancreas/experiments/Pretrain-Qwen3-8B-Pancreas-no-adaptation"
+  output_dir: "/data/scratch/qc25022/pancreas/experiments/Pretrain-Qwen3-8B-Pancreas-no-adaptation-refactored"
   overwrite_output_dir: true
 
   
@@ -51,7 +51,7 @@ data:
   data_dir: "/data/scratch/qc25022/pancreas/tokenised_data_word_level/cprd_upgi/"
   vocab_filepath: "/data/scratch/qc25022/pancreas/tokenised_data_word_level/cprd_upgi/vocab.csv"
   labels_filepath: "/data/scratch/qc25022/upgi/master_subject_labels.csv"
-  medical_lookup_filepath: "/data/home/qc25022/TextCancEHR/src/resources/MedicalDictTranslation2.csv"
-  lab_lookup_filepath: "/data/home/qc25022/TextCancEHR/src/resources/LabLookUP.csv"
-  region_lookup_filepath: "/data/home/qc25022/TextCancEHR/src/resources/RegionLookUp.csv"
-  time_lookup_filepath: "/data/home/qc25022/TextCancEHR/src/resources/TimeLookUp.csv"
+  medical_lookup_filepath: "/data/home/qc25022/TextCancEHR2/src/resources/MedicalDictTranslation2.csv"
+  lab_lookup_filepath: "/data/home/qc25022/TextCancEHR2/src/resources/LabLookUP.csv"
+  region_lookup_filepath: "/data/home/qc25022/TextCancEHR2/src/resources/RegionLookUp.csv"
+  time_lookup_filepath: "/data/home/qc25022/TextCancEHR2/src/resources/TimeLookUp.csv"
