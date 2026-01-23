@@ -1,0 +1,57 @@
+# src/configs/llm-pretrain.yaml
+
+name: "llama_pretraining"
+
+model:
+  # Model to pretrain (examples: gpt2, meta-llama/Llama-2-7b-hf, mistralai/Mistral-7B-v0.1, unsloth/llama-3-8b-bnb-4bit, unsloth/Qwen3-8B-Base-unsloth-bnb-4bit)
+  model_name: "unsloth/Qwen3-8B-Base-unsloth-bnb-4bit"
+  max_length: 8192  # Context window for sequence packing
+  hf_token: null 
+
+wandb:
+  enabled: true
+  project: "Pretrain-Qwen3-8B-Pancreas"
+
+lora:
+  r: 64
+  target_modules: ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
+  lora_alpha: 32
+  lora_dropout: 0.05
+  bias: "none"
+
+training:
+  output_dir: "/data/scratch/qc25022/pancreas/experiments/Pretrain-Qwen3-8B-Pancreas-no-adaptation"
+  overwrite_output_dir: true
+
+  
+  # Training hyperparameters
+  epochs: 5
+  batch_size: 8
+  eval_batch_size: 8
+  learning_rate: 1e-5
+  weight_decay: 0.05
+  warmup_steps: 500
+  
+  # Gradient settings
+  gradient_accumulation_steps: 1  # Effective batch size = gradient_accumulation_steps * batch_size
+  gradient_checkpointing: false  # Set to true for large models to save memory
+  
+  # Precision
+  fp16: false  # Use FP16 for faster training (if GPU supports it)
+  bf16: true  # Use BF16 for better numerical stability (if GPU supports it - only does for NVIDA Ampere GPUs)
+  
+  # Logging and saving
+  logging_steps: 50
+  eval_steps: 250
+  save_steps: 1000
+  save_total_limit: 3  # Keep only 1 best checkpoint
+
+data:
+  cutoff_months: 1  # Remove last 1 month before diagnosis for cancer patients
+  data_dir: "/data/scratch/qc25022/pancreas/tokenised_data_word_level/cprd_upgi/"
+  vocab_filepath: "/data/scratch/qc25022/pancreas/tokenised_data_word_level/cprd_upgi/vocab.csv"
+  labels_filepath: "/data/scratch/qc25022/upgi/master_subject_labels.csv"
+  medical_lookup_filepath: "/data/home/qc25022/TextCancEHR/src/resources/MedicalDictTranslation2.csv"
+  lab_lookup_filepath: "/data/home/qc25022/TextCancEHR/src/resources/LabLookUP.csv"
+  region_lookup_filepath: "/data/home/qc25022/TextCancEHR/src/resources/RegionLookUp.csv"
+  time_lookup_filepath: "/data/home/qc25022/TextCancEHR/src/resources/TimeLookUp.csv"
