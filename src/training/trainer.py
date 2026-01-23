@@ -5,7 +5,7 @@ import os
 from datetime import datetime
 from typing import Dict, Any, Optional
 import torch
-from torch.utils.data import Dataset
+from datasets import Dataset
 from transformers import TrainingArguments
 from unsloth import FastLanguageModel
 from trl import SFTTrainer
