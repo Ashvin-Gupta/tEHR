@@ -1,8 +1,8 @@
 #!/bin/bash
 #$ -cwd                 
-#$ -pe smp 11
+#$ -pe smp 8
 #$ -l h_rt=1:0:0
-#$ -l h_vmem=8G
+#$ -l h_vmem=11G
 #$ -l gpu=1
 #$ -l gpu_type=ampere
 #$ -j n
