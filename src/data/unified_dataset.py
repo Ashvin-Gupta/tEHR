@@ -30,7 +30,7 @@ class UnifiedEHRDataset(Dataset):
         self.data_type = data_type
         # Load the patient records from the .pkl files for the specified split
         # self.patient_records = self._load_data(data_dir, split)
-        if split == 'tuning' or split == 'held_out' or split == 'training':
+        if split == 'tuning' or split == 'held_out':
             self.patient_records = self._load_data(data_dir, split, limit=1)
         else:
             # Chaning to 5 to see result and inference
