@@ -6,7 +6,15 @@ model:
   # Model to pretrain (examples: gpt2, meta-llama/Llama-2-7b-hf, mistralai/Mistral-7B-v0.1, unsloth/llama-3-8b-bnb-4bit, unsloth/Qwen3-8B-Base-unsloth-bnb-4bit)
   model_name: "unsloth/Qwen3-8B-Base-unsloth-bnb-4bit"
   max_length: 8192  # Context window for sequence packing
-  hf_token: null 
+  hidden_size: 4096  # Hidden size for temporal embeddings (must match model)
+  hf_token: null
+  
+  # Temporal embedding configuration (set use_temporal_embeddings to true to enable)
+  use_temporal_embeddings: false  # Toggle between text-based time and temporal embeddings
+  temporal_config:
+    time_scale: 86400  # Scale factor: 86400=days, 3600=hours, 1=seconds
+    dropout: 0.1  # Dropout for temporal embedding layer
+    # Log scaling applied automatically: log(1 + delta_time / time_scale) 
 
 wandb:
   enabled: true

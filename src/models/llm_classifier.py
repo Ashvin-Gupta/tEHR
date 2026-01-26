@@ -6,6 +6,7 @@ Wraps a pretrained LLM with a classification head for EHR-based prediction.
 import torch
 import torch.nn as nn
 from typing import Dict, Optional
+from src.models.temporal_embeddings import TemporalEmbedding
 
 
 class LLMClassifier(nn.Module):
@@ -40,7 +41,9 @@ class LLMClassifier(nn.Module):
         tokenizer=None,
         head_type: str = 'linear',
         head_hidden_size: int = 512,
-        head_dropout: float = 0.1
+        head_dropout: float = 0.1,
+        use_temporal_embeddings: bool = False,
+        temporal_config: Optional[Dict] = None
     ):
         super().__init__()
         self.base_model = base_model
@@ -49,6 +52,7 @@ class LLMClassifier(nn.Module):
         self.trainable_param_keywords = trainable_param_keywords or []
         self.tokenizer = tokenizer
         self.head_type = head_type
+        self.use_temporal_embeddings = use_temporal_embeddings
 
         # Enable gradient checkpointing if available
         if hasattr(self.base_model, "gradient_checkpointing_enable"):
@@ -69,6 +73,19 @@ class LLMClassifier(nn.Module):
                     param.requires_grad = True
                     reenabled += 1
             print(f"  - Re-enabled {reenabled} parameters matching: {self.trainable_param_keywords}")
+        
+        # Create temporal embedding module if needed
+        self.temporal_embedder = None
+        if use_temporal_embeddings:
+            temporal_config = temporal_config or {}
+            time_scale = temporal_config.get('time_scale', 86400.0)
+            dropout = temporal_config.get('dropout', 0.1)
+            self.temporal_embedder = TemporalEmbedding(
+                hidden_size=hidden_size,
+                time_scale=time_scale,
+                dropout=dropout
+            )
+            print(f"  - Added temporal embedding layer (time_scale={time_scale})")
         
         # Create classification head based on type
         self.classifier = self._create_classifier_head(
@@ -152,7 +169,8 @@ class LLMClassifier(nn.Module):
         self,
         input_ids: torch.Tensor,
         attention_mask: torch.Tensor,
-        labels: Optional[torch.Tensor] = None
+        labels: Optional[torch.Tensor] = None,
+        delta_times: Optional[torch.Tensor] = None
     ) -> Dict[str, torch.Tensor]:
         """
         Forward pass for classification.
@@ -161,6 +179,7 @@ class LLMClassifier(nn.Module):
             input_ids: (batch_size, seq_len) token IDs.
             attention_mask: (batch_size, seq_len) attention mask.
             labels: (batch_size,) ground truth labels.
+            delta_times: (batch_size, seq_len) log-scaled delta times (optional).
         
         Returns:
             Dict with 'loss' and 'logits'.
@@ -168,13 +187,33 @@ class LLMClassifier(nn.Module):
         # Get the base model (unwrap if needed)
         backbone = getattr(self.base_model, "model", self.base_model)
 
-        # Get hidden states from LLM
-        outputs = backbone(
-            input_ids=input_ids,
-            attention_mask=attention_mask,
-            output_hidden_states=True,
-            return_dict=True
-        )
+        # If using temporal embeddings, modify input embeddings
+        if self.use_temporal_embeddings and delta_times is not None and self.temporal_embedder is not None:
+            # Get base token embeddings
+            embedding_layer = backbone.get_input_embeddings()
+            token_embeddings = embedding_layer(input_ids)
+            
+            # Get temporal embeddings
+            temporal_embeds = self.temporal_embedder(delta_times)
+            
+            # Add temporal embeddings to token embeddings (element-wise addition)
+            combined_embeddings = token_embeddings + temporal_embeds
+            
+            # Pass combined embeddings through the model
+            outputs = backbone(
+                inputs_embeds=combined_embeddings,
+                attention_mask=attention_mask,
+                output_hidden_states=True,
+                return_dict=True
+            )
+        else:
+            # Standard forward pass without temporal embeddings
+            outputs = backbone(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                output_hidden_states=True,
+                return_dict=True
+            )
         
         # Extract last layer's hidden states: (batch_size, seq_len, hidden_size)
         if hasattr(outputs, "last_hidden_state"):
