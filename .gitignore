@@ -1,0 +1,5 @@
+HPC_Pretain/
+wandb/
+unsloth_compiled_cache/
+.DS_Store
+__pycache__/
