@@ -1,5 +1,6 @@
-HPC_Pretain/
+HPC_Pretrain/
 wandb/
 unsloth_compiled_cache/
 .DS_Store
 __pycache__/
+.ipynb_checkpoints/
