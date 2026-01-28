@@ -21,23 +21,23 @@ def seed_all(seed: int):
     hf_set_seed(seed)
 
 
-def print_sample_translations(config: dict, num_samples: int = 3):
+def print_sample_translations(config: dict, num_samples: int = 4):
     """
     Print sample patient translations to verify data quality before training.
     
     Shows the first and last 1000 characters of translated text for randomly
-    sampled patients to verify the data pipeline is working correctly.
+    sampled patients (2 controls and 2 cases) to verify the data pipeline is working correctly.
     
     Args:
         config: Configuration dictionary containing data paths
-        num_samples: Number of patients to sample (default: 3)
+        num_samples: Number of patients to sample (default: 4, split between controls and cases)
     """
     from src.data.unified_dataset_v2 import UnifiedEHRDataset
     
     print("\n" + "=" * 80)
     print("SAMPLE PATIENT TRANSLATIONS")
     print("=" * 80)
-    print(f"Showing first and last 1000 characters for {num_samples} patients\n")
+    print(f"Showing first and last 1000 characters for {num_samples} patients (2 controls, 2 cases)\n")
     
     data_config = config['data']
     
@@ -58,12 +58,33 @@ def print_sample_translations(config: dict, num_samples: int = 3):
     
     print(f"Loaded dataset with {len(dataset)} patients\n")
     
-    # Sample patients randomly
-    sample_indices = random.sample(range(len(dataset)), min(num_samples, len(dataset)))
+    # Separate indices by label
+    control_indices = []
+    case_indices = []
     
-    for i, idx in enumerate(sample_indices, 1):
+    for idx in range(len(dataset)):
+        sample = dataset[idx]
+        if sample is not None:
+            label = sample['label'].item()
+            if label == 0:
+                control_indices.append(idx)
+            else:
+                case_indices.append(idx)
+    
+    print(f"Found {len(control_indices)} controls and {len(case_indices)} cases\n")
+    
+    # Sample 2 from each group
+    num_per_group = num_samples // 2
+    sampled_controls = random.sample(control_indices, min(num_per_group, len(control_indices)))
+    sampled_cases = random.sample(case_indices, min(num_per_group, len(case_indices)))
+    
+    # Combine samples (controls first, then cases)
+    sample_indices = sampled_controls + sampled_cases
+    sample_labels = ['Control'] * len(sampled_controls) + ['Case'] * len(sampled_cases)
+    
+    for i, (idx, label_type) in enumerate(zip(sample_indices, sample_labels), 1):
         print("=" * 80)
-        print(f"PATIENT SAMPLE {i} (Index: {idx})")
+        print(f"PATIENT SAMPLE {i} - {label_type.upper()} (Index: {idx})")
         print("=" * 80)
         
         sample = dataset[idx]
@@ -74,7 +95,7 @@ def print_sample_translations(config: dict, num_samples: int = 3):
         text = sample['text']
         label = sample['label'].item()
         
-        print(f"Label: {label}")
+        print(f"Label: {label} ({label_type})")
         print(f"Total Text Length: {len(text):,} characters")
         print(f"Total Text Length: {len(text.split()):,} words (approx)")
         
