@@ -1,7 +1,7 @@
 name: "llm_classifier"
 
 model:
-  pretrained_checkpoint: "/data/scratch/qc25022/pancreas/experiments/Pretrain-Qwen3-8B-Pancreas-Raw/checkpoint-19640"
+  pretrained_checkpoint: "/data/scratch/qc25022/pancreas/experiments/Pretrain-Qwen3-8B-Pancreas-no-adaptation-refactored/final_model"
   max_length: 12000           # Used when loading model 
   hidden_size: 4096
   num_labels: 2
@@ -49,14 +49,14 @@ training:
 
 
 data:
-  cutoff_months: 6
-  data_dir: "/data/scratch/qc25022/pancreas/tokenised_data_word_level/cprd_upgi/"
-  vocab_filepath: "/data/scratch/qc25022/pancreas/tokenised_data_word_level/cprd_upgi/vocab.csv"
-  labels_filepath: "/data/scratch/qc25022/upgi/master_subject_labels.csv"
-  medical_lookup_filepath: "/data/home/qc25022/CancEHR-Training/src/resources/MedicalDictTranslation2.csv"
-  lab_lookup_filepath: "/data/home/qc25022/CancEHR-Training/src/resources/LabLookUP.csv"
-  region_lookup_filepath: "/data/home/qc25022/CancEHR-Training/src/resources/RegionLookUp.csv"
-  time_lookup_filepath: "/data/home/qc25022/CancEHR-Training/src/resources/TimeLookUp.csv"
+  cutoff_months: 6  # Remove last 5 month before diagnosis for cancer patients
+  data_dir: "/data/scratch/qc25022/pancreas/tokenised_data_pancreas_MEDS/cprd_upgi"
+  vocab_filepath: "/data/scratch/qc25022/pancreas/tokenised_data_pancreas_MEDS/cprd_upgi/vocab.csv"
+  labels_filepath: "/data/home/qc25022/cancer-extraction-pipeline/output/pancreas_MEDS/subject_information.csv"
+  medical_lookup_filepath: "/data/home/qc25022/TextCancEHR2/src/resources/MedicalDictTranslation2.csv"
+  lab_lookup_filepath: "/data/home/qc25022/TextCancEHR2/src/resources/LabLookUP.csv"
+  region_lookup_filepath: "/data/home/qc25022/TextCancEHR2/src/resources/RegionLookUp.csv"
+  time_lookup_filepath: "/data/home/qc25022/TextCancEHR2/src/resources/TimeLookUp.csv"
   max_length: 12000           # Used by collator for truncation
   handle_long_sequences: "warn"
   sort_by_length: true
