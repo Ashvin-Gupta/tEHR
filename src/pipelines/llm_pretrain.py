@@ -7,7 +7,7 @@ import argparse
 import yaml
 import pprint
 
-from src.training.utils import seed_all
+from src.training.utils import seed_all, print_sample_translations
 from src.training.trainer import EHRPretrainer
 
 
@@ -47,6 +47,9 @@ def main(config_path: str):
     print('Loaded configuration:')
     pprint.pprint(config)
     print("=" * 80)
+    
+    # Print sample translations before training
+    print_sample_translations(config, num_samples=3)
 
     # Create pretrainer and run the full pipeline
     pretrainer = EHRPretrainer(config)
