@@ -27,7 +27,7 @@ cd "${BASE_DIR}"
 echo "Starting experiment from directory: $(pwd)"
 export PYTHONPATH="${BASE_DIR}:${PYTHONPATH}"
 
-python -m src.pipelines.finetune_llm_classifier --config_filepath src/configs/llm_classifier.yaml 
+python -m src.pipelines.finetune_llm_classifier --config_filepath src/configs/classification_config.yaml 
 # torchrun --nproc_per_node=2 src/pipelines/llm_pretrain.py --config_filepath src/configs/llm_pretrain.yaml
 
 echo "Pipeline finished."
