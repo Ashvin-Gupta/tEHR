@@ -56,9 +56,9 @@ training:
 
 data:
   cutoff_months: 1  # Remove last 1 month before diagnosis for cancer patients
-  data_dir: "/data/scratch/qc25022/pancreas/tokenised_data_word_level/cprd_upgi/"
-  vocab_filepath: "/data/scratch/qc25022/pancreas/tokenised_data_word_level/cprd_upgi/vocab.csv"
-  labels_filepath: "/data/scratch/qc25022/upgi/master_subject_labels.csv"
+  data_dir: "/data/scratch/qc25022/pancreas/tokenised_data_pancreas_MEDS/cprd_upgi"
+  vocab_filepath: "/data/scratch/qc25022/pancreas/tokenised_data_pancreas_MEDS/cprd_upgi/vocab.csv"
+  labels_filepath: "/data/home/qc25022/cancer-extraction-pipeline/output/pancreas_MEDS/subject_information.csv"
   medical_lookup_filepath: "/data/home/qc25022/TextCancEHR2/src/resources/MedicalDictTranslation2.csv"
   lab_lookup_filepath: "/data/home/qc25022/TextCancEHR2/src/resources/LabLookUP.csv"
   region_lookup_filepath: "/data/home/qc25022/TextCancEHR2/src/resources/RegionLookUp.csv"
