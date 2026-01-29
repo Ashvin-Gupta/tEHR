@@ -53,6 +53,9 @@ class LLMClassifier(nn.Module):
         self.tokenizer = tokenizer
         self.head_type = head_type
         self.use_temporal_embeddings = use_temporal_embeddings
+        
+        # Flag to track EOS token verification (done once)
+        self._eos_verified = False
 
         # Enable gradient checkpointing if available
         if hasattr(self.base_model, "gradient_checkpointing_enable"):
@@ -165,6 +168,84 @@ class LLMClassifier(nn.Module):
         """Helper needed by Trainer to verify model compatibility."""
         return self.base_model.get_input_embeddings()
     
+    def _verify_eos_token(
+        self, 
+        input_ids: torch.Tensor, 
+        sequence_lengths: torch.Tensor, 
+        labels: torch.Tensor
+    ):
+        """
+        Verify that the token used for classification is actually the EOS token.
+        Checks one positive case and one negative control.
+        
+        Args:
+            input_ids: (batch_size, seq_len) token IDs.
+            sequence_lengths: (batch_size,) position of last non-padding token.
+            labels: (batch_size,) ground truth labels.
+        """
+        print("\n" + "="*80)
+        print("EOS TOKEN VERIFICATION")
+        print("="*80)
+        
+        # Get EOS token ID
+        if hasattr(self.tokenizer, 'eos_token_id'):
+            eos_token_id = self.tokenizer.eos_token_id
+        else:
+            print("⚠️  WARNING: Tokenizer does not have eos_token_id attribute!")
+            return
+        
+        print(f"Expected EOS token ID: {eos_token_id}")
+        print(f"EOS token string: '{self.tokenizer.eos_token}'\n")
+        
+        # Find one case (label=1) and one control (label=0)
+        positive_idx = None
+        negative_idx = None
+        
+        for i, label in enumerate(labels):
+            if label == 1 and positive_idx is None:
+                positive_idx = i
+            elif label == 0 and negative_idx is None:
+                negative_idx = i
+            
+            if positive_idx is not None and negative_idx is not None:
+                break
+        
+        # Verify both samples
+        for sample_type, idx in [("CASE (label=1)", positive_idx), 
+                                   ("CONTROL (label=0)", negative_idx)]:
+            if idx is None:
+                print(f"⚠️  {sample_type}: Not found in this batch\n")
+                continue
+            
+            seq_len = sequence_lengths[idx].item()
+            actual_token_id = input_ids[idx, seq_len].item()
+            
+            # Get token string representation
+            actual_token_str = self.tokenizer.decode([actual_token_id])
+            
+            # Check if it matches EOS
+            is_eos = (actual_token_id == eos_token_id)
+            status = "✓ CORRECT" if is_eos else "✗ INCORRECT"
+            
+            print(f"{sample_type}:")
+            print(f"  Position used for classification: {seq_len}")
+            print(f"  Actual token ID at that position: {actual_token_id}")
+            print(f"  Token string: '{actual_token_str}'")
+            print(f"  Status: {status}")
+            
+            if not is_eos:
+                print(f"  ⚠️  WARNING: Expected EOS token (ID={eos_token_id}), got {actual_token_id}!")
+                # Show context around this position
+                context_start = max(0, seq_len - 3)
+                context_end = min(input_ids.size(1), seq_len + 3)
+                context_ids = input_ids[idx, context_start:context_end].tolist()
+                context_str = self.tokenizer.decode(context_ids)
+                print(f"  Context tokens: {context_ids}")
+                print(f"  Context string: '{context_str}'")
+            print()
+        
+        print("="*80 + "\n")
+    
     def forward(
         self,
         input_ids: torch.Tensor,
@@ -225,6 +306,11 @@ class LLMClassifier(nn.Module):
         sequence_lengths = attention_mask.sum(dim=1) - 1  # -1 for 0-indexing
         batch_size = hidden_states.size(0)
         last_hidden_states = hidden_states[range(batch_size), sequence_lengths]
+        
+        # === VERIFICATION: Check EOS token (run once) ===
+        if not self._eos_verified and self.tokenizer is not None and labels is not None:
+            self._verify_eos_token(input_ids, sequence_lengths, labels)
+            self._eos_verified = True
         
         # Pass through classification head
         logits = self.classifier(last_hidden_states)

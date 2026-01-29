@@ -244,6 +244,37 @@ python -m src.pipelines.finetune_llm_classifier --config_filepath src/configs/cl
 
 Expected: Model loads with temporal embedding layer, delta_times passed through collator.
 
+**EOS Token Verification**: On the first batch, the classifier will automatically verify it's using the correct EOS token:
+
+```
+================================================================================
+EOS TOKEN VERIFICATION
+================================================================================
+Expected EOS token ID: 2
+EOS token string: '</s>'
+
+CASE (label=1):
+  Position used for classification: 142
+  Actual token ID at that position: 2
+  Token string: '</s>'
+  Status: ✓ CORRECT
+
+CONTROL (label=0):
+  Position used for classification: 98
+  Actual token ID at that position: 2
+  Token string: '</s>'
+  Status: ✓ CORRECT
+
+================================================================================
+```
+
+This one-time check ensures:
+- ✓ The last non-padding token is actually the EOS token
+- ✓ Both positive (case) and negative (control) samples are handled correctly
+- ✓ You're not accidentally using a padding token or other token for classification
+
+If the check fails (shows `✗ INCORRECT`), it will display context tokens to help debug.
+
 ### Test 4: Verify Delta Time Alignment
 
 Add debug prints in `temporal_utils.py`:
