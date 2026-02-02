@@ -13,7 +13,7 @@ import wandb
 
 from src.data.unified_dataset import UnifiedEHRDataset
 from src.data.preprocessing import extract_text
-from src.training.callbacks import InferenceCallback
+from src.training.callbacks import InferenceCallback, PackingVerificationCallback
 
 
 class EHRPretrainer:
@@ -238,6 +238,9 @@ class EHRPretrainer:
         if inference_prompt:
             inference_callback = InferenceCallback(self.model, self.tokenizer, inference_prompt)
             callbacks.append(inference_callback)
+        
+        packing_callback = PackingVerificationCallback(self.tokenizer, num_samples=3)
+        callbacks.append(packing_callback)
         
         print("\nInitializing SFTTrainer...")
         trainer_kwargs = {

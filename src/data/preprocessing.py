@@ -30,8 +30,8 @@ def extract_text(base_dataset, tokenizer) -> List[str]:
         item = base_dataset[i]
         if item is not None:
             text = item['text']
-            # Keep both <start> and <end> tokens - they're important for learning sequence boundaries
-            # Clean up any stray "; " at the beginning (shouldn't happen if <start> is present)
+            # Remove end token as the tokenizer will add proper special tokens
+            text = text.replace('<end>', '')
             if text.startswith('; '):
                 text = text[2:]
             text_list.append(text)

@@ -50,16 +50,13 @@ class ClassificationCollator:
         labels = torch.stack([item['label'] for item in batch])
         
         # Clean up text - remove custom dataset format tokens and tokenizer special tokens
-        # Only remove <start> and <end> - tokenizer will add proper special tokens
-        bos_token = self.tokenizer.bos_token if self.tokenizer.bos_token else ""
+        # Only remove <end> - tokenizer will add proper special tokens
         eos_token = self.tokenizer.eos_token if self.tokenizer.eos_token else ""
         
         cleaned_texts = []
         for text in texts:
-            # Remove custom tokens and any tokenizer BOS/EOS that might have been added by preprocessing
-            text = text.replace('<start>', '').replace('<end>', '')
-            if bos_token:
-                text = text.replace(bos_token, '')
+            # Remove custom tokens and any tokenizer EOS that might have been added by preprocessing
+            text = text.replace('<end>', '')    
             if eos_token:
                 text = text.replace(eos_token, '')
             cleaned_texts.append(text.strip())
