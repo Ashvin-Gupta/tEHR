@@ -251,8 +251,8 @@ class EHRPretrainer:
             callbacks.append(inference_callback)
         
         # Add batch shape callback (prints every 25 steps, set to 0 for only first batch)
-        batch_callback = BatchShapeCallback(print_every_n_steps=25)
-        callbacks.append(batch_callback)
+        # batch_callback = BatchShapeCallback(print_every_n_steps=25)
+        # callbacks.append(batch_callback)
 
         packing_callback = PackingVerificationCallback(self.tokenizer, num_samples=3)
         callbacks.append(packing_callback)
@@ -272,7 +272,55 @@ class EHRPretrainer:
         
         self.trainer = SFTTrainer(**trainer_kwargs)
 
-        print(f"  - SFTTrainer configured max_seq_length: {training_args.max_seq_length}")
+        print(f"  ✓ SFTTrainer initialized")
+        print(f"  - Configured max_seq_length: {self.model_config['max_length']}")
+        print(f"  - Configured batch_size: {self.training_config['batch_size']}")
+
+        # Debug: Print actual batch shapes from the dataloader
+        print("\n" + "=" * 80)
+        print("DEBUGGING: Checking actual batch shapes from dataloader...")
+        print("=" * 80)
+        try:
+            train_dataloader = self.trainer.get_train_dataloader()
+            print(f"  - Dataloader type: {type(train_dataloader)}")
+            
+            # Get first batch
+            first_batch = next(iter(train_dataloader))
+            print(f"  - First batch keys: {first_batch.keys()}")
+            
+            if 'input_ids' in first_batch:
+                input_ids = first_batch['input_ids']
+                print(f"  - input_ids shape: {input_ids.shape}")
+                print(f"  - input_ids dtype: {input_ids.dtype}")
+                
+                # Check sequence lengths
+                if 'attention_mask' in first_batch:
+                    attention_mask = first_batch['attention_mask']
+                    actual_lengths = attention_mask.sum(dim=1)
+                    print(f"  - attention_mask shape: {attention_mask.shape}")
+                    print(f"  - Actual sequence lengths: min={actual_lengths.min().item()}, max={actual_lengths.max().item()}, mean={actual_lengths.float().mean().item():.1f}")
+                
+                # Show a sample of the first sequence
+                if input_ids.size(0) > 0:
+                    first_seq = input_ids[0]
+                    print(f"  - First sequence length: {len(first_seq)}")
+                    print(f"  - First 10 token IDs: {first_seq[:10].tolist()}")
+                    print(f"  - Last 10 token IDs: {first_seq[-10:].tolist()}")
+            
+            # Get a few more batches to see consistency
+            print("\n  Checking next 3 batches...")
+            for i, batch in enumerate(train_dataloader):
+                if i >= 3:
+                    break
+                if 'input_ids' in batch:
+                    print(f"    Batch {i+1}: shape={batch['input_ids'].shape}")
+            
+        except Exception as e:
+            print(f"  ⚠️  Error accessing dataloader: {e}")
+            import traceback
+            traceback.print_exc()
+
+        print("=" * 80 + "\n")
     
     def train(self):
         """Run the training loop."""
