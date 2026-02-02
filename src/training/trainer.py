@@ -210,8 +210,8 @@ class EHRPretrainer:
         val_text_list = extract_text(val_base_dataset, self.tokenizer)
 
         print(f"  - Manually packing to context length: {self.model_config['max_length']}")
-        train_chunks = pack_and_chunk_texts(train_texts, self.tokenizer, self.model_config['max_length'])
-        val_chunks = pack_and_chunk_texts(val_texts, self.tokenizer, self.model_config['max_length'])
+        train_chunks = pack_and_chunk_texts(train_text_list, self.tokenizer, self.model_config['max_length'])
+        val_chunks = pack_and_chunk_texts(val_text_list, self.tokenizer, self.model_config['max_length'])
 
         train_dataset = Dataset.from_dict({"text": train_chunks})
         val_dataset = Dataset.from_dict({"text": val_chunks})
