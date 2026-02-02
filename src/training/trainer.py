@@ -108,6 +108,9 @@ class EHRPretrainer:
             device_map={"": self.local_rank}
         )
         print(f"Loaded model and tokenizer (vocab size: {len(self.tokenizer)})")
+        print(f"Requested max_length from config: {self.model_config['max_length']}")
+        print(f"Model config max_position_embeddings: {getattr(self.model.config, 'max_position_embeddings', None)}")
+        print(f"Tokenizer model_max_length: {self.tokenizer.model_max_length}")
     
     def apply_lora(self):
         """Apply LoRA adapters to the model."""
