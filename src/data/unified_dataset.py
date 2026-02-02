@@ -162,8 +162,22 @@ class UnifiedEHRDataset(Dataset):
         
         if actual_cutoff is not None:
             cancer_date = self.subject_to_cancer_date.get(subject_id)
+            
+            # Determine cutoff date - use cancer date if available, otherwise use last timestamp
             if pd.notna(cancer_date):
                 cutoff_date = cancer_date - pd.DateOffset(months=actual_cutoff)
+            else:
+                # For controls or cases without cancer date, use the last timestamp as reference
+                valid_timestamps = [ts for ts in timestamps if ts is not None and ts > 0]
+                if valid_timestamps:
+                    last_timestamp = max(valid_timestamps)
+                    last_date = pd.Timestamp.fromtimestamp(last_timestamp)
+                    cutoff_date = last_date - pd.DateOffset(months=actual_cutoff)
+                else:
+                    # No valid timestamps, skip truncation
+                    cutoff_date = None
+            
+            if cutoff_date is not None:
                 cutoff_timestamp = cutoff_date.timestamp()
                 
                 truncated_ids = []

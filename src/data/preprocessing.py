@@ -9,39 +9,31 @@ def extract_text(base_dataset, tokenizer) -> List[str]:
     Extracts all valid text narratives from a dataset for pretraining.
     
     This function extracts text from UnifiedEHRDataset and prepares it for SFTTrainer.
-    We replace custom <start> and <end> tokens with the tokenizer's BOS and EOS tokens:
-    - <end> → EOS token (e.g., </s> for Llama)
+    We keep both <start> and <end> tokens as they mark sequence boundaries:
+    - <start> marks the beginning of a patient record
+    - <end> marks the end of a patient record (the model should learn to predict this)
     
     With packing=True in SFTTrainer, these tokens help the model understand
     where one patient record ends and another begins.
     
     Args:
         base_dataset: The dataset to extract text from.
-        tokenizer: The tokenizer to use for BOS/EOS tokens.
+        tokenizer: The tokenizer (unused but kept for consistency).
     
     Returns:
         List of text strings ready for training.
     """
     text_list = []
     
-    # EOS token from tokenizer
-    eos_token = tokenizer.eos_token if tokenizer.eos_token is not None else ""
-    
     print(f"  - Processing {len(base_dataset)} patients...")
-    print(f"  - Replacing <end> with '{eos_token}'")
-    
     for i in range(len(base_dataset)):
         item = base_dataset[i]
         if item is not None:
             text = item['text']
-            
-            # Replace custom tokens with tokenizer's special tokens
-            text = text.replace('<end>', eos_token)
-            
-            # Clean up any stray "; " at the beginning
+            # Keep both <start> and <end> tokens - they're important for learning sequence boundaries
+            # Clean up any stray "; " at the beginning (shouldn't happen if <start> is present)
             if text.startswith('; '):
                 text = text[2:]
-            
             text_list.append(text)
     
     print(f"  - Extracted {len(text_list)} valid narratives.")

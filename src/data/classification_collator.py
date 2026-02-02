@@ -50,15 +50,14 @@ class ClassificationCollator:
         labels = torch.stack([item['label'] for item in batch])
         
         # Clean up text - remove custom dataset format tokens and tokenizer special tokens
-        # The tokenizer will add its own BOS/EOS tokens during tokenization
+        # Only remove <start> and <end> - tokenizer will add proper special tokens
         bos_token = self.tokenizer.bos_token if self.tokenizer.bos_token else ""
         eos_token = self.tokenizer.eos_token if self.tokenizer.eos_token else ""
         
         cleaned_texts = []
         for text in texts:
-            # Remove custom tokens
+            # Remove custom tokens and any tokenizer BOS/EOS that might have been added by preprocessing
             text = text.replace('<start>', '').replace('<end>', '')
-            # Also remove tokenizer's BOS/EOS if they were added by preprocessing
             if bos_token:
                 text = text.replace(bos_token, '')
             if eos_token:
@@ -71,94 +70,21 @@ class ClassificationCollator:
         if self.binary_classification:
             labels = (labels > 0).long()
         
-        # Pre-check sequence lengths if we have a max_length and we're not truncating
-        if self.max_length is not None and not self.truncation:
-            filtered_texts = []
-            filtered_labels = []
-            
-            for text, label in zip(texts, labels):
-                # Quick tokenization to check length
-                token_count = len(self.tokenizer.encode(text, add_special_tokens=True))
-                self._total_sequences += 1
-                
-                if token_count > self.max_length:
-                    self._long_sequence_count += 1
-                    
-                    if self.handle_long_sequences == 'error':
-                        raise ValueError(
-                            f"Sequence length {token_count} exceeds max_length {self.max_length}. "
-                            f"Set truncation=True or increase max_length in model loading."
-                        )
-                    elif self.handle_long_sequences == 'warn':
-                        if not self._warned_once:
-                            warnings.warn(
-                                f"Found sequence with length {token_count} exceeding max_length {self.max_length}. "
-                                f"Truncating from the start (keeping most recent events). "
-                                f"This warning will only show once."
-                            )
-                            self._warned_once = True
-                        # Don't decode/re-encode - just add to list and handle during tokenization
-                        filtered_texts.append(text)
-                        filtered_labels.append(label)
-                        # Truncate from the start to keep the end (most recent medical events)
-                        tokens = self.tokenizer.encode(text, add_special_tokens=False)
-                        # Keep the last (max_length - 2) tokens, leaving room for special tokens
-                        truncated_tokens = tokens[-(self.max_length - 2):]
-                        text = self.tokenizer.decode(truncated_tokens)
-                        filtered_texts.append(text)
-                        filtered_labels.append(label)
-                    elif self.handle_long_sequences == 'skip':
-                        if not self._warned_once:
-                            warnings.warn(
-                                f"Skipping sequences longer than {self.max_length}. "
-                                f"This warning will only show once."
-                            )
-                            self._warned_once = True
-                        continue  # Skip this sample
-                    elif self.handle_long_sequences == 'truncate':
-                        # Don't decode/re-encode - just add to list and handle during tokenization
-                        filtered_texts.append(text)
-                        filtered_labels.append(label)
-                else:
-                    filtered_texts.append(text)
-                    filtered_labels.append(label)
-            
-            texts = filtered_texts
-            if len(filtered_labels) > 0:
-                labels = torch.stack(filtered_labels)
-            else:
-                return None  # All sequences were too long and skipped
-        
-        # Tokenize the text with dynamic padding
+        # Tokenize each text individually WITHOUT padding, and handle EOS properly
         tokenizer_kwargs = {
-            'padding': False,  # DON'T pad yet
-            'truncation': self.truncation,
+            'padding': False,
+            'truncation': False,  # We'll handle truncation manually
             'return_tensors': 'pt',
             'return_attention_mask': True,
-            'add_special_tokens': True  # Adds BOS but not EOS for decoder models
+            'add_special_tokens': True  # Adds BOS for decoder models
         }
         
-        if self.truncation and self.max_length is not None:
-            tokenizer_kwargs['max_length'] = self.max_length
-        
-        # Tokenize each text individually (no padding)
         encoded_list = []
         for text in texts:
+            # Tokenize the text
             encoded = self.tokenizer(text, **tokenizer_kwargs)
             
-            # Check if sequence is too long AFTER tokenization
-            seq_len = encoded['input_ids'].size(1)
-            
-            # Account for EOS token we'll add
-            max_allowed = self.max_length - 1 if self.tokenizer.eos_token_id is not None else self.max_length
-            
-            if seq_len > max_allowed:
-                # Truncate from the start (keep most recent)
-                # Keep last (max_allowed) tokens
-                encoded['input_ids'] = encoded['input_ids'][:, -max_allowed:]
-                encoded['attention_mask'] = encoded['attention_mask'][:, -max_allowed:]
-            
-            # Append EOS token if available
+            # Add EOS token BEFORE any truncation
             if self.tokenizer.eos_token_id is not None:
                 eos_token_id = self.tokenizer.eos_token_id
                 eos_tensor = torch.tensor([[eos_token_id]], dtype=encoded['input_ids'].dtype)
@@ -167,13 +93,23 @@ class ClassificationCollator:
                 encoded['input_ids'] = torch.cat([encoded['input_ids'], eos_tensor], dim=1)
                 encoded['attention_mask'] = torch.cat([encoded['attention_mask'], eos_mask], dim=1)
             
-            # Final safety check
-            final_len = encoded['input_ids'].size(1)
-            if final_len > self.max_length:
-                # This should never happen, but just in case
-                encoded['input_ids'] = encoded['input_ids'][:, :self.max_length]
-                encoded['attention_mask'] = encoded['attention_mask'][:, :self.max_length]
+            # NOW truncate if sequence is too long (EOS is already at the end and will be preserved)
+            seq_len = encoded['input_ids'].size(1)
+            if self.max_length is not None and seq_len > self.max_length:
+                # Truncate from the START to keep the END (most recent events + EOS)
+                encoded['input_ids'] = encoded['input_ids'][:, -self.max_length:]
+                encoded['attention_mask'] = encoded['attention_mask'][:, -self.max_length:]
+                
+                self._long_sequence_count += 1
+                if not self._warned_once:
+                    warnings.warn(
+                        f"Found sequence with length {seq_len} exceeding max_length {self.max_length}. "
+                        f"Truncating from the start (keeping most recent events and EOS token). "
+                        f"This warning will only show once."
+                    )
+                    self._warned_once = True
             
+            self._total_sequences += 1
             encoded_list.append(encoded)
         
         # NOW pad all sequences to the same length
