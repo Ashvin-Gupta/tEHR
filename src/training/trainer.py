@@ -107,6 +107,9 @@ class EHRPretrainer:
             load_in_4bit=self.training_config.get('load_in_4bit', True),
             device_map={"": self.local_rank}
         )
+        # Explicitly set the model_max_length and padding_side for the tokenizer
+        self.tokenizer.model_max_length = self.model_config['max_length']  
+        self.tokenizer.padding_side = "right" # SFTTrainer usually prefers right padding for packing
         print(f"Loaded model and tokenizer (vocab size: {len(self.tokenizer)})")
         print(f"Requested max_length from config: {self.model_config['max_length']}")
         print(f"Model config max_position_embeddings: {getattr(self.model.config, 'max_position_embeddings', None)}")
@@ -257,6 +260,7 @@ class EHRPretrainer:
             "packing": True,  # Efficient sequence packing
             "callbacks": callbacks,
         }
+        print(f"DEBUG: Initializing SFTTrainer with max_seq_length={self.model_config['max_length']}")
         
         self.trainer = SFTTrainer(**trainer_kwargs)
     

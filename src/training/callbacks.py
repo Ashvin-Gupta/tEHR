@@ -40,11 +40,11 @@ class InferenceCallback(TrainerCallback):
 
 class PackingVerificationCallback(TrainerCallback):
     """
-    Callback to verify packed sequences start and end with correct tokens.
+    Callback to verify packed sequences have correct EOS token placement.
     
-    Checks a sample batch to ensure:
-    - Sequences start with BOS token (or expected start token)
-    - Sequences end with EOS token (between packed sequences)
+    Verifies that:
+    - Number of EOS tokens = Number of patients - 1
+    (EOS appears between patients, not after the last one)
     """
     
     def __init__(self, tokenizer, num_samples=3):
@@ -66,11 +66,23 @@ class PackingVerificationCallback(TrainerCallback):
         print("VERIFYING PACKED SEQUENCES")
         print("=" * 80)
         
-        # Get a sample batch from the trainer
-        trainer = kwargs.get('model')
-        if trainer is None:
-            print("  ⚠️  Could not access trainer for verification")
+        # Get token IDs
+        bos_token_id = self.tokenizer.bos_token_id
+        eos_token_id = self.tokenizer.eos_token_id
+        pad_token_id = self.tokenizer.pad_token_id if self.tokenizer.pad_token_id is not None else 0
+        
+        # Get <start> token ID(s) - encode the string to find its tokenization
+        start_token_str = "<start>"
+        start_token_ids = self.tokenizer.encode(start_token_str, add_special_tokens=False)
+        # Usually <start> will tokenize to a single token, but handle multiple tokens
+        if len(start_token_ids) == 0:
+            print(f"  ⚠️  WARNING: Could not find token ID for '<start>' token")
             return
+        
+        print(f"  - BOS token ID: {bos_token_id} ('{self.tokenizer.bos_token}')")
+        print(f"  - EOS token ID: {eos_token_id} ('{self.tokenizer.eos_token}')")
+        print(f"  - <start> token ID(s): {start_token_ids}")
+        print(f"  - PAD token ID: {pad_token_id}\n")
         
         # Access the trainer's dataloader
         train_dataloader = kwargs.get('train_dataloader')
@@ -87,15 +99,6 @@ class PackingVerificationCallback(TrainerCallback):
             print(f"  - Batch shape: {input_ids.shape}")
             print(f"  - Checking {min(self.num_samples, input_ids.size(0))} sequences\n")
             
-            # Get token IDs
-            bos_token_id = self.tokenizer.bos_token_id
-            eos_token_id = self.tokenizer.eos_token_id
-            pad_token_id = self.tokenizer.pad_token_id if self.tokenizer.pad_token_id is not None else 0
-            
-            print(f"  - BOS token ID: {bos_token_id} ('{self.tokenizer.bos_token}')")
-            print(f"  - EOS token ID: {eos_token_id} ('{self.tokenizer.eos_token}')")
-            print(f"  - PAD token ID: {pad_token_id}\n")
-            
             for i in range(min(self.num_samples, input_ids.size(0))):
                 seq = input_ids[i]
                 mask = attention_mask[i]
@@ -108,52 +111,49 @@ class PackingVerificationCallback(TrainerCallback):
                 actual_seq = seq[non_pad_mask]
                 seq_len = len(actual_seq)
                 
-                # Check start
-                start_token_id = actual_seq[0].item()
-                start_token_str = self.tokenizer.decode([start_token_id])
+                # Count patients: look for <start> token pattern
+                # <start> might be tokenized as multiple tokens, so we need to check for the pattern
+                # For simplicity, check if the first token ID appears (most common case)
+                patient_count = 0
+                start_pattern = start_token_ids[0]  # Use first token ID as marker
                 
-                # Check end
-                end_token_id = actual_seq[-1].item()
-                end_token_str = self.tokenizer.decode([end_token_id])
+                # Count occurrences of start token ID
+                patient_count = (actual_seq == start_pattern).sum().item()
                 
-                # Show first and last few tokens
-                first_5 = actual_seq[:5].tolist()
-                last_5 = actual_seq[-5:].tolist()
-                first_5_str = self.tokenizer.decode(first_5)
-                last_5_str = self.tokenizer.decode(last_5)
+                # Count EOS tokens
+                eos_count = 0
+                if eos_token_id is not None:
+                    eos_count = (actual_seq == eos_token_id).sum().item()
+                    eos_positions = (actual_seq == eos_token_id).nonzero(as_tuple=True)[0].tolist()
+                else:
+                    eos_positions = []
+                
+                # Verify: EOS_count should equal patient_count - 1
+                expected_eos_count = max(0, patient_count - 1)
                 
                 print(f"  Sequence {i+1}:")
                 print(f"    Length: {seq_len} tokens")
-                print(f"    Starts with: ID={start_token_id} ('{start_token_str}')")
-                print(f"    Ends with:   ID={end_token_id} ('{end_token_str}')")
-                print(f"    First 5 tokens: {first_5} → '{first_5_str[:100]}...'")
-                print(f"    Last 5 tokens:  {last_5} → '...{last_5_str[-100:]}'")
+                print(f"    Number of patients (counted by <start> tokens): {patient_count}")
+                print(f"    Number of EOS tokens: {eos_count}")
+                print(f"    Expected EOS tokens: {expected_eos_count} (patients - 1)")
                 
-                # Verify expectations
-                if bos_token_id is not None and start_token_id != bos_token_id:
-                    print(f"    ⚠️  WARNING: Expected BOS ({bos_token_id}), got {start_token_id}")
-                if eos_token_id is not None and end_token_id != eos_token_id:
-                    print(f"    ⚠️  WARNING: Expected EOS ({eos_token_id}), got {end_token_id}")
+                if eos_count == expected_eos_count:
+                    print(f"    ✓ CORRECT: EOS count matches expected ({eos_count} = {patient_count} - 1)")
+                else:
+                    print(f"    ⚠️  WARNING: EOS count mismatch! Got {eos_count}, expected {expected_eos_count}")
+                    if eos_count < expected_eos_count:
+                        print(f"      → Missing {expected_eos_count - eos_count} EOS token(s)")
+                    else:
+                        print(f"      → Found {eos_count - expected_eos_count} extra EOS token(s)")
+                
+                if eos_positions:
+                    print(f"    EOS token positions: {eos_positions[:10]}{'...' if len(eos_positions) > 10 else ''}")
+                
+                # Show sample of sequence structure
+                first_10 = actual_seq[:10].tolist()
+                first_10_str = self.tokenizer.decode(first_10)
+                print(f"    First 10 tokens: {first_10} → '{first_10_str[:80]}...'")
                 print()
-            
-            # Check for EOS tokens within sequences (packing boundaries)
-            print("  Checking for EOS tokens within sequences (packing boundaries)...")
-            eos_positions = []
-            for i in range(min(self.num_samples, input_ids.size(0))):
-                seq = input_ids[i]
-                mask = attention_mask[i]
-                non_pad_seq = seq[mask.bool()]
-                
-                if eos_token_id is not None:
-                    eos_pos = (non_pad_seq == eos_token_id).nonzero(as_tuple=True)[0]
-                    if len(eos_pos) > 0:
-                        eos_positions.append((i, eos_pos.tolist()))
-            
-            if eos_positions:
-                print(f"  ✓ Found EOS tokens at positions: {eos_positions}")
-                print("    (These mark boundaries between packed sequences)")
-            else:
-                print("  ⚠️  No EOS tokens found within sequences")
             
             self.verified = True
             
