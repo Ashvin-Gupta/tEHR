@@ -1,9 +1,9 @@
 #!/bin/bash
 #$ -cwd                 
-#$ -pe smp 8
-#$ -l h_rt=1:0:0
+#$ -pe smp 24
+#$ -l h_rt=24:0:0
 #$ -l h_vmem=7.5G
-#$ -l gpu=1
+#$ -l gpu=2
 #$ -l gpu_type=ampere
 #$ -l cluster=andrena
 #$ -j n
@@ -28,8 +28,8 @@ cd "${BASE_DIR}"
 echo "Starting experiment from directory: $(pwd)"
 export PYTHONPATH="${BASE_DIR}:${PYTHONPATH}"
 
-python -m src.pipelines.llm_pretrain --config_filepath src/configs/llm_pretrain.yaml 
-# torchrun --nproc_per_node=2 src/pipelines/llm_pretrain.py --config_filepath src/configs/llm_pretrain.yaml
+# python -m src.pipelines.llm_pretrain --config_filepath src/configs/llm_pretrain.yaml 
+torchrun --nproc_per_node=2 src/pipelines/llm_pretrain.py --config_filepath src/configs/llm_pretrain.yaml
 
 echo "Pipeline finished."
 deactivate
