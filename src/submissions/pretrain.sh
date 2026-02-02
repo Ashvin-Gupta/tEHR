@@ -5,6 +5,7 @@
 #$ -l h_vmem=7.5G
 #$ -l gpu=1
 #$ -l gpu_type=ampere
+#$ -l cluster=andrena
 #$ -j n
 #$ -o /data/home/qc25022/TextCancEHR2/HPC_Pretrain/logo/
 #$ -e /data/home/qc25022/TextCancEHR2/HPC_Pretrain/loge/
