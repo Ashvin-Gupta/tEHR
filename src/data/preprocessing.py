@@ -2,6 +2,7 @@
 Data preprocessing utilities for EHR datasets.
 """
 from typing import List
+from tqdm import tqdm
 
 
 def extract_text(base_dataset, tokenizer) -> List[str]:
@@ -25,16 +26,33 @@ def extract_text(base_dataset, tokenizer) -> List[str]:
     """
     text_list = []
     
-    print(f"  - Processing {len(base_dataset)} patients...")
-    for i in range(len(base_dataset)):
+    # Get EOS token from tokenizer
+    eos_token = tokenizer.eos_token if tokenizer.eos_token else ""
+    
+    total_patients = len(base_dataset)
+    print(f"  - Processing {total_patients} patients...")
+    if eos_token:
+        print(f"  - Adding EOS token '{eos_token}' to each sequence")
+    else:
+        print("  ⚠️  WARNING: Tokenizer has no EOS token!")
+    
+    # Use tqdm for progress bar
+    for i in tqdm(range(total_patients), desc="  Extracting text", unit="patient"):
         item = base_dataset[i]
         if item is not None:
             text = item['text']
-            # Remove end token as the tokenizer will add proper special tokens
+            # Remove <end> token (if still present)
             text = text.replace('<end>', '')
+            
+            # Clean up leading "; "
             if text.startswith('; '):
                 text = text[2:]
+            
+            # Add EOS token at the end of each sequence
+            if eos_token and not text.endswith(eos_token):
+                text = text + eos_token
+            
             text_list.append(text)
     
-    print(f"  - Extracted {len(text_list)} valid narratives.")
+    print(f"  ✓ Extracted {len(text_list)} valid narratives (skipped {total_patients - len(text_list)} None items)")
     return text_list
