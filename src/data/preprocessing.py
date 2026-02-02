@@ -10,7 +10,6 @@ def extract_text(base_dataset, tokenizer) -> List[str]:
     
     This function extracts text from UnifiedEHRDataset and prepares it for SFTTrainer.
     We replace custom <start> and <end> tokens with the tokenizer's BOS and EOS tokens:
-    - <start> → BOS token (e.g., <s> for Llama)
     - <end> → EOS token (e.g., </s> for Llama)
     
     With packing=True in SFTTrainer, these tokens help the model understand
@@ -25,12 +24,11 @@ def extract_text(base_dataset, tokenizer) -> List[str]:
     """
     text_list = []
     
-    # Get BOS and EOS tokens from tokenizer
-    bos_token = tokenizer.bos_token if tokenizer.bos_token is not None else ""
+    # EOS token from tokenizer
     eos_token = tokenizer.eos_token if tokenizer.eos_token is not None else ""
     
     print(f"  - Processing {len(base_dataset)} patients...")
-    print(f"  - Replacing <start> with '{bos_token}' and <end> with '{eos_token}'")
+    print(f"  - Replacing <end> with '{eos_token}'")
     
     for i in range(len(base_dataset)):
         item = base_dataset[i]
@@ -38,7 +36,6 @@ def extract_text(base_dataset, tokenizer) -> List[str]:
             text = item['text']
             
             # Replace custom tokens with tokenizer's special tokens
-            text = text.replace('<start>', bos_token)
             text = text.replace('<end>', eos_token)
             
             # Clean up any stray "; " at the beginning
