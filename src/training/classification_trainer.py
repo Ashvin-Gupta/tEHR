@@ -116,9 +116,7 @@ class EHRClassificationTrainer:
             tokenizer=self.tokenizer,
             head_type=self.model_config.get('head_type', 'linear'),
             head_hidden_size=self.model_config.get('head_hidden_size', 512),
-            head_dropout=self.model_config.get('head_dropout', 0.1),
-            use_temporal_embeddings=self.model_config.get('use_temporal_embeddings', False),
-            temporal_config=self.model_config.get('temporal_config', {})
+            head_dropout=self.model_config.get('head_dropout', 0.1)
         )
     
     def prepare_datasets(self):
@@ -139,7 +137,6 @@ class EHRClassificationTrainer:
             "cutoff_months": self.data_config.get("cutoff_months", 1),
             "max_sequence_length": None,
             "tokenizer": None,
-            "use_temporal_embeddings": self.model_config.get('use_temporal_embeddings', False),
         }
 
         train_dataset = UnifiedEHRDataset(split="train", **dataset_args)
@@ -180,9 +177,7 @@ class EHRClassificationTrainer:
             max_length=self.data_config.get('max_length'),
             binary_classification=binary_classification,
             truncation=False,
-            handle_long_sequences=self.data_config.get('handle_long_sequences', 'warn'),
-            use_temporal_embeddings=self.model_config.get('use_temporal_embeddings', False),
-            temporal_config=self.model_config.get('temporal_config', {})
+            handle_long_sequences=self.data_config.get('handle_long_sequences', 'warn')
         )
         
         print(f"  - Max length: {self.data_config.get('max_length')}")

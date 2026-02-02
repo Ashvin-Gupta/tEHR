@@ -13,8 +13,6 @@ import wandb
 
 from src.data.unified_dataset import UnifiedEHRDataset
 from src.data.preprocessing import extract_text
-from src.data.pretraining_collator import PretrainingCollator
-from src.models.temporal_model_wrapper import TemporalModelWrapper
 from src.training.callbacks import InferenceCallback
 
 
@@ -131,27 +129,6 @@ class EHRPretrainer:
         )
         print("  - Applied LoRA adapters (PEFT) to the model.")
     
-    def wrap_model_for_temporal_embeddings(self):
-        """Wrap model with temporal embedding support if enabled."""
-        use_temporal_embeddings = self.model_config.get('use_temporal_embeddings', False)
-        
-        if use_temporal_embeddings:
-            print("\n" + "=" * 80)
-            print("Wrapping model with temporal embeddings...")
-            print("=" * 80)
-            
-            temporal_config = self.model_config.get('temporal_config', {})
-            hidden_size = self.model_config.get('hidden_size', 4096)
-            time_scale = temporal_config.get('time_scale', 86400.0)
-            dropout = temporal_config.get('dropout', 0.1)
-            
-            self.model = TemporalModelWrapper(
-                base_model=self.model,
-                hidden_size=hidden_size,
-                time_scale=time_scale,
-                dropout=dropout
-            )
-    
     def prepare_datasets(self) -> tuple[Dataset, Optional[Dataset]]:
         """
         Prepare training and validation datasets.
@@ -159,8 +136,6 @@ class EHRPretrainer:
         Returns:
             Tuple of (train_dataset, val_dataset)
         """
-        use_temporal_embeddings = self.model_config.get('use_temporal_embeddings', False)
-        
         dataset_args = {
             "data_dir": self.data_config["data_dir"],
             "vocab_file": self.data_config["vocab_filepath"],
@@ -173,7 +148,6 @@ class EHRPretrainer:
             "cutoff_months": self.data_config.get("cutoff_months", 1),
             "max_sequence_length": None,  # No truncation - we'll pack sequences
             "data_type": self.training_config.get('input_data', 'binned'),
-            "use_temporal_embeddings": use_temporal_embeddings,
         }
         
         print("\nLoading training data...")
@@ -184,41 +158,13 @@ class EHRPretrainer:
         val_base_dataset = UnifiedEHRDataset(split="tuning", **dataset_args)
         print(f"  - Loaded {len(val_base_dataset)} validation patients")
 
-        # Extract text and optionally delta_times from datasets
-        if use_temporal_embeddings:
-            # Extract both text and delta_times
-            print("  - Extracting text and delta times for temporal embeddings...")
-            train_text_list = []
-            train_delta_times_list = []
-            for i in range(len(train_base_dataset)):
-                item = train_base_dataset[i]
-                if item is not None:
-                    train_text_list.append(item['text'])
-                    train_delta_times_list.append(item.get('delta_times'))
-            
-            val_text_list = []
-            val_delta_times_list = []
-            for i in range(len(val_base_dataset)):
-                item = val_base_dataset[i]
-                if item is not None:
-                    val_text_list.append(item['text'])
-                    val_delta_times_list.append(item.get('delta_times'))
-            
-            train_dataset = Dataset.from_dict({
-                "text": train_text_list,
-                "delta_times": train_delta_times_list
-            })
-            val_dataset = Dataset.from_dict({
-                "text": val_text_list,
-                "delta_times": val_delta_times_list
-            })
-        else:
-            # Standard text-only extraction
-            train_text_list = extract_text(train_base_dataset, self.tokenizer)
-            val_text_list = extract_text(val_base_dataset, self.tokenizer)
+        # Extract text from datasets
+        print("  - Extracting text for pretraining...")
+        train_text_list = extract_text(train_base_dataset, self.tokenizer)
+        val_text_list = extract_text(val_base_dataset, self.tokenizer)
 
-            train_dataset = Dataset.from_dict({"text": train_text_list})
-            val_dataset = Dataset.from_dict({"text": val_text_list})
+        train_dataset = Dataset.from_dict({"text": train_text_list})
+        val_dataset = Dataset.from_dict({"text": val_text_list})
         
         return train_dataset, val_dataset
     
@@ -293,20 +239,6 @@ class EHRPretrainer:
             inference_callback = InferenceCallback(self.model, self.tokenizer, inference_prompt)
             callbacks.append(inference_callback)
         
-        # Create data collator if using temporal embeddings
-        use_temporal_embeddings = self.model_config.get('use_temporal_embeddings', False)
-        data_collator = None
-        if use_temporal_embeddings:
-            print("\n  - Using temporal embeddings - creating PretrainingCollator...")
-            temporal_config = self.model_config.get('temporal_config', {})
-            data_collator = PretrainingCollator(
-                tokenizer=self.tokenizer,
-                max_length=self.model_config['max_length'],
-                use_temporal_embeddings=True,
-                temporal_config=temporal_config
-            )
-            print(f"    Time scale: {temporal_config.get('time_scale', 86400.0)}")
-        
         print("\nInitializing SFTTrainer...")
         trainer_kwargs = {
             "model": self.model,
@@ -319,10 +251,6 @@ class EHRPretrainer:
             "packing": True,  # Efficient sequence packing
             "callbacks": callbacks,
         }
-        
-        # Add data collator if using temporal embeddings
-        if data_collator is not None:
-            trainer_kwargs["data_collator"] = data_collator
         
         self.trainer = SFTTrainer(**trainer_kwargs)
     
@@ -363,9 +291,6 @@ class EHRPretrainer:
         
         # Apply LoRA
         self.apply_lora()
-        
-        # Wrap model with temporal embeddings if enabled
-        self.wrap_model_for_temporal_embeddings()
         
         # Prepare datasets
         train_dataset, val_dataset = self.prepare_datasets()

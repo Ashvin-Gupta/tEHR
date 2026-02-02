@@ -18,21 +18,19 @@ class UnifiedEHRDataset(Dataset):
         before the cancer diagnosis date.
     """
     def __init__(self, data_dir, vocab_file, labels_file, medical_lookup_file, lab_lookup_file, region_lookup_file, time_lookup_file,
-                 cutoff_months=None, max_sequence_length=512, format='tokens', split='train', tokenizer=None, data_type='binned',
-                 use_temporal_embeddings=False):
+                 cutoff_months=None, max_sequence_length=512, format='tokens', split='train', tokenizer=None, data_type='binned'):
         
         self.format = format
         self.cutoff_months = cutoff_months
         self.max_sequence_length = max_sequence_length
         self.tokenizer = tokenizer  # Store for pretrain format
-        self.use_temporal_embeddings = use_temporal_embeddings  # NEW: Toggle between text-based time and temporal embeddings
         
         # Load all necessary mappings and lookup tables
         self._load_mappings(vocab_file, labels_file, medical_lookup_file, lab_lookup_file, region_lookup_file, time_lookup_file)
         self.data_type = data_type
         # Load the patient records from the .pkl files for the specified split
         # self.patient_records = self._load_data(data_dir, split)
-        if split == 'tuning' or split == 'held_out' or split:
+        if split == 'tuning' or split == 'held_out':
             self.patient_records = self._load_data(data_dir, split, limit=1)
         else:
             # Chaning to 5 to see result and inference
@@ -95,9 +93,6 @@ class UnifiedEHRDataset(Dataset):
         if not isinstance(token_string, str): return ""
         try:
             if token_string.startswith('<time_interval_'):
-                # Skip time tokens if using temporal embeddings (time will be in embeddings)
-                if self.use_temporal_embeddings:
-                    return ""
                 time_part = token_string.split('_')[-1].strip('>')
                 return f"{self.time_lookup.get(time_part, time_part)}; "
             elif token_string.startswith('AGE: ') or token_string.startswith('AGE'):
@@ -251,31 +246,9 @@ class UnifiedEHRDataset(Dataset):
                 i += 1 
         
         narrative = "".join(translated_phrases)
-
-        # --- COMPUTE DELTA TIMES FOR TEMPORAL EMBEDDINGS ---
-        delta_times = None
-        if self.use_temporal_embeddings:
-            # Compute delta times from absolute timestamps
-            # Keep alignment with original token_ids before truncation
-            original_timestamps = patient_record['timestamps']
-            
-            delta_times = []
-            for i in range(len(original_timestamps)):
-                # Handle special cases: first event, zero/negative timestamps
-                if i == 0 or original_timestamps[i] <= 0:
-                    # First event, special token, or invalid timestamp (negative/zero)
-                    delta_times.append(0.0)
-                elif original_timestamps[i-1] <= 0:
-                    # Previous timestamp was invalid, treat current as first valid timestamp
-                    delta_times.append(0.0)
-                else:
-                    # Normal case: time since previous valid event (in seconds)
-                    delta = float(original_timestamps[i]) - float(original_timestamps[i-1])
-                    delta_times.append(max(0.0, delta))  # Ensure non-negative
         
         return {
             "text": narrative,
-            "label": torch.tensor(label, dtype=torch.long),
-            "delta_times": delta_times  # None if not using temporal embeddings
+            "label": torch.tensor(label, dtype=torch.long)
         }
        

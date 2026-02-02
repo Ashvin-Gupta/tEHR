@@ -12,13 +12,6 @@ model:
   head_type: "linear"         # Options: "linear", "mlp", "deep_mlp"
   head_hidden_size: 512       # Hidden layer size for MLP heads (ignored for linear)
   head_dropout: 0.1           # Dropout rate for MLP heads (ignored for linear)
-  
-  # Temporal embedding configuration (set use_temporal_embeddings to true to enable)
-  use_temporal_embeddings: false  # Toggle between text-based time and temporal embeddings
-  temporal_config:
-    time_scale: 86400  # Scale factor: 86400=days, 3600=hours, 1=seconds
-    dropout: 0.1  # Dropout for temporal embedding layer
-    # Log scaling applied automatically: log(1 + delta_time / time_scale)
 
 wandb:
   enabled: true

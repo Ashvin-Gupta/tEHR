@@ -1,4 +1,5 @@
 HPC_Pretrain/
+HPC_Classifier/
 wandb/
 unsloth_compiled_cache/
 .DS_Store

@@ -8,9 +8,8 @@ for EHR text classification.
 """
 
 import torch
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any
 import warnings
-from src.data.temporal_utils import align_single_sequence
 
 
 class ClassificationCollator:
@@ -24,20 +23,15 @@ class ClassificationCollator:
         tokenizer: HuggingFace tokenizer (should be the extended tokenizer from pretraining)
         max_length: Maximum sequence length for truncation
         binary_classification: If True, converts labels > 0 to 1 (cancer vs control)
-        use_temporal_embeddings: If True, process and return delta times
-        temporal_config: Config dict with 'time_scale' for log scaling
     """
     
     def __init__(self, tokenizer, max_length: int = 2048, binary_classification: bool = True, truncation: bool = False,
-                 handle_long_sequences: str = 'warn', use_temporal_embeddings: bool = False, temporal_config: Optional[Dict] = None):
+                 handle_long_sequences: str = 'warn'):
         self.tokenizer = tokenizer
         self.max_length = max_length
         self.binary_classification = binary_classification
         self.truncation = truncation
         self.handle_long_sequences = handle_long_sequences
-        self.use_temporal_embeddings = use_temporal_embeddings
-        self.temporal_config = temporal_config or {}
-        self.time_scale = self.temporal_config.get('time_scale', 86400.0)  # Default: days
         self._warned_once = False  # Only warn once to avoid spam
         self._long_sequence_count = 0
         self._total_sequences = 0
@@ -51,13 +45,27 @@ class ClassificationCollator:
         if not batch:
             return None
         
-        # Extract text, labels, and optionally delta_times
+        # Extract text and labels
         texts = [item['text'] for item in batch]
         labels = torch.stack([item['label'] for item in batch])
-        delta_times_list = [item.get('delta_times') for item in batch] if self.use_temporal_embeddings else None
         
-        # Clean up text - remove dataset format tokens
-        texts = [text.replace('<start>', '').replace('<end>', '').strip() for text in texts]
+        # Clean up text - remove custom dataset format tokens and tokenizer special tokens
+        # The tokenizer will add its own BOS/EOS tokens during tokenization
+        bos_token = self.tokenizer.bos_token if self.tokenizer.bos_token else ""
+        eos_token = self.tokenizer.eos_token if self.tokenizer.eos_token else ""
+        
+        cleaned_texts = []
+        for text in texts:
+            # Remove custom tokens
+            text = text.replace('<start>', '').replace('<end>', '')
+            # Also remove tokenizer's BOS/EOS if they were added by preprocessing
+            if bos_token:
+                text = text.replace(bos_token, '')
+            if eos_token:
+                text = text.replace(eos_token, '')
+            cleaned_texts.append(text.strip())
+        
+        texts = cleaned_texts
         
         # Convert to binary labels if needed
         if self.binary_classification:
@@ -197,43 +205,11 @@ class ClassificationCollator:
         input_ids = torch.cat(padded_input_ids, dim=0)
         attention_mask = torch.cat(padded_attention_masks, dim=0)
         
-        # Align delta times with tokenized sequences if using temporal embeddings
-        delta_times_tensor = None
-        if self.use_temporal_embeddings and delta_times_list is not None:
-            aligned_delta_times = []
-            
-            for text, delta_times in zip(texts, delta_times_list):
-                if delta_times is None or len(delta_times) == 0:
-                    # No delta times available - use zeros
-                    seq_len = len(self.tokenizer.encode(text, add_special_tokens=True))
-                    aligned_deltas = [0.0] * min(seq_len, max_length_in_batch)
-                else:
-                    # Align delta times with tokenized sequence
-                    aligned_deltas = align_single_sequence(text, delta_times, self.tokenizer)
-                    
-                    # Truncate/pad to match max_length_in_batch
-                    if len(aligned_deltas) > max_length_in_batch:
-                        aligned_deltas = aligned_deltas[:max_length_in_batch]
-                    elif len(aligned_deltas) < max_length_in_batch:
-                        aligned_deltas.extend([0.0] * (max_length_in_batch - len(aligned_deltas)))
-                
-                aligned_delta_times.append(aligned_deltas)
-            
-            # Convert to tensor and apply log scaling
-            delta_times_tensor = torch.tensor(aligned_delta_times, dtype=torch.float32)
-            # Apply log scaling: log(1 + delta_time / time_scale)
-            delta_times_tensor = torch.log1p(delta_times_tensor / self.time_scale)
-        
-        result = {
+        return {
             'input_ids': input_ids,
             'attention_mask': attention_mask,
             'labels': labels
         }
-        
-        if delta_times_tensor is not None:
-            result['delta_times'] = delta_times_tensor
-        
-        return result
     
     def get_stats(self):
         """Return statistics about long sequences encountered."""
