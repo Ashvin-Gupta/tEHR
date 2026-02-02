@@ -267,10 +267,17 @@ class EHRPretrainer:
             "eval_dataset": val_dataset,
             "args": training_args,
             "callbacks": callbacks,
+            
+            # CRITICAL: Pass these directly to ensure SFTTrainer picks them up
+            "packing": True,
+            "max_seq_length": self.model_config['max_length'],
+            "dataset_text_field": "text",
         }
         
         
         self.trainer = SFTTrainer(**trainer_kwargs)
+        train_ds = self.trainer.train_dataset
+        print(f"  - Internal train dataset type: {type(train_ds)}")
 
         print(f"  ✓ SFTTrainer initialized")
         print(f"  - Configured max_seq_length: {self.model_config['max_length']}")
