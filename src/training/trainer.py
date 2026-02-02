@@ -9,13 +9,51 @@ from datasets import Dataset
 from transformers import TrainingArguments
 from unsloth import FastLanguageModel
 from trl import SFTTrainer, SFTConfig
-from trl.trainer import ConstantLengthDataset
 import wandb
 
 from src.data.unified_dataset import UnifiedEHRDataset
 from src.data.preprocessing import extract_text
 from src.training.callbacks import InferenceCallback, PackingVerificationCallback, BatchShapeCallback
 
+
+def pack_and_chunk_texts(texts, tokenizer, chunk_size):
+        """
+        Manually packs and chunks texts into fixed-size windows.
+        This replaces SFTTrainer's internal packing mechanism.
+        """
+        print(f"  - Tokenizing and packing {len(texts)} texts into {chunk_size}-token chunks...")
+        
+        all_token_ids = []
+        
+        # 1. Tokenize all texts and flatten into one giant list
+        # We use a generator or loop to avoid holding too much in RAM if possible, 
+        # but for typical EHR datasets, a simple loop is fine.
+        for text in texts:
+            # Tokenize (add_special_tokens=False because we handle EOS manually or it's in the text)
+            token_ids = tokenizer(text, add_special_tokens=False)["input_ids"]
+            all_token_ids.extend(token_ids)
+            
+            # CRITICAL: Ensure there is an EOS token between patients
+            # If your extract_text function already adds it, this check prevents doubling it.
+            if not token_ids or token_ids[-1] != tokenizer.eos_token_id:
+                all_token_ids.append(tokenizer.eos_token_id)
+        
+        # 2. Slice into fixed chunks
+        chunks = []
+        total_tokens = len(all_token_ids)
+        
+        for i in range(0, total_tokens, chunk_size):
+            chunk_ids = all_token_ids[i : i + chunk_size]
+            
+            # Optional: Drop the very last chunk if it's too short (to keep batches consistent)
+            # or keep it. Here we keep it.
+            if len(chunk_ids) > 0:
+                # Decode back to text so SFTTrainer can process it normally
+                # This ensures compatability with dataset_text_field="text"
+                chunks.append(tokenizer.decode(chunk_ids))
+                
+        print(f"  - Created {len(chunks)} packed sequences.")
+        return chunks
 
 class EHRPretrainer:
     """
@@ -109,12 +147,13 @@ class EHRPretrainer:
             device_map={"": self.local_rank}
         )
         # Explicitly set the model_max_length and padding_side for the tokenizer
-        self.tokenizer.model_max_length = self.model_config['max_length']  
-        self.tokenizer.padding_side = "right" # SFTTrainer usually prefers right padding for packing
-        print(f"Loaded model and tokenizer (vocab size: {len(self.tokenizer)})")
-        print(f"Requested max_length from config: {self.model_config['max_length']}")
-        print(f"Model config max_position_embeddings: {getattr(self.model.config, 'max_position_embeddings', None)}")
-        print(f"Tokenizer model_max_length: {self.tokenizer.model_max_length}")
+        # self.tokenizer.model_max_length = self.model_config['max_length']  
+        # self.tokenizer.padding_side = "right" # SFTTrainer usually prefers right padding for packing
+        # print(f"Loaded model and tokenizer (vocab size: {len(self.tokenizer)})")
+        # print(f"Requested max_length from config: {self.model_config['max_length']}")
+        # print(f"Model config max_position_embeddings: {getattr(self.model.config, 'max_position_embeddings', None)}")
+        # print(f"Tokenizer model_max_length: {self.tokenizer.model_max_length}")
+    
     
     def apply_lora(self):
         """Apply LoRA adapters to the model."""
@@ -170,8 +209,12 @@ class EHRPretrainer:
         train_text_list = extract_text(train_base_dataset, self.tokenizer)
         val_text_list = extract_text(val_base_dataset, self.tokenizer)
 
-        train_dataset = Dataset.from_dict({"text": train_text_list})
-        val_dataset = Dataset.from_dict({"text": val_text_list})
+        print(f"  - Manually packing to context length: {self.model_config['max_length']}")
+        train_chunks = pack_and_chunk_texts(train_texts, self.tokenizer, self.model_config['max_length'])
+        val_chunks = pack_and_chunk_texts(val_texts, self.tokenizer, self.model_config['max_length'])
+
+        train_dataset = Dataset.from_dict({"text": train_chunks})
+        val_dataset = Dataset.from_dict({"text": val_chunks})
         
         return train_dataset, val_dataset
     
@@ -183,47 +226,27 @@ class EHRPretrainer:
         report_to: str,
         inference_prompt: Optional[str] = None
     ):
-        """Create the SFTTrainer with MANUAL packing."""
+        """
+        Create the SFTTrainer using the manually packed datasets.
+        """
         print("\n" + "=" * 80)
-        print("Setting up training (with MANUAL packing)...")
+        print("Setting up training...")
         print("=" * 80)
         
-        # 1. Manually pack the datasets into fixed-length sequences
-        # This bypasses SFTTrainer's internal packing logic which is failing
-        print(f"  - Manually packing datasets to length {self.model_config['max_length']}...")
-        
-        packed_train_dataset = ConstantLengthDataset(
-            tokenizer=self.tokenizer,
-            dataset=train_dataset,
-            dataset_text_field="text",
-            seq_length=self.model_config['max_length'],
-            shuffle=True,
-            infinite=False,  # False = one epoch is one pass over data
-            append_concat_token=False, # We already added EOS in extract_text
-        )
-        
-        packed_val_dataset = None
-        if val_dataset:
-            packed_val_dataset = ConstantLengthDataset(
-                tokenizer=self.tokenizer,
-                dataset=val_dataset,
-                dataset_text_field="text",
-                seq_length=self.model_config['max_length'],
-                shuffle=False,
-                infinite=False,
-                append_concat_token=False,
-            )
-
-        # 2. Setup Config
+        # Define the SFT configuration with all your detailed parameters
         training_args = SFTConfig(
             output_dir=self.training_config['output_dir'],
             overwrite_output_dir=self.training_config.get('overwrite_output_dir', True),
             
-            # Note: We set packing=False here because we did it manually above!
+            # --- CRITICAL CONFIGURATION ---
+            # packing=False: Because we ALREADY packed the data manually in prepare_datasets
             packing=False, 
+            # max_seq_length: Still needed so the trainer knows the limit for truncation
             max_seq_length=self.model_config['max_length'],
-            dataset_text_field=None, # Already tokenized
-            
+            # dataset_text_field: Tells trainer which column contains our packed strings
+            dataset_text_field="text",
+            # ------------------------------
+
             # Training Hyperparameters
             num_train_epochs=self.training_config['epochs'],
             per_device_train_batch_size=self.training_config['batch_size'],
@@ -232,14 +255,17 @@ class EHRPretrainer:
             weight_decay=float(self.training_config.get('weight_decay', 0.01)),
             warmup_steps=self.training_config.get('warmup_steps', 500),
             
-            # Logging & Saving
+            # Logging and evaluation
             logging_steps=self.training_config.get('logging_steps', 100),
             eval_strategy="steps" if val_dataset else "no",
             eval_steps=self.training_config.get('eval_steps', 500),
+            
+            # Saving
             save_strategy="steps",
             save_steps=self.training_config.get('save_steps', 1000),
             save_total_limit=self.training_config.get('save_total_limit', 2),
             load_best_model_at_end=True if val_dataset else False,
+            metric_for_best_model="loss" if val_dataset else None,
             
             # Performance
             fp16=self.training_config.get('fp16', False),
@@ -251,7 +277,11 @@ class EHRPretrainer:
             report_to=report_to,
             run_name=run_name,
             ddp_find_unused_parameters=False,
+            gradient_checkpointing_kwargs={"use_reentrant": False},
+            
+            # Other
             remove_unused_columns=False,
+            # Since we use a standard Dataset now, num_workers is safe to use
             dataloader_num_workers=self.training_config.get('dataloader_num_workers', 8),
         )
 
@@ -265,8 +295,8 @@ class EHRPretrainer:
         trainer_kwargs = {
             "model": self.model,
             "tokenizer": self.tokenizer,
-            "train_dataset": packed_train_dataset, # Pass the packed dataset
-            "eval_dataset": packed_val_dataset,
+            "train_dataset": train_dataset, # This is already packed!
+            "eval_dataset": val_dataset,
             "args": training_args,
             "callbacks": callbacks,
         }
