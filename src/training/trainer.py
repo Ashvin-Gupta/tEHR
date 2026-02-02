@@ -8,7 +8,7 @@ import torch
 from datasets import Dataset
 from transformers import TrainingArguments
 from unsloth import FastLanguageModel
-from trl import SFTTrainer
+from trl import SFTTrainer, SFTConfig
 import wandb
 
 from src.data.unified_dataset import UnifiedEHRDataset
@@ -196,11 +196,15 @@ class EHRPretrainer:
         print("Setting up training...")
         print("=" * 80)
         
-        training_args = TrainingArguments(
-            dataloader_num_workers=self.training_config.get('dataloader_num_workers', 8),
+        training_args = SFTConfig(
             output_dir=self.training_config['output_dir'],
             overwrite_output_dir=self.training_config.get('overwrite_output_dir', True),
-            
+
+            # --- CRITICAL: Pass SFT params here ---
+            max_seq_length=self.model_config['max_length'],
+            packing=True,
+            dataset_text_field="text",
+
             # Training hyperparameters
             num_train_epochs=self.training_config['epochs'],
             per_device_train_batch_size=self.training_config['batch_size'],
@@ -208,25 +212,25 @@ class EHRPretrainer:
             learning_rate=float(self.training_config['learning_rate']),
             weight_decay=float(self.training_config.get('weight_decay', 0.01)),
             warmup_steps=self.training_config.get('warmup_steps', 500),
-            
+
             # Logging and evaluation
             logging_steps=self.training_config.get('logging_steps', 100),
             eval_strategy="steps" if val_dataset else "no",
             eval_steps=self.training_config.get('eval_steps', 500),
-            
+
             # Saving
             save_strategy="steps",
             save_steps=self.training_config.get('save_steps', 1000),
             save_total_limit=self.training_config.get('save_total_limit', 2),
             load_best_model_at_end=True if val_dataset else False,
             metric_for_best_model="loss" if val_dataset else None,
-            
+
             # Performance
             fp16=self.training_config.get('fp16', False),
             bf16=self.training_config.get('bf16', True),
             gradient_accumulation_steps=self.training_config.get('gradient_accumulation_steps', 1),
             gradient_checkpointing=self.training_config.get('gradient_checkpointing', False),
-            
+
             # Reporting
             report_to=report_to,
             run_name=run_name,
@@ -234,9 +238,10 @@ class EHRPretrainer:
             # DDP crash fix
             ddp_find_unused_parameters=False,
             gradient_checkpointing_kwargs={"use_reentrant": False},
-            
+
             # Other
             remove_unused_columns=False,
+            dataloader_num_workers=self.training_config.get('dataloader_num_workers', 8),
         )
 
         # Create callbacks
@@ -253,26 +258,21 @@ class EHRPretrainer:
         callbacks.append(packing_callback)
         
         print("\nInitializing SFTTrainer...")
-        print(f"  - Config max_length: {self.model_config['max_length']}")
-        print(f"  - Tokenizer model_max_length: {self.tokenizer.model_max_length}")
+       
 
         trainer_kwargs = {
             "model": self.model,
             "tokenizer": self.tokenizer,
             "train_dataset": train_dataset,
             "eval_dataset": val_dataset,
-            "dataset_text_field": "text",
-            "max_seq_length": self.model_config['max_length'],
             "args": training_args,
-            "packing": True,  # Efficient sequence packing
             "callbacks": callbacks,
         }
-        print(f"  - Passing max_seq_length={trainer_kwargs['max_seq_length']} to SFTTrainer")
+        
         
         self.trainer = SFTTrainer(**trainer_kwargs)
 
-        print(f"  - SFTTrainer max_seq_length: {getattr(self.trainer, 'max_seq_length', 'NOT FOUND')}")
-        print(f"  - SFTTrainer args max_length: {getattr(self.trainer.args, 'max_length', 'NOT FOUND')}")
+        print(f"  - SFTTrainer configured max_seq_length: {training_args.max_seq_length}")
     
     def train(self):
         """Run the training loop."""
