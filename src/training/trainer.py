@@ -13,7 +13,7 @@ import wandb
 
 from src.data.unified_dataset import UnifiedEHRDataset
 from src.data.preprocessing import extract_text
-from src.training.callbacks import InferenceCallback, PackingVerificationCallback
+from src.training.callbacks import InferenceCallback, PackingVerificationCallback, BatchShapeCallback
 
 
 class EHRPretrainer:
@@ -245,10 +245,17 @@ class EHRPretrainer:
             inference_callback = InferenceCallback(self.model, self.tokenizer, inference_prompt)
             callbacks.append(inference_callback)
         
+        # Add batch shape callback (prints every 25 steps, set to 0 for only first batch)
+        batch_callback = BatchShapeCallback(print_every_n_steps=25)
+        callbacks.append(batch_callback)
+
         packing_callback = PackingVerificationCallback(self.tokenizer, num_samples=3)
         callbacks.append(packing_callback)
         
         print("\nInitializing SFTTrainer...")
+        print(f"  - Config max_length: {self.model_config['max_length']}")
+        print(f"  - Tokenizer model_max_length: {self.tokenizer.model_max_length}")
+
         trainer_kwargs = {
             "model": self.model,
             "tokenizer": self.tokenizer,
@@ -260,9 +267,12 @@ class EHRPretrainer:
             "packing": True,  # Efficient sequence packing
             "callbacks": callbacks,
         }
-        print(f"DEBUG: Initializing SFTTrainer with max_seq_length={self.model_config['max_length']}")
+        print(f"  - Passing max_seq_length={trainer_kwargs['max_seq_length']} to SFTTrainer")
         
         self.trainer = SFTTrainer(**trainer_kwargs)
+
+        print(f"  - SFTTrainer max_seq_length: {getattr(self.trainer, 'max_seq_length', 'NOT FOUND')}")
+        print(f"  - SFTTrainer args max_length: {getattr(self.trainer.args, 'max_length', 'NOT FOUND')}")
     
     def train(self):
         """Run the training loop."""

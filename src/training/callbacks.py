@@ -163,3 +163,42 @@ class PackingVerificationCallback(TrainerCallback):
             traceback.print_exc()
         
         print("=" * 80 + "\n")
+
+class BatchShapeCallback(TrainerCallback):
+    """
+    Callback to print batch shapes during training for debugging.
+    """
+    
+    def __init__(self, print_every_n_steps=10):
+        """
+        Args:
+            print_every_n_steps: Print batch info every N steps (0 = only first batch).
+        """
+        self.print_every_n_steps = print_every_n_steps
+        self.step_count = 0
+    
+    def on_step_begin(self, args, state, control, **kwargs):
+        """Print batch shape at the start of each step."""
+        if self.print_every_n_steps == 0 and self.step_count > 0:
+            return  # Only print first batch
+        
+        if self.print_every_n_steps > 0 and self.step_count % self.print_every_n_steps != 0:
+            self.step_count += 1
+            return
+        
+        # Try to get batch info from kwargs
+        inputs = kwargs.get('inputs', {})
+        if inputs:
+            input_ids = inputs.get('input_ids')
+            attention_mask = inputs.get('attention_mask')
+            
+            if input_ids is not None:
+                batch_size, seq_len = input_ids.shape
+                print(f"\n[Step {state.global_step}] Batch shape: {input_ids.shape} (batch_size={batch_size}, seq_len={seq_len})")
+                
+                if attention_mask is not None:
+                    # Count actual non-padding tokens
+                    actual_lengths = attention_mask.sum(dim=1)
+                    print(f"  - Actual sequence lengths: min={actual_lengths.min().item()}, max={actual_lengths.max().item()}, mean={actual_lengths.float().mean().item():.1f}")
+        
+        self.step_count += 1
