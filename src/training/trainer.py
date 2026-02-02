@@ -9,6 +9,7 @@ from datasets import Dataset
 from transformers import TrainingArguments
 from unsloth import FastLanguageModel
 from trl import SFTTrainer, SFTConfig
+from trl.trainer import ConstantLengthDataset
 import wandb
 
 from src.data.unified_dataset import UnifiedEHRDataset
@@ -182,64 +183,74 @@ class EHRPretrainer:
         report_to: str,
         inference_prompt: Optional[str] = None
     ):
-        """
-        Create the SFTTrainer.
-        
-        Args:
-            train_dataset: Training dataset.
-            val_dataset: Validation dataset (can be None).
-            run_name: Name for the training run.
-            report_to: Where to report metrics ("wandb" or "none").
-            inference_prompt: Optional prompt for inference callback.
-        """
+        """Create the SFTTrainer with MANUAL packing."""
         print("\n" + "=" * 80)
-        print("Setting up training...")
+        print("Setting up training (with MANUAL packing)...")
         print("=" * 80)
         
+        # 1. Manually pack the datasets into fixed-length sequences
+        # This bypasses SFTTrainer's internal packing logic which is failing
+        print(f"  - Manually packing datasets to length {self.model_config['max_length']}...")
+        
+        packed_train_dataset = ConstantLengthDataset(
+            tokenizer=self.tokenizer,
+            dataset=train_dataset,
+            dataset_text_field="text",
+            seq_length=self.model_config['max_length'],
+            shuffle=True,
+            infinite=False,  # False = one epoch is one pass over data
+            append_concat_token=False, # We already added EOS in extract_text
+        )
+        
+        packed_val_dataset = None
+        if val_dataset:
+            packed_val_dataset = ConstantLengthDataset(
+                tokenizer=self.tokenizer,
+                dataset=val_dataset,
+                dataset_text_field="text",
+                seq_length=self.model_config['max_length'],
+                shuffle=False,
+                infinite=False,
+                append_concat_token=False,
+            )
+
+        # 2. Setup Config
         training_args = SFTConfig(
             output_dir=self.training_config['output_dir'],
             overwrite_output_dir=self.training_config.get('overwrite_output_dir', True),
-
-            # --- CRITICAL: Pass SFT params here ---
+            
+            # Note: We set packing=False here because we did it manually above!
+            packing=False, 
             max_seq_length=self.model_config['max_length'],
-            packing=True,
-            dataset_text_field="text",
-
-            # Training hyperparameters
+            dataset_text_field=None, # Already tokenized
+            
+            # Training Hyperparameters
             num_train_epochs=self.training_config['epochs'],
             per_device_train_batch_size=self.training_config['batch_size'],
             per_device_eval_batch_size=self.training_config.get('eval_batch_size', self.training_config['batch_size']),
             learning_rate=float(self.training_config['learning_rate']),
             weight_decay=float(self.training_config.get('weight_decay', 0.01)),
             warmup_steps=self.training_config.get('warmup_steps', 500),
-
-            # Logging and evaluation
+            
+            # Logging & Saving
             logging_steps=self.training_config.get('logging_steps', 100),
             eval_strategy="steps" if val_dataset else "no",
             eval_steps=self.training_config.get('eval_steps', 500),
-
-            # Saving
             save_strategy="steps",
             save_steps=self.training_config.get('save_steps', 1000),
             save_total_limit=self.training_config.get('save_total_limit', 2),
             load_best_model_at_end=True if val_dataset else False,
-            metric_for_best_model="loss" if val_dataset else None,
-
+            
             # Performance
             fp16=self.training_config.get('fp16', False),
             bf16=self.training_config.get('bf16', True),
             gradient_accumulation_steps=self.training_config.get('gradient_accumulation_steps', 1),
             gradient_checkpointing=self.training_config.get('gradient_checkpointing', False),
-
-            # Reporting
+            
+            # System
             report_to=report_to,
             run_name=run_name,
-
-            # DDP crash fix
             ddp_find_unused_parameters=False,
-            gradient_checkpointing_kwargs={"use_reentrant": False},
-
-            # Other
             remove_unused_columns=False,
             dataloader_num_workers=self.training_config.get('dataloader_num_workers', 8),
         )
@@ -247,86 +258,41 @@ class EHRPretrainer:
         # Create callbacks
         callbacks = []
         if inference_prompt:
-            inference_callback = InferenceCallback(self.model, self.tokenizer, inference_prompt)
-            callbacks.append(inference_callback)
-        
-        # Add batch shape callback (prints every 25 steps, set to 0 for only first batch)
-        # batch_callback = BatchShapeCallback(print_every_n_steps=25)
-        # callbacks.append(batch_callback)
-
-        packing_callback = PackingVerificationCallback(self.tokenizer, num_samples=3)
-        callbacks.append(packing_callback)
+            callbacks.append(InferenceCallback(self.model, self.tokenizer, inference_prompt))
         
         print("\nInitializing SFTTrainer...")
-       
-
+        
         trainer_kwargs = {
             "model": self.model,
             "tokenizer": self.tokenizer,
-            "train_dataset": train_dataset,
-            "eval_dataset": val_dataset,
+            "train_dataset": packed_train_dataset, # Pass the packed dataset
+            "eval_dataset": packed_val_dataset,
             "args": training_args,
             "callbacks": callbacks,
-            
-            # CRITICAL: Pass these directly to ensure SFTTrainer picks them up
-            "packing": True,
-            "max_seq_length": self.model_config['max_length'],
-            "dataset_text_field": "text",
         }
         
-        
         self.trainer = SFTTrainer(**trainer_kwargs)
-        train_ds = self.trainer.train_dataset
-        print(f"  - Internal train dataset type: {type(train_ds)}")
-
+        
         print(f"  ✓ SFTTrainer initialized")
-        print(f"  - Configured max_seq_length: {self.model_config['max_length']}")
-        print(f"  - Configured batch_size: {self.training_config['batch_size']}")
-
-        # Debug: Print actual batch shapes from the dataloader
+        
+        # Debugging check
         print("\n" + "=" * 80)
         print("DEBUGGING: Checking actual batch shapes from dataloader...")
         print("=" * 80)
         try:
             train_dataloader = self.trainer.get_train_dataloader()
-            print(f"  - Dataloader type: {type(train_dataloader)}")
-            
-            # Get first batch
             first_batch = next(iter(train_dataloader))
-            print(f"  - First batch keys: {first_batch.keys()}")
             
             if 'input_ids' in first_batch:
-                input_ids = first_batch['input_ids']
-                print(f"  - input_ids shape: {input_ids.shape}")
-                print(f"  - input_ids dtype: {input_ids.dtype}")
-                
-                # Check sequence lengths
-                if 'attention_mask' in first_batch:
-                    attention_mask = first_batch['attention_mask']
-                    actual_lengths = attention_mask.sum(dim=1)
-                    print(f"  - attention_mask shape: {attention_mask.shape}")
-                    print(f"  - Actual sequence lengths: min={actual_lengths.min().item()}, max={actual_lengths.max().item()}, mean={actual_lengths.float().mean().item():.1f}")
-                
-                # Show a sample of the first sequence
-                if input_ids.size(0) > 0:
-                    first_seq = input_ids[0]
-                    print(f"  - First sequence length: {len(first_seq)}")
-                    print(f"  - First 10 token IDs: {first_seq[:10].tolist()}")
-                    print(f"  - Last 10 token IDs: {first_seq[-10:].tolist()}")
-            
-            # Get a few more batches to see consistency
-            print("\n  Checking next 3 batches...")
-            for i, batch in enumerate(train_dataloader):
-                if i >= 3:
-                    break
-                if 'input_ids' in batch:
-                    print(f"    Batch {i+1}: shape={batch['input_ids'].shape}")
-            
+                shape = first_batch['input_ids'].shape
+                print(f"  - input_ids shape: {shape}")
+                # We expect [batch_size, 8192]
+                if shape[1] == self.model_config['max_length']:
+                     print(f"  ✓ SUCCESS: Sequences are packed to length {shape[1]}")
+                else:
+                     print(f"  ⚠️  WARNING: Sequence length {shape[1]} does not match expected {self.model_config['max_length']}")
         except Exception as e:
             print(f"  ⚠️  Error accessing dataloader: {e}")
-            import traceback
-            traceback.print_exc()
-
         print("=" * 80 + "\n")
     
     def train(self):
