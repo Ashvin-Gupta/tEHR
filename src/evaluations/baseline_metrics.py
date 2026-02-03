@@ -75,12 +75,34 @@ def compute_ece(y_true: np.ndarray, y_prob: np.ndarray, n_bins: int = 10) -> flo
         Expected Calibration Error (float)
     """
     try:
+        # Use quantile strategy to ensure we have data in all bins
         fraction_of_positives, mean_predicted_value = calibration_curve(
-            y_true, y_prob, n_bins=n_bins, strategy='uniform'
+            y_true, y_prob, n_bins=n_bins, strategy='quantile'
         )
-        # ECE is the weighted average of absolute differences
-        bin_counts = np.histogram(y_prob, bins=n_bins)[0]
-        bin_weights = bin_counts / len(y_prob)
+        
+        # Get bin counts using the same binning strategy
+        # For quantile strategy, bins are based on quantiles of y_prob
+        quantiles = np.linspace(0, 1, n_bins + 1)
+        bin_edges = np.quantile(y_prob, quantiles)
+        bin_counts, _ = np.histogram(y_prob, bins=bin_edges)
+        
+        # Only compute ECE for bins that have samples
+        valid_bins = bin_counts > 0
+        if not np.any(valid_bins):
+            return 0.0
+        
+        # Ensure arrays have same length (should match number of valid bins)
+        min_len = min(len(fraction_of_positives), len(mean_predicted_value), np.sum(valid_bins))
+        if min_len == 0:
+            return 0.0
+        
+        # Truncate arrays to same length
+        fraction_of_positives = fraction_of_positives[:min_len]
+        mean_predicted_value = mean_predicted_value[:min_len]
+        bin_counts_valid = bin_counts[valid_bins][:min_len]
+        
+        # Compute ECE
+        bin_weights = bin_counts_valid / len(y_prob)
         ece = np.sum(bin_weights * np.abs(fraction_of_positives - mean_predicted_value))
         return float(ece)
     except Exception as e:
