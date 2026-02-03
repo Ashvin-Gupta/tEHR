@@ -38,22 +38,17 @@ def pack_and_chunk_texts(texts, tokenizer, chunk_size):
             if not token_ids or token_ids[-1] != tokenizer.eos_token_id:
                 all_token_ids.append(tokenizer.eos_token_id)
         
-        # 2. Slice into fixed chunks
-        chunks = []
+        # 2. Slice into fixed chunks (Store IDs directly, DO NOT DECODE)
+        chunked_input_ids = []
         total_tokens = len(all_token_ids)
         
         for i in range(0, total_tokens, chunk_size):
             chunk_ids = all_token_ids[i : i + chunk_size]
-            
-            # Optional: Drop the very last chunk if it's too short (to keep batches consistent)
-            # or keep it. Here we keep it.
             if len(chunk_ids) > 0:
-                # Decode back to text so SFTTrainer can process it normally
-                # This ensures compatability with dataset_text_field="text"
-                chunks.append(tokenizer.decode(chunk_ids))
+                chunked_input_ids.append(chunk_ids)
                 
-        print(f"  - Created {len(chunks)} packed sequences.")
-        return chunks
+        print(f"  - Created {len(chunked_input_ids)} packed sequences.")
+        return chunked_input_ids  # Returns list of lists of ints
 
 class EHRPretrainer:
     """
@@ -146,13 +141,6 @@ class EHRPretrainer:
             load_in_4bit=self.training_config.get('load_in_4bit', True),
             device_map={"": self.local_rank}
         )
-        # Explicitly set the model_max_length and padding_side for the tokenizer
-        # self.tokenizer.model_max_length = self.model_config['max_length']  
-        # self.tokenizer.padding_side = "right" # SFTTrainer usually prefers right padding for packing
-        # print(f"Loaded model and tokenizer (vocab size: {len(self.tokenizer)})")
-        # print(f"Requested max_length from config: {self.model_config['max_length']}")
-        # print(f"Model config max_position_embeddings: {getattr(self.model.config, 'max_position_embeddings', None)}")
-        # print(f"Tokenizer model_max_length: {self.tokenizer.model_max_length}")
     
     
     def apply_lora(self):
@@ -210,11 +198,12 @@ class EHRPretrainer:
         val_text_list = extract_text(val_base_dataset, self.tokenizer)
 
         print(f"  - Manually packing to context length: {self.model_config['max_length']}")
-        train_chunks = pack_and_chunk_texts(train_text_list, self.tokenizer, self.model_config['max_length'])
-        val_chunks = pack_and_chunk_texts(val_text_list, self.tokenizer, self.model_config['max_length'])
+        train_chunk_ids = pack_and_chunk_texts(train_text_list, self.tokenizer, self.model_config['max_length'])
+        val_chunk_ids = pack_and_chunk_texts(val_text_list, self.tokenizer, self.model_config['max_length'])
 
-        train_dataset = Dataset.from_dict({"text": train_chunks})
-        val_dataset = Dataset.from_dict({"text": val_chunks})
+        # Create dataset with input_ids directly
+        train_dataset = Dataset.from_dict({"input_ids": train_chunk_ids})
+        val_dataset = Dataset.from_dict({"input_ids": val_chunk_ids})
         
         return train_dataset, val_dataset
     
@@ -244,7 +233,8 @@ class EHRPretrainer:
             # max_seq_length: Still needed so the trainer knows the limit for truncation
             max_seq_length=self.model_config['max_length'],
             # dataset_text_field: Tells trainer which column contains our packed strings
-            dataset_text_field="text",
+            # dataset_text_field="text",
+            dataset_num_proc=4, # Process 4 datasets in parallel, hard coded for memory efficiency
             # ------------------------------
 
             # Training Hyperparameters
