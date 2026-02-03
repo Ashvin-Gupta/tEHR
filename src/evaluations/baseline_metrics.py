@@ -8,7 +8,12 @@ import json
 import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
-from sklearn.metrics import roc_auc_score, average_precision_score
+from sklearn.metrics import (
+    roc_auc_score, 
+    average_precision_score,
+    roc_curve,
+    precision_recall_curve
+)
 from sklearn.calibration import calibration_curve
 
 
@@ -110,6 +115,78 @@ def compute_ece(y_true: np.ndarray, y_prob: np.ndarray, n_bins: int = 10) -> flo
         return 0.0
 
 
+def plot_roc_curve(labels: np.ndarray, probs: np.ndarray, output_dir: str):
+    """
+    Plot and save ROC curve.
+    
+    Args:
+        labels: True binary labels
+        probs: Predicted probabilities
+        output_dir: Directory to save plot
+    """
+    os.makedirs(output_dir, exist_ok=True)
+    
+    try:
+        fpr, tpr, _ = roc_curve(labels, probs)
+        roc_auc = roc_auc_score(labels, probs)
+        
+        fig, ax = plt.subplots(figsize=(8, 6))
+        
+        ax.plot(fpr, tpr, color='darkorange', lw=2, label=f'ROC curve (AUC = {roc_auc:.3f})')
+        ax.plot([0, 1], [0, 1], color='navy', lw=2, linestyle='--', label='Random')
+        ax.set_xlim([0.0, 1.0])
+        ax.set_ylim([0.0, 1.05])
+        ax.set_xlabel('False Positive Rate', fontsize=12)
+        ax.set_ylabel('True Positive Rate', fontsize=12)
+        ax.set_title('ROC Curve', fontsize=14, fontweight='bold')
+        ax.legend(loc="lower right")
+        ax.grid(True, alpha=0.3)
+        
+        plt.tight_layout()
+        plt.savefig(os.path.join(output_dir, 'roc_curve.png'), dpi=300, bbox_inches='tight')
+        plt.close()
+        
+        print(f"  - ROC curve saved to {output_dir}/roc_curve.png")
+    except Exception as e:
+        print(f"Warning: Could not generate ROC plot: {e}")
+
+
+def plot_pr_curve(labels: np.ndarray, probs: np.ndarray, output_dir: str):
+    """
+    Plot and save Precision-Recall curve.
+    
+    Args:
+        labels: True binary labels
+        probs: Predicted probabilities
+        output_dir: Directory to save plot
+    """
+    os.makedirs(output_dir, exist_ok=True)
+    
+    try:
+        precision, recall, _ = precision_recall_curve(labels, probs)
+        avg_precision = average_precision_score(labels, probs)
+        
+        fig, ax = plt.subplots(figsize=(8, 6))
+        
+        ax.plot(recall, precision, color='darkorange', lw=2, 
+                label=f'PR curve (AP = {avg_precision:.3f})')
+        ax.set_xlim([0.0, 1.0])
+        ax.set_ylim([0.0, 1.05])
+        ax.set_xlabel('Recall', fontsize=12)
+        ax.set_ylabel('Precision', fontsize=12)
+        ax.set_title('Precision-Recall Curve', fontsize=14, fontweight='bold')
+        ax.legend(loc="lower left")
+        ax.grid(True, alpha=0.3)
+        
+        plt.tight_layout()
+        plt.savefig(os.path.join(output_dir, 'precision_recall_curve.png'), dpi=300, bbox_inches='tight')
+        plt.close()
+        
+        print(f"  - Precision-Recall curve saved to {output_dir}/precision_recall_curve.png")
+    except Exception as e:
+        print(f"Warning: Could not generate PR plot: {e}")
+
+
 def plot_calibration_curve(labels: np.ndarray, probs: np.ndarray, output_dir: str, n_bins: int = 10):
     """
     Plot and save calibration curve.
@@ -152,6 +229,21 @@ def plot_calibration_curve(labels: np.ndarray, probs: np.ndarray, output_dir: st
         print(f"  - Calibration curve saved to {output_dir}/calibration_curve.png")
     except Exception as e:
         print(f"Warning: Could not generate calibration plot: {e}")
+
+
+def plot_all_curves(labels: np.ndarray, probs: np.ndarray, output_dir: str, n_bins: int = 10):
+    """
+    Plot and save all evaluation curves (ROC, PR, and Calibration).
+    
+    Args:
+        labels: True binary labels
+        probs: Predicted probabilities
+        output_dir: Directory to save plots
+        n_bins: Number of bins for calibration curve
+    """
+    plot_roc_curve(labels, probs, output_dir)
+    plot_pr_curve(labels, probs, output_dir)
+    plot_calibration_curve(labels, probs, output_dir, n_bins=n_bins)
 
 
 def save_results(results_dict: dict, output_dir: str, filename: str = 'results.json'):

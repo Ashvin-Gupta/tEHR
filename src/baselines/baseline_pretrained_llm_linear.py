@@ -14,7 +14,7 @@ from src.models.llm_classifier import LLMClassifier
 from src.data.classification_collator import ClassificationCollator
 from src.training.model_loader import load_pretrained_lora_model
 from src.training.metrics import compute_classification_metrics
-from src.evaluations.baseline_metrics import compute_baseline_metrics, plot_calibration_curve, save_results, print_results
+from src.evaluations.baseline_metrics import compute_baseline_metrics, plot_all_curves, save_results, print_results
 
 
 class PretrainedLLMLinearBaseline:
@@ -182,9 +182,9 @@ class PretrainedLLMLinearBaseline:
         # Print results
         print_results(metrics, split_name)
         
-        # Save calibration plot
+        # Save all plots (ROC, PR, and Calibration)
         plot_dir = os.path.join(self.output_dir, 'plots', split_name)
-        plot_calibration_curve(labels, probs, plot_dir)
+        plot_all_curves(labels, probs, plot_dir)
         
         # Save predictions
         results = {

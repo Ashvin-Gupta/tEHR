@@ -12,7 +12,7 @@ import xgboost as xgb
 from sklearn.model_selection import GridSearchCV
 
 from src.baselines.utils import load_baseline_config, setup_output_dir, load_datasets, get_labels_from_dataset
-from src.evaluations.baseline_metrics import compute_baseline_metrics, plot_calibration_curve, save_results, print_results
+from src.evaluations.baseline_metrics import compute_baseline_metrics, plot_all_curves, save_results, print_results
 
 
 def extract_token_features(patient_record: Dict) -> Dict[str, int]:
@@ -258,9 +258,9 @@ class XGBoostBaseline:
         # Print results
         print_results(metrics, split_name)
         
-        # Save calibration plot
+        # Save all plots (ROC, PR, and Calibration)
         plot_dir = os.path.join(self.output_dir, 'plots', split_name)
-        plot_calibration_curve(y, probs, plot_dir)
+        plot_all_curves(y, probs, plot_dir)
         
         # Save predictions (convert numpy types to native Python types for JSON serialization)
         results = {

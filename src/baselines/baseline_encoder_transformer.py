@@ -12,7 +12,7 @@ from torch.utils.data import Dataset, DataLoader
 from tqdm import tqdm
 
 from src.baselines.utils import load_baseline_config, setup_output_dir, load_datasets, get_labels_from_dataset
-from src.evaluations.baseline_metrics import compute_baseline_metrics, plot_calibration_curve, save_results, print_results
+from src.evaluations.baseline_metrics import compute_baseline_metrics, plot_all_curves, save_results, print_results
 
 
 def filter_tokens(token_list: List) -> List:
@@ -396,9 +396,9 @@ class EncoderTransformerBaseline:
         # Print results
         print_results(metrics, split_name)
         
-        # Save calibration plot
+        # Save all plots (ROC, PR, and Calibration)
         plot_dir = os.path.join(self.output_dir, 'plots', split_name)
-        plot_calibration_curve(all_labels, all_probs, plot_dir)
+        plot_all_curves(all_labels, all_probs, plot_dir)
         
         # Save predictions
         results = {
