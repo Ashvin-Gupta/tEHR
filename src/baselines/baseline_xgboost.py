@@ -104,13 +104,21 @@ class XGBoostBaseline:
         print("Extracting features from dataset...")
         print("  - Accessing raw tokens directly (no translation needed for XGBoost)")
         
+        # Load labels file directly to get binary is_case labels
+        # (subject_to_label uses multi-class mapping, but we need binary is_case)
+        labels_df = pd.read_csv(self.data_config['labels_filepath'])
+        subject_to_is_case = pd.Series(
+            labels_df['is_case'].values,
+            index=labels_df['subject_id']
+        ).to_dict()
+        
         # Access patient records directly to get raw tokens without translation
         for i in tqdm(range(len(dataset.patient_records)), desc="Processing samples"):
             patient_record = dataset.patient_records[i]
             subject_id = patient_record['subject_id']
             
-            # Get label
-            label = dataset.subject_to_label.get(subject_id)
+            # Get binary label (is_case: 0 = Control, 1 = Pancreatic Cancer)
+            label = subject_to_is_case.get(subject_id)
             if pd.isna(label) if hasattr(pd, 'isna') else (label is None):
                 continue  # Skip patients without labels
             
@@ -144,11 +152,19 @@ class XGBoostBaseline:
             # Extract features
             features = extract_token_features(sample)
             features_list.append(features)
-            labels_list.append(label)
+            
+            # Use is_case directly (already binary: 0 = Control, 1 = Pancreatic Cancer)
+            labels_list.append(int(label))
         
         # Convert to DataFrame
         features_df = pd.DataFrame(features_list)
         labels_array = np.array(labels_list)
+        
+        # Verify binary labels
+        unique_labels = np.unique(labels_array)
+        print(f"  - Unique labels from is_case: {unique_labels}")
+        if len(unique_labels) > 2 or not all(l in [0, 1] for l in unique_labels):
+            raise ValueError(f"Expected binary labels [0, 1] from is_case, got {unique_labels}")
         
         # Store feature names
         self.feature_names = features_df.columns.tolist()
