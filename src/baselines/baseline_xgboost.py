@@ -89,6 +89,9 @@ class XGBoostBaseline:
         """
         Extract features and labels from dataset.
         
+        For XGBoost, we access raw tokens directly from patient records to avoid
+        translation overhead (we don't need translation, just token type counts).
+        
         Args:
             dataset: UnifiedEHRDataset instance
         
@@ -99,16 +102,49 @@ class XGBoostBaseline:
         labels_list = []
         
         print("Extracting features from dataset...")
-        for i in tqdm(range(len(dataset)), desc="Processing samples"):
-            sample = dataset[i]
-            if sample is not None:
-                features = extract_token_features(sample)
-                features_list.append(features)
+        print("  - Accessing raw tokens directly (no translation needed for XGBoost)")
+        
+        # Access patient records directly to get raw tokens without translation
+        for i in tqdm(range(len(dataset.patient_records)), desc="Processing samples"):
+            patient_record = dataset.patient_records[i]
+            subject_id = patient_record['subject_id']
+            
+            # Get label
+            label = dataset.subject_to_label.get(subject_id)
+            if pd.isna(label) if hasattr(pd, 'isna') else (label is None):
+                continue  # Skip patients without labels
+            
+            # Get raw token IDs and convert to strings using vocab
+            token_ids = patient_record['tokens']
+            timestamps = patient_record['timestamps']
+            
+            # Apply time cutoff if needed (same logic as dataset)
+            if dataset.cutoff_months is not None:
+                actual_cutoff = dataset.cutoff_months
+                cancer_date = dataset.subject_to_cancer_date.get(subject_id)
                 
-                label = sample['label']
-                if hasattr(label, 'item'):
-                    label = label.item()
-                labels_list.append(label)
+                if pd.notna(cancer_date) if hasattr(pd, 'notna') else (cancer_date is not None):
+                    cutoff_date = cancer_date - pd.DateOffset(months=actual_cutoff)
+                    cutoff_timestamp = cutoff_date.timestamp()
+                    
+                    truncated_ids = []
+                    for j, ts in enumerate(timestamps):
+                        token_str = dataset.id_to_token_map.get(token_ids[j], "")
+                        is_end_token = (token_str == '<end>')
+                        if ts == 0 or (ts is not None and ts < cutoff_timestamp) or is_end_token:
+                            truncated_ids.append(token_ids[j])
+                    token_ids = truncated_ids
+            
+            # Convert token IDs to strings
+            token_strings = [dataset.id_to_token_map.get(tid, "") for tid in token_ids]
+            
+            # Create sample dict with tokens
+            sample = {'tokens': token_strings}
+            
+            # Extract features
+            features = extract_token_features(sample)
+            features_list.append(features)
+            labels_list.append(label)
         
         # Convert to DataFrame
         features_df = pd.DataFrame(features_list)
