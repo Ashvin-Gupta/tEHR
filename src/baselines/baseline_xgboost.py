@@ -262,16 +262,16 @@ class XGBoostBaseline:
         plot_dir = os.path.join(self.output_dir, 'plots', split_name)
         plot_calibration_curve(y, probs, plot_dir)
         
-        # Save predictions
+        # Save predictions (convert numpy types to native Python types for JSON serialization)
         results = {
-            'metrics': metrics,
-            'labels': y.tolist(),
-            'probs': probs.tolist()
+            'metrics': {k: float(v) for k, v in metrics.items()},
+            'labels': [int(label) for label in y.tolist()],
+            'probs': [float(prob) for prob in probs.tolist()]
         }
         save_results(results, os.path.join(self.output_dir, 'results'), f'{split_name}_results.json')
         
-        # Feature importance
-        feature_importance = dict(zip(self.feature_names, self.model.feature_importances_))
+        # Feature importance (convert numpy types to native Python types)
+        feature_importance = {k: float(v) for k, v in zip(self.feature_names, self.model.feature_importances_)}
         feature_importance_sorted = sorted(feature_importance.items(), key=lambda x: x[1], reverse=True)
         
         print("\nTop 10 Most Important Features:")
@@ -331,10 +331,10 @@ class XGBoostBaseline:
         val_metrics = self.evaluate(X_val, y_val, 'validation')
         test_metrics = self.evaluate(X_test, y_test, 'test')
         
-        # Save summary
+        # Save summary (convert numpy types to native Python types for JSON serialization)
         summary = {
-            'validation': val_metrics,
-            'test': test_metrics,
+            'validation': {k: float(v) for k, v in val_metrics.items()},
+            'test': {k: float(v) for k, v in test_metrics.items()},
             'feature_names': self.feature_names
         }
         save_results(summary, self.output_dir, 'summary.json')
