@@ -175,15 +175,17 @@ class XGBoostBaseline:
             'reg_alpha': self.model_config.get('reg_alpha', 0),
             'reg_lambda': self.model_config.get('reg_lambda', 1),
             'random_state': 42,
-            'n_jobs': self.training_config.get('n_jobs', -1)
+            'n_jobs': self.training_config.get('n_jobs', -1),
+            'early_stopping_rounds': self.training_config.get('early_stopping_rounds', 10)
         }
         
         self.model = xgb.XGBClassifier(**params)
         
         print(f"  - XGBoost model created with parameters:")
         for key, value in params.items():
-            if key != 'n_jobs':
+            if key not in ['n_jobs', 'early_stopping_rounds']:
                 print(f"    {key}: {value}")
+        print(f"    early_stopping_rounds: {params['early_stopping_rounds']}")
     
     def train(self, X_train, y_train, X_val, y_val):
         """Train XGBoost model."""
@@ -192,11 +194,11 @@ class XGBoostBaseline:
         print("=" * 80)
         
         # Train with early stopping
+        # Note: early_stopping_rounds is set during model initialization in newer XGBoost versions
         self.model.fit(
             X_train,
             y_train,
             eval_set=[(X_val, y_val)],
-            early_stopping_rounds=self.training_config.get('early_stopping_rounds', 10),
             verbose=self.training_config.get('verbose', True)
         )
         
