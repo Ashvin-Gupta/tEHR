@@ -1,0 +1,257 @@
+"""
+Baseline 3: Pretrained LLM + Linear Classifier
+
+Uses pretrained Qwen model (with LoRA from pretraining) with frozen parameters, trains only linear head.
+"""
+import os
+import torch
+import numpy as np
+from typing import Dict, Any
+from transformers import TrainingArguments, Trainer
+
+from src.baselines.utils import load_baseline_config, setup_output_dir, load_datasets
+from src.models.llm_classifier import LLMClassifier
+from src.data.classification_collator import ClassificationCollator
+from src.training.model_loader import load_pretrained_lora_model
+from src.training.metrics import compute_classification_metrics
+from src.evaluations.baseline_metrics import compute_baseline_metrics, plot_calibration_curve, save_results, print_results
+
+
+class PretrainedLLMLinearBaseline:
+    """
+    Frozen pretrained LLM with trainable linear classification head.
+    """
+    
+    def __init__(self, config: Dict[str, Any]):
+        """
+        Initialize the pretrained LLM + linear baseline.
+        
+        Args:
+            config: Configuration dictionary
+        """
+        self.config = config
+        self.model_config = config.get('model', {})
+        self.data_config = config['data']
+        self.training_config = config.get('training', {})
+        self.output_dir = config.get('output_dir', './outputs/pretrained_llm_linear')
+        
+        self.base_model = None
+        self.tokenizer = None
+        self.classifier_model = None
+        self.trainer = None
+        self.local_rank = int(os.environ.get("LOCAL_RANK", 0))
+    
+    def load_model(self):
+        """Load pretrained model with LoRA adapters from pretraining stage."""
+        print("\n" + "=" * 80)
+        print("Loading pretrained model...")
+        print("=" * 80)
+        
+        pretrained_checkpoint = self.model_config.get('pretrained_checkpoint')
+        if not pretrained_checkpoint:
+            raise ValueError("'model.pretrained_checkpoint' must be set in config")
+        
+        max_length = self.model_config.get('max_length', 8192)
+        load_in_4bit = self.training_config.get('load_in_4bit', True)
+        
+        print(f"  - Pretrained checkpoint: {pretrained_checkpoint}")
+        print(f"  - Max length: {max_length}")
+        print(f"  - 4-bit quantization: {load_in_4bit}")
+        
+        self.base_model, self.tokenizer = load_pretrained_lora_model(
+            pretrained_checkpoint=pretrained_checkpoint,
+            max_seq_length=max_length,
+            load_in_4bit=load_in_4bit,
+            local_rank=self.local_rank
+        )
+        
+        print(f"  - Model loaded successfully")
+        print(f"  - Vocab size: {len(self.tokenizer)}")
+    
+    def create_classifier(self):
+        """Create LLMClassifier with frozen pretrained model."""
+        print("\n" + "=" * 80)
+        print("Creating frozen pretrained LLM + linear classifier...")
+        print("=" * 80)
+        
+        hidden_size = self.model_config.get('hidden_size', 4096)
+        num_labels = self.model_config.get('num_labels', 2)
+        head_type = self.model_config.get('head_type', 'linear')
+        head_hidden_size = self.model_config.get('head_hidden_size', 512)
+        head_dropout = self.model_config.get('head_dropout', 0.1)
+        
+        self.classifier_model = LLMClassifier(
+            base_model=self.base_model,
+            hidden_size=hidden_size,
+            num_labels=num_labels,
+            freeze_base=True,  # Freeze all base model parameters (including LoRA)
+            trainable_param_keywords=[],  # Don't train LoRA adapters, only linear head
+            multi_label=self.training_config.get('multi_label', False),
+            tokenizer=self.tokenizer,
+            head_type=head_type,
+            head_hidden_size=head_hidden_size,
+            head_dropout=head_dropout
+        )
+        
+        # Count trainable parameters
+        trainable_params = sum(p.numel() for p in self.classifier_model.parameters() if p.requires_grad)
+        total_params = sum(p.numel() for p in self.classifier_model.parameters())
+        print(f"  - Trainable parameters: {trainable_params:,} / {total_params:,} ({100*trainable_params/total_params:.2f}%)")
+    
+    def create_trainer(self, train_dataset, val_dataset, collator):
+        """Create HuggingFace Trainer."""
+        print("\n" + "=" * 80)
+        print("Setting up training...")
+        print("=" * 80)
+        
+        training_args = TrainingArguments(
+            output_dir=os.path.join(self.output_dir, 'checkpoints'),
+            overwrite_output_dir=self.training_config.get('overwrite_output_dir', True),
+            num_train_epochs=self.training_config.get('epochs', 3),
+            per_device_train_batch_size=self.training_config.get('batch_size', 2),
+            per_device_eval_batch_size=self.training_config.get('eval_batch_size', 1),
+            learning_rate=self.training_config.get('learning_rate', 1e-4),
+            weight_decay=self.training_config.get('weight_decay', 0.01),
+            warmup_steps=self.training_config.get('warmup_steps', 100),
+            gradient_accumulation_steps=self.training_config.get('gradient_accumulation_steps', 2),
+            fp16=self.training_config.get('fp16', False),
+            bf16=self.training_config.get('bf16', True),
+            logging_steps=self.training_config.get('logging_steps', 50),
+            eval_steps=self.training_config.get('eval_steps', 250),
+            save_steps=self.training_config.get('save_steps', 500),
+            save_total_limit=self.training_config.get('save_total_limit', 2),
+            evaluation_strategy="steps",
+            save_strategy="steps",
+            load_best_model_at_end=True,
+            metric_for_best_model="eval_auroc",
+            greater_is_better=True,
+            dataloader_num_workers=self.training_config.get('dataloader_num_workers', 8),
+            report_to="none"  # Disable wandb for baselines
+        )
+        
+        self.trainer = Trainer(
+            model=self.classifier_model,
+            args=training_args,
+            train_dataset=train_dataset,
+            eval_dataset=val_dataset,
+            tokenizer=self.tokenizer,
+            data_collator=collator,
+            compute_metrics=compute_classification_metrics,
+        )
+        
+        print("  - Trainer created successfully")
+    
+    def train(self):
+        """Train the linear classifier head."""
+        print("\n" + "=" * 80)
+        print("Training linear classifier head...")
+        print("=" * 80)
+        
+        self.trainer.train()
+        
+        print("\nTraining completed!")
+    
+    def evaluate(self, dataset, split_name: str = "validation") -> Dict[str, float]:
+        """
+        Evaluate model on a dataset.
+        
+        Args:
+            dataset: UnifiedEHRDataset instance
+            split_name: Name of the split
+        
+        Returns:
+            Dictionary of metrics
+        """
+        print(f"\n" + "=" * 80)
+        print(f"Evaluating on {split_name} set...")
+        print("=" * 80)
+        
+        # Get predictions
+        pred_output = self.trainer.predict(dataset)
+        logits = pred_output.predictions
+        if isinstance(logits, tuple):
+            logits = logits[0]
+        
+        # Convert to probabilities
+        probs = torch.softmax(torch.tensor(logits), dim=1).numpy()[:, 1]
+        labels = pred_output.label_ids
+        
+        # Compute metrics
+        metrics = compute_baseline_metrics(labels, probs)
+        
+        # Print results
+        print_results(metrics, split_name)
+        
+        # Save calibration plot
+        plot_dir = os.path.join(self.output_dir, 'plots', split_name)
+        plot_calibration_curve(labels, probs, plot_dir)
+        
+        # Save predictions
+        results = {
+            'metrics': metrics,
+            'labels': labels.tolist(),
+            'probs': probs.tolist()
+        }
+        save_results(results, os.path.join(self.output_dir, 'results'), f'{split_name}_results.json')
+        
+        return metrics
+    
+    def save_model(self):
+        """Save the trained model."""
+        final_model_path = os.path.join(self.output_dir, 'final_model')
+        self.trainer.save_model(final_model_path)
+        self.tokenizer.save_pretrained(final_model_path)
+        print(f"\n  - Model saved to: {final_model_path}")
+    
+    def run(self):
+        """Run the complete baseline training and evaluation pipeline."""
+        # Setup
+        setup_output_dir(self.output_dir, overwrite=self.training_config.get('overwrite_output_dir', False))
+        
+        # Load model
+        self.load_model()
+        
+        # Create classifier
+        self.create_classifier()
+        
+        # Load datasets
+        datasets = load_datasets(
+            self.data_config,
+            splits=['train', 'tuning', 'held_out'],
+            format='text',
+            tokenizer=self.tokenizer
+        )
+        
+        # Create collator
+        collator = ClassificationCollator(
+            tokenizer=self.tokenizer,
+            max_length=self.data_config.get('max_length', 12000),
+            padding=True
+        )
+        
+        # Create trainer
+        self.create_trainer(datasets['train'], datasets['tuning'], collator)
+        
+        # Train
+        self.train()
+        
+        # Save model
+        self.save_model()
+        
+        # Evaluate
+        val_metrics = self.evaluate(datasets['tuning'], 'validation')
+        test_metrics = self.evaluate(datasets['held_out'], 'test')
+        
+        # Save summary
+        summary = {
+            'validation': val_metrics,
+            'test': test_metrics
+        }
+        save_results(summary, self.output_dir, 'summary.json')
+        
+        print("\n" + "=" * 80)
+        print("Pretrained LLM + Linear Baseline Complete!")
+        print("=" * 80)
+        
+        return val_metrics, test_metrics
+

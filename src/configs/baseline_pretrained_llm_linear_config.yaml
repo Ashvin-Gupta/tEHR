@@ -1,0 +1,45 @@
+name: "pretrained_llm_linear_baseline"
+
+model:
+  pretrained_checkpoint: "/data/scratch/qc25022/pancreas/experiments/Pretrain-Qwen3-8B-Pancreas-no-adaptation-refactored/final_model"
+  max_length: 12000
+  hidden_size: 4096
+  num_labels: 2
+  head_type: "linear"
+  head_hidden_size: 512
+  head_dropout: 0.1
+
+training:
+  output_dir: "/data/scratch/qc25022/pancreas/experiments/baselines/pretrained_llm_linear"
+  overwrite_output_dir: true
+  epochs: 3
+  batch_size: 2
+  eval_batch_size: 1
+  learning_rate: 1e-4
+  weight_decay: 0.01
+  warmup_steps: 100
+  gradient_accumulation_steps: 2
+  fp16: false
+  bf16: true
+  logging_steps: 50
+  eval_steps: 250
+  save_steps: 500
+  save_total_limit: 2
+  load_in_4bit: true
+  multi_label: false
+  dataloader_num_workers: 8
+
+data:
+  cutoff_months: 6
+  data_dir: "/data/scratch/qc25022/pancreas/tokenised_data_pancreas_MEDS/cprd_upgi"
+  vocab_filepath: "/data/scratch/qc25022/pancreas/tokenised_data_pancreas_MEDS/cprd_upgi/vocab.csv"
+  labels_filepath: "/data/home/qc25022/cancer-extraction-pipeline/output/pancreas_MEDS/subject_information.csv"
+  medical_lookup_filepath: "/data/home/qc25022/TextCancEHR2/src/resources/MedicalDictTranslation2.csv"
+  lab_lookup_filepath: "/data/home/qc25022/TextCancEHR2/src/resources/LabLookUP.csv"
+  region_lookup_filepath: "/data/home/qc25022/TextCancEHR2/src/resources/RegionLookUp.csv"
+  time_lookup_filepath: "/data/home/qc25022/TextCancEHR2/src/resources/TimeLookUp.csv"
+  max_length: 12000
+  handle_long_sequences: "warn"
+  sort_by_length: true
+  data_type: "binned"
+

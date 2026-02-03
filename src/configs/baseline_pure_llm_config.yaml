@@ -1,0 +1,25 @@
+name: "pure_llm_baseline"
+
+model:
+  model_name: "unsloth/Qwen3-8B-Base-unsloth-bnb-4bit"
+  max_length: 16000
+  load_in_4bit: true
+
+inference:
+  batch_size: 4
+
+output_dir: "/data/scratch/qc25022/pancreas/experiments/baselines/pure_llm"
+overwrite_output_dir: false
+
+data:
+  cutoff_months: 6
+  data_dir: "/data/scratch/qc25022/pancreas/tokenised_data_pancreas_MEDS/cprd_upgi"
+  vocab_filepath: "/data/scratch/qc25022/pancreas/tokenised_data_pancreas_MEDS/cprd_upgi/vocab.csv"
+  labels_filepath: "/data/home/qc25022/cancer-extraction-pipeline/output/pancreas_MEDS/subject_information.csv"
+  medical_lookup_filepath: "/data/home/qc25022/TextCancEHR2/src/resources/MedicalDictTranslation2.csv"
+  lab_lookup_filepath: "/data/home/qc25022/TextCancEHR2/src/resources/LabLookUP.csv"
+  region_lookup_filepath: "/data/home/qc25022/TextCancEHR2/src/resources/RegionLookUp.csv"
+  time_lookup_filepath: "/data/home/qc25022/TextCancEHR2/src/resources/TimeLookUp.csv"
+  max_length: 16000
+  data_type: "binned"
+
