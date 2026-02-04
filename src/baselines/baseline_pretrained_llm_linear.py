@@ -146,7 +146,7 @@ class PretrainedLLMLinearBaseline:
             eval_steps=self.training_config.get('eval_steps', 250),
             save_steps=self.training_config.get('save_steps', 500),
             save_total_limit=self.training_config.get('save_total_limit', 2),
-            evaluation_strategy="steps",
+            eval_strategy="steps",
             save_strategy="steps",
             load_best_model_at_end=True,
             metric_for_best_model="eval_auroc",
