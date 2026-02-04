@@ -9,6 +9,11 @@ model:
   head_hidden_size: 512
   head_dropout: 0.1
 
+wandb:
+  enabled: true
+  project: "Pretrain-Qwen3-8B-Pancreas-classification"
+  run_name: "baseline-pretrained-llm-linear"
+
 training:
   output_dir: "/data/scratch/qc25022/pancreas/experiments/baselines/pretrained_llm_linear"
   overwrite_output_dir: true

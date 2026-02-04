@@ -8,6 +8,7 @@ import torch
 import numpy as np
 from typing import Dict, Any
 from transformers import TrainingArguments, Trainer
+import wandb
 
 from src.baselines.utils import load_baseline_config, setup_output_dir, load_datasets
 from src.models.llm_classifier import LLMClassifier
@@ -33,6 +34,7 @@ class PretrainedLLMLinearBaseline:
         self.model_config = config.get('model', {})
         self.data_config = config['data']
         self.training_config = config.get('training', {})
+        self.wandb_config = config.get('wandb', {})
         self.output_dir = config.get('output_dir', './outputs/pretrained_llm_linear')
         
         self.base_model = None
@@ -40,6 +42,29 @@ class PretrainedLLMLinearBaseline:
         self.classifier_model = None
         self.trainer = None
         self.local_rank = int(os.environ.get("LOCAL_RANK", 0))
+
+    def setup_wandb(self) -> str:
+        """
+        Setup WandB logging (same pattern as main classifier).
+
+        Returns:
+            Run name for the experiment.
+        """
+        if self.wandb_config.get('enabled', False):
+            run_name = self.wandb_config.get("run_name")
+            if run_name is None:
+                run_name = f"pretrained_llm_linear_{self.config.get('name', 'default')}"
+
+            if self.local_rank == 0:
+                wandb.init(
+                    project=self.wandb_config.get("project", "llm-classification"),
+                    name=run_name,
+                    config=self.config
+                )
+                print(f"\nWandB enabled - Project: {self.wandb_config.get('project', 'llm-classification')}, Run: {run_name}")
+
+            return run_name
+        return "pretrained-llm-linear-run"
     
     def load_model(self):
         """Load pretrained model with LoRA adapters from pretraining stage."""
@@ -98,7 +123,7 @@ class PretrainedLLMLinearBaseline:
         total_params = sum(p.numel() for p in self.classifier_model.parameters())
         print(f"  - Trainable parameters: {trainable_params:,} / {total_params:,} ({100*trainable_params/total_params:.2f}%)")
     
-    def create_trainer(self, train_dataset, val_dataset, collator):
+    def create_trainer(self, train_dataset, val_dataset, collator, run_name: str):
         """Create HuggingFace Trainer."""
         print("\n" + "=" * 80)
         print("Setting up training...")
@@ -106,6 +131,7 @@ class PretrainedLLMLinearBaseline:
         
         training_args = TrainingArguments(
             output_dir=os.path.join(self.output_dir, 'checkpoints'),
+            run_name=run_name,
             overwrite_output_dir=self.training_config.get('overwrite_output_dir', True),
             num_train_epochs=self.training_config.get('epochs', 3),
             per_device_train_batch_size=self.training_config.get('batch_size', 2),
@@ -126,7 +152,7 @@ class PretrainedLLMLinearBaseline:
             metric_for_best_model="eval_auroc",
             greater_is_better=True,
             dataloader_num_workers=self.training_config.get('dataloader_num_workers', 8),
-            report_to="none"  # Disable wandb for baselines
+            report_to="wandb" if self.wandb_config.get('enabled', False) else "none",
         )
         
         self.trainer = Trainer(
@@ -207,6 +233,9 @@ class PretrainedLLMLinearBaseline:
         """Run the complete baseline training and evaluation pipeline."""
         # Setup
         setup_output_dir(self.output_dir, overwrite=self.training_config.get('overwrite_output_dir', False))
+
+        # WandB
+        run_name = self.setup_wandb()
         
         # Load model
         self.load_model()
@@ -230,7 +259,7 @@ class PretrainedLLMLinearBaseline:
         )
         
         # Create trainer
-        self.create_trainer(datasets['train'], datasets['tuning'], collator)
+        self.create_trainer(datasets['train'], datasets['tuning'], collator, run_name)
         
         # Train
         self.train()
