@@ -77,23 +77,30 @@ class ClassificationCollator:
                     self._warned_once = True
                 continue
             
+            # Valid item with both text and label
             cleaned_batch.append(item)
+            self._total_sequences += 1  # Count valid items here
         
         batch = cleaned_batch
         if not batch:
-            return None
+            # Return a minimal valid batch structure to avoid Trainer crashes
+            # This should rarely happen if dataset is properly filtered
+            pad_token_id = self.tokenizer.pad_token_id if self.tokenizer.pad_token_id is not None else 0
+            return {
+                'input_ids': torch.empty((0, 1), dtype=torch.long),
+                'attention_mask': torch.empty((0, 1), dtype=torch.long),
+                'labels': torch.empty((0,), dtype=torch.long)
+            }
         
         # Extract text and labels
         texts = [item['text'] for item in batch]
         labels = torch.stack([item['label'] for item in batch])
         
         # Clean up text - remove custom dataset format tokens and tokenizer special tokens
-        # Only remove <end> - tokenizer will add proper special tokens
         eos_token = self.tokenizer.eos_token if self.tokenizer.eos_token else ""
         
         cleaned_texts = []
         for text in texts:
-            # Remove custom tokens and any tokenizer EOS that might have been added by preprocessing
             text = text.replace('<end>', '')    
             if eos_token:
                 text = text.replace(eos_token, '')
@@ -105,13 +112,13 @@ class ClassificationCollator:
         if self.binary_classification:
             labels = (labels > 0).long()
         
-        # Tokenize each text individually WITHOUT padding, and handle EOS properly
+        # Tokenize each text individually WITHOUT padding
         tokenizer_kwargs = {
             'padding': False,
-            'truncation': False,  # We'll handle truncation manually
+            'truncation': False, 
             'return_tensors': 'pt',
             'return_attention_mask': True,
-            'add_special_tokens': True  # Adds BOS for decoder models
+            'add_special_tokens': True
         }
         
         encoded_list = []
@@ -128,23 +135,45 @@ class ClassificationCollator:
                 encoded['input_ids'] = torch.cat([encoded['input_ids'], eos_tensor], dim=1)
                 encoded['attention_mask'] = torch.cat([encoded['attention_mask'], eos_mask], dim=1)
             
-            # NOW truncate if sequence is too long (EOS is already at the end and will be preserved)
+            # -----------------------------------------------------------------------
+            # UPDATED TRUNCATION LOGIC
+            # -----------------------------------------------------------------------
             seq_len = encoded['input_ids'].size(1)
             if self.max_length is not None and seq_len > self.max_length:
-                # Truncate from the START to keep the END (most recent events + EOS)
-                encoded['input_ids'] = encoded['input_ids'][:, -self.max_length:]
-                encoded['attention_mask'] = encoded['attention_mask'][:, -self.max_length:]
+                # Check if we need to preserve a [CLS] token (index 0)
+                # ClinicalBERT/BERT usually puts CLS at index 0
+                has_cls = (self.tokenizer.cls_token_id is not None) and \
+                          (encoded['input_ids'][0, 0] == self.tokenizer.cls_token_id)
+                
+                if has_cls:
+                    # Preserve [CLS] at start, take the END of the rest
+                    # We need max_length - 1 tokens from the end
+                    trunc_len = self.max_length - 1
+                    
+                    cls_id = encoded['input_ids'][:, :1]
+                    cls_mask = encoded['attention_mask'][:, :1]
+                    
+                    truncated_ids = encoded['input_ids'][:, -trunc_len:]
+                    truncated_mask = encoded['attention_mask'][:, -trunc_len:]
+                    
+                    encoded['input_ids'] = torch.cat([cls_id, truncated_ids], dim=1)
+                    encoded['attention_mask'] = torch.cat([cls_mask, truncated_mask], dim=1)
+                else:
+                    # Standard behavior: just keep the end (most recent events)
+                    encoded['input_ids'] = encoded['input_ids'][:, -self.max_length:]
+                    encoded['attention_mask'] = encoded['attention_mask'][:, -self.max_length:]
                 
                 self._long_sequence_count += 1
                 if not self._warned_once:
                     warnings.warn(
                         f"Found sequence with length {seq_len} exceeding max_length {self.max_length}. "
                         f"Truncating from the start (keeping most recent events and EOS token). "
+                        f"Preserving [CLS] token: {has_cls}. "
                         f"This warning will only show once."
                     )
                     self._warned_once = True
+            # -----------------------------------------------------------------------
             
-            self._total_sequences += 1
             encoded_list.append(encoded)
         
         # NOW pad all sequences to the same length

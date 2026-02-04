@@ -248,11 +248,16 @@ class ClinicalBERTBaseline:
         )
         print("\n" + "=" * 80)
         print("Running pre-pass over training data to count dropped samples...")
-        for _ in debug_loader:
-            pass
+        batch_count = 0
+        for batch in debug_loader:
+            if batch is not None and batch.get('input_ids') is not None:
+                batch_count += 1
         debug_stats = debug_collator.get_stats()
-        print(f"  - Total sequences seen (train): {debug_stats.get('total_sequences', 0)}")
+        print(f"  - Batches processed: {batch_count}")
+        print(f"  - Total valid sequences (train): {debug_stats.get('total_sequences', 0)}")
         print(f"  - Samples with label but no text (dropped): {debug_stats.get('missing_text_samples', 0)}")
+        if debug_stats.get('missing_text_samples', 0) > 0:
+            print(f"  ⚠️  WARNING: {debug_stats.get('missing_text_samples', 0)} samples will be dropped during training!")
         print("=" * 80)
         # ------------------------------------------------------------------
         # Now create a fresh collator for actual training/eval
