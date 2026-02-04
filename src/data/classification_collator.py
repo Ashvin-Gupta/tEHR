@@ -41,142 +41,117 @@ class ClassificationCollator:
         """
         Collate a batch of samples.
         """
-        # Filter out None values (patients without labels) and malformed items
+        # 1. Filter out None values and malformed items
         cleaned_batch = []
-        for item in batch:
+        for i, item in enumerate(batch):
             if item is None:
                 continue
             
             if not isinstance(item, dict):
                 if not self._warned_once:
-                    warnings.warn(
-                        f"ClassificationCollator received a non-dict item. It will be skipped. "
-                        f"Type: {type(item)}"
-                    )
+                    warnings.warn(f"Skipping non-dict item at index {i}. Type: {type(item)}")
                     self._warned_once = True
                 continue
             
-            # If we have a label but no text, drop this sample and count it
-            if 'label' in item and 'text' not in item:
+            # Check for required keys
+            if 'text' not in item or 'label' not in item:
                 self._missing_text_count += 1
                 if not self._warned_once:
+                    # IMPROVED WARNING: Print available keys to help debug
                     warnings.warn(
-                        "ClassificationCollator received an item with 'label' but no 'text'. "
-                        "This sample will be dropped from the batch."
+                        f"Skipping malformed item at index {i}. "
+                        f"Missing 'text' or 'label'. Found keys: {list(item.keys())}"
                     )
                     self._warned_once = True
                 continue
             
-            # Require both keys after any fixes
-            if 'text' not in item or 'label' not in item:
-                if not self._warned_once:
-                    warnings.warn(
-                        f"ClassificationCollator received an item without required keys "
-                        f"'text' and 'label'. It will be skipped. Example keys: {list(item.keys())}"
-                    )
-                    self._warned_once = True
-                continue
-            
-            # Valid item with both text and label
             cleaned_batch.append(item)
-            self._total_sequences += 1  # Count valid items here
         
         batch = cleaned_batch
+        
+        # 2. Handle Empty Batch (Crucial for preventing RuntimeError)
         if not batch:
-            # Return a minimal valid batch structure to avoid Trainer crashes
-            # This should rarely happen if dataset is properly filtered
-            pad_token_id = self.tokenizer.pad_token_id if self.tokenizer.pad_token_id is not None else 0
-            return {
-                'input_ids': torch.empty((0, 1), dtype=torch.long),
-                'attention_mask': torch.empty((0, 1), dtype=torch.long),
-                'labels': torch.empty((0,), dtype=torch.long)
-            }
+            # Returning None usually causes the Trainer to crash, but it's better 
+            # than passing a 0-size tensor to the model.
+            # ideally, filter your dataset before training!
+            return None
         
         # Extract text and labels
         texts = [item['text'] for item in batch]
         labels = torch.stack([item['label'] for item in batch])
         
-        # Clean up text - remove custom dataset format tokens and tokenizer special tokens
+        # Clean up text
         eos_token = self.tokenizer.eos_token if self.tokenizer.eos_token else ""
-        
         cleaned_texts = []
         for text in texts:
             text = text.replace('<end>', '')    
             if eos_token:
                 text = text.replace(eos_token, '')
             cleaned_texts.append(text.strip())
-        
         texts = cleaned_texts
         
         # Convert to binary labels if needed
         if self.binary_classification:
             labels = (labels > 0).long()
         
-        # Tokenize each text individually WITHOUT padding
+        # Tokenize WITHOUT padding
         tokenizer_kwargs = {
             'padding': False,
-            'truncation': False, 
+            'truncation': False,
             'return_tensors': 'pt',
             'return_attention_mask': True,
-            'add_special_tokens': True
+            'add_special_tokens': True 
         }
         
         encoded_list = []
         for text in texts:
-            # Tokenize the text
             encoded = self.tokenizer(text, **tokenizer_kwargs)
             
-            # Add EOS token BEFORE any truncation
+            # Add EOS token manually if needed (BERT usually adds SEP automatically via add_special_tokens=True)
+            # For BERT/ClinicalBERT, eos_token_id is usually SEP (102). 
+            # tokenizer(text) gives [CLS] ... [SEP]. 
+            # Only add explicitly if the tokenizer didn't (e.g., Llama).
             if self.tokenizer.eos_token_id is not None:
-                eos_token_id = self.tokenizer.eos_token_id
-                eos_tensor = torch.tensor([[eos_token_id]], dtype=encoded['input_ids'].dtype)
-                eos_mask = torch.ones((1, 1), dtype=encoded['attention_mask'].dtype)
-                
-                encoded['input_ids'] = torch.cat([encoded['input_ids'], eos_tensor], dim=1)
-                encoded['attention_mask'] = torch.cat([encoded['attention_mask'], eos_mask], dim=1)
+                # Check if last token is already EOS/SEP
+                last_token = encoded['input_ids'][0, -1]
+                if last_token != self.tokenizer.eos_token_id:
+                    eos_tensor = torch.tensor([[self.tokenizer.eos_token_id]], dtype=encoded['input_ids'].dtype)
+                    eos_mask = torch.ones((1, 1), dtype=encoded['attention_mask'].dtype)
+                    encoded['input_ids'] = torch.cat([encoded['input_ids'], eos_tensor], dim=1)
+                    encoded['attention_mask'] = torch.cat([encoded['attention_mask'], eos_mask], dim=1)
             
-            # -----------------------------------------------------------------------
-            # UPDATED TRUNCATION LOGIC
-            # -----------------------------------------------------------------------
+            # --- UPDATED TRUNCATION LOGIC (Fixes ClinicalBERT) ---
             seq_len = encoded['input_ids'].size(1)
             if self.max_length is not None and seq_len > self.max_length:
-                # Check if we need to preserve a [CLS] token (index 0)
-                # ClinicalBERT/BERT usually puts CLS at index 0
+                # Detect [CLS] token at the start (index 0)
                 has_cls = (self.tokenizer.cls_token_id is not None) and \
                           (encoded['input_ids'][0, 0] == self.tokenizer.cls_token_id)
                 
                 if has_cls:
-                    # Preserve [CLS] at start, take the END of the rest
-                    # We need max_length - 1 tokens from the end
+                    # ClinicalBERT: Keep [CLS] + [Most Recent Events]
+                    # We need (max_length - 1) tokens from the END
                     trunc_len = self.max_length - 1
                     
-                    cls_id = encoded['input_ids'][:, :1]
+                    cls_id = encoded['input_ids'][:, :1]      # The [CLS]
                     cls_mask = encoded['attention_mask'][:, :1]
                     
-                    truncated_ids = encoded['input_ids'][:, -trunc_len:]
-                    truncated_mask = encoded['attention_mask'][:, -trunc_len:]
+                    recent_ids = encoded['input_ids'][:, -trunc_len:]
+                    recent_mask = encoded['attention_mask'][:, -trunc_len:]
                     
-                    encoded['input_ids'] = torch.cat([cls_id, truncated_ids], dim=1)
-                    encoded['attention_mask'] = torch.cat([cls_mask, truncated_mask], dim=1)
+                    encoded['input_ids'] = torch.cat([cls_id, recent_ids], dim=1)
+                    encoded['attention_mask'] = torch.cat([cls_mask, recent_mask], dim=1)
                 else:
-                    # Standard behavior: just keep the end (most recent events)
+                    # Standard LLM: Just keep the end
                     encoded['input_ids'] = encoded['input_ids'][:, -self.max_length:]
                     encoded['attention_mask'] = encoded['attention_mask'][:, -self.max_length:]
                 
                 self._long_sequence_count += 1
-                if not self._warned_once:
-                    warnings.warn(
-                        f"Found sequence with length {seq_len} exceeding max_length {self.max_length}. "
-                        f"Truncating from the start (keeping most recent events and EOS token). "
-                        f"Preserving [CLS] token: {has_cls}. "
-                        f"This warning will only show once."
-                    )
-                    self._warned_once = True
-            # -----------------------------------------------------------------------
+            # -----------------------------------------------------
             
+            self._total_sequences += 1
             encoded_list.append(encoded)
         
-        # NOW pad all sequences to the same length
+        # Dynamic Padding
         max_length_in_batch = max(enc['input_ids'].size(1) for enc in encoded_list)
         pad_token_id = self.tokenizer.pad_token_id if self.tokenizer.pad_token_id is not None else 0
         
@@ -191,7 +166,6 @@ class ClassificationCollator:
                 # Pad on the right
                 padding_ids = torch.full((1, padding_length), pad_token_id, dtype=encoded['input_ids'].dtype)
                 padding_mask = torch.zeros((1, padding_length), dtype=encoded['attention_mask'].dtype)
-                
                 padded_ids = torch.cat([encoded['input_ids'], padding_ids], dim=1)
                 padded_mask = torch.cat([encoded['attention_mask'], padding_mask], dim=1)
             else:
@@ -201,13 +175,9 @@ class ClassificationCollator:
             padded_input_ids.append(padded_ids)
             padded_attention_masks.append(padded_mask)
         
-        # Stack into batch tensors
-        input_ids = torch.cat(padded_input_ids, dim=0)
-        attention_mask = torch.cat(padded_attention_masks, dim=0)
-        
         return {
-            'input_ids': input_ids,
-            'attention_mask': attention_mask,
+            'input_ids': torch.cat(padded_input_ids, dim=0),
+            'attention_mask': torch.cat(padded_attention_masks, dim=0),
             'labels': labels
         }
     

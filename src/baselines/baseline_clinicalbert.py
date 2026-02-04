@@ -230,6 +230,20 @@ class ClinicalBERTBaseline:
             tokenizer=self.tokenizer
         )
 
+        print("Verifying dataset integrity...")
+        valid_indices = []
+        for i in range(len(datasets['train'])):
+            item = datasets['train'][i]
+            if item is not None and 'text' in item and 'label' in item:
+                valid_indices.append(i)
+            else:
+                # Print what the bad item actually looks like
+                print(f"Bad item at index {i}: {item}") 
+
+        if len(valid_indices) < len(datasets['train']):
+            print(f"Filtering dataset! Dropping {len(datasets['train']) - len(valid_indices)} bad samples.")
+            datasets['train'] = torch.utils.data.Subset(datasets['train'], valid_indices)
+
         # ------------------------------------------------------------------
         # Pre-pass: measure how many samples would be dropped (label present
         # but no text) BEFORE training/evaluation.
