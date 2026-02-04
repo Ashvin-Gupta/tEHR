@@ -40,20 +40,43 @@ class ClassificationCollator:
         """
         Collate a batch of samples.
         """
-        # Filter out None values (patients without labels) and malformed items
+        # Filter out None values (patients without labels) and gently fix malformed items
         cleaned_batch = []
         for item in batch:
             if item is None:
                 continue
-            if not isinstance(item, dict) or 'text' not in item or 'label' not in item:
+            
+            if not isinstance(item, dict):
                 if not self._warned_once:
                     warnings.warn(
-                        f"ClassificationCollator received an item without required keys "
-                        f"'text' and 'label'. It will be skipped. Example keys: {list(item.keys()) if isinstance(item, dict) else type(item)}"
+                        f"ClassificationCollator received a non-dict item. It will be skipped. "
+                        f"Type: {type(item)}"
                     )
                     self._warned_once = True
                 continue
+            
+            # If we have a label but no text, fall back to an empty string (rare edge case)
+            if 'label' in item and 'text' not in item:
+                if not self._warned_once:
+                    warnings.warn(
+                        "ClassificationCollator received an item with 'label' but no 'text'. "
+                        "Using empty string as text for this item."
+                    )
+                    self._warned_once = True
+                item = {**item, 'text': ""}
+            
+            # Require both keys after any fixes
+            if 'text' not in item or 'label' not in item:
+                if not self._warned_once:
+                    warnings.warn(
+                        f"ClassificationCollator received an item without required keys "
+                        f"'text' and 'label'. It will be skipped. Example keys: {list(item.keys())}"
+                    )
+                    self._warned_once = True
+                continue
+            
             cleaned_batch.append(item)
+        
         batch = cleaned_batch
         if not batch:
             return None

@@ -131,25 +131,25 @@ class FrozenLLMLinearBaseline:
             output_dir=os.path.join(self.output_dir, 'checkpoints'),
             run_name=run_name,
             overwrite_output_dir=self.training_config.get('overwrite_output_dir', True),
-            num_train_epochs=self.training_config.get('epochs', 3),
-            per_device_train_batch_size=self.training_config.get('batch_size', 2),
-            per_device_eval_batch_size=self.training_config.get('eval_batch_size', 1),
-            learning_rate=self.training_config.get('learning_rate', 1e-4),
-            weight_decay=self.training_config.get('weight_decay', 0.01),
-            warmup_steps=self.training_config.get('warmup_steps', 100),
-            gradient_accumulation_steps=self.training_config.get('gradient_accumulation_steps', 2),
-            fp16=self.training_config.get('fp16', False),
-            bf16=self.training_config.get('bf16', True),
-            logging_steps=self.training_config.get('logging_steps', 50),
-            eval_steps=self.training_config.get('eval_steps', 250),
-            save_steps=self.training_config.get('save_steps', 500),
-            save_total_limit=self.training_config.get('save_total_limit', 2),
+            num_train_epochs=int(self.training_config.get('epochs', 3)),
+            per_device_train_batch_size=int(self.training_config.get('batch_size', 2)),
+            per_device_eval_batch_size=int(self.training_config.get('eval_batch_size', 1)),
+            learning_rate=float(self.training_config.get('learning_rate', 1e-4)),
+            weight_decay=float(self.training_config.get('weight_decay', 0.01)),
+            warmup_steps=int(self.training_config.get('warmup_steps', 100)),
+            gradient_accumulation_steps=int(self.training_config.get('gradient_accumulation_steps', 2)),
+            fp16=bool(self.training_config.get('fp16', False)),
+            bf16=bool(self.training_config.get('bf16', True)),
+            logging_steps=int(self.training_config.get('logging_steps', 50)),
+            eval_steps=int(self.training_config.get('eval_steps', 250)),
+            save_steps=int(self.training_config.get('save_steps', 500)),
+            save_total_limit=int(self.training_config.get('save_total_limit', 2)),
             eval_strategy="steps",
             save_strategy="steps",
             load_best_model_at_end=True,
             metric_for_best_model="f1",
             greater_is_better=True,
-            dataloader_num_workers=self.training_config.get('dataloader_num_workers', 8),
+            dataloader_num_workers=int(self.training_config.get('dataloader_num_workers', 8)),
             report_to="wandb" if self.wandb_config.get('enabled', False) else "none",
         )
         
@@ -248,7 +248,10 @@ class FrozenLLMLinearBaseline:
             format='text',
             tokenizer=self.tokenizer
         )
-        
+        for i in range(10):
+            sample = datasets['train'][i]
+            print(f"Sample {i}: type={type(sample)} keys={list(sample.keys()) if isinstance(sample, dict) else sample}")
+                
         # Create collator
         collator = ClassificationCollator(
             tokenizer=self.tokenizer,
