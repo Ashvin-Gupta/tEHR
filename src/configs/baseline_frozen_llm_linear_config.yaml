@@ -41,5 +41,5 @@ data:
   max_length: 12000
   handle_long_sequences: "warn"
   sort_by_length: true
-  data_type: "binned"
+
 

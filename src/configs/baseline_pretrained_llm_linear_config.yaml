@@ -1,7 +1,7 @@
 name: "pretrained_llm_linear_baseline"
 
 model:
-  pretrained_checkpoint: "/data/scratch/qc25022/pancreas/experiments/Pretrain-Qwen3-8B-Pancreas-no-adaptation-refactored/final_model"
+  pretrained_checkpoint: "/data/scratch/qc25022/pancreas/experiments/Pretrain-Qwen3-8B-Pancreas-final/checkpoint-9000"
   max_length: 12000
   hidden_size: 4096
   num_labels: 2

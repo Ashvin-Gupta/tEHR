@@ -1,7 +1,7 @@
 name: "llm_classifier"
 
 model:
-  pretrained_checkpoint: "/data/scratch/qc25022/pancreas/experiments/Pretrain-Qwen3-8B-Pancreas-no-adaptation-refactored/final_model"
+  pretrained_checkpoint: "/data/scratch/qc25022/pancreas/experiments/Pretrain-Qwen3-8B-Pancreas-final/checkpoint-9000"
   max_length: 12000           # Used when loading model 
   hidden_size: 4096
   num_labels: 2
@@ -15,11 +15,11 @@ model:
 
 wandb:
   enabled: true
-  project: "Pretrain-Qwen3-8B-Pancreas-classification-logisitc"
-  run_name: "lora-6-month-logistic-raw"
+  project: "Pretrain-Qwen3-8B-Pancreas-classification"
+  run_name: "lora-6-month-logistic-refactored"
 
 training:
-  output_dir: "/data/scratch/qc25022/pancreas/experiments/lora-6-month-logistic-raw-new"
+  output_dir: "/data/scratch/qc25022/pancreas/experiments/lora-6-month-logistic-refactored"
   overwrite_output_dir: true
   epochs: 1
   batch_size: 2
