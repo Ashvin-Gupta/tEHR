@@ -45,15 +45,7 @@ class ClassificationCollator:
         pad_id = self.tokenizer.pad_token_id if self.tokenizer.pad_token_id is not None else 0
         
         for item in batch:
-            print(f"Item: {item}")
-            print(f"Item keys: {list(item.keys())}")
-            print(f"Item text: {item.get('text', '')}")
-            print(f"Item label: {item.get('label', '')}")
-            print(f"Item input_ids: {item.get('input_ids', '')}")
-            print(f"Item attention_mask: {item.get('attention_mask', '')}")
-            print(f"Item labels: {item.get('labels', '')}")
-            print(f"Item total_sequences: {self._total_sequences}")
-            print('------------------------------')
+          
             self._total_sequences += 1
             
             # --- Label Handling ---

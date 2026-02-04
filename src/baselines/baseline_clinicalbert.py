@@ -245,39 +245,6 @@ class ClinicalBERTBaseline:
             print(f"Filtering dataset! Dropping {len(datasets['train']) - len(valid_indices)} bad samples.")
             datasets['train'] = torch.utils.data.Subset(datasets['train'], valid_indices)
 
-        # ------------------------------------------------------------------
-        # Pre-pass: measure how many samples would be dropped (label present
-        # but no text) BEFORE training/evaluation.
-        # ------------------------------------------------------------------
-        debug_collator = ClassificationCollator(
-            tokenizer=self.tokenizer,
-            max_length=self.data_config.get('max_length', 512),
-            truncation=True,
-        )
-        debug_loader = DataLoader(
-            datasets['train'],
-            batch_size=int(self.training_config.get('batch_size', 16)),
-            shuffle=False,
-            num_workers=int(self.training_config.get('dataloader_num_workers', 8)),
-            collate_fn=debug_collator,
-        )
-        print("\n" + "=" * 80)
-        print("Running pre-pass over training data to count dropped samples...")
-        batch_count = 0
-        for batch in debug_loader:
-            if batch is not None and batch.get('input_ids') is not None:
-                batch_count += 1
-        debug_stats = debug_collator.get_stats()
-        print(f"  - Batches processed: {batch_count}")
-        print(f"  - Total valid sequences (train): {debug_stats.get('total_sequences', 0)}")
-        print(f"  - Samples with label but no text (dropped): {debug_stats.get('missing_text_samples', 0)}")
-        if debug_stats.get('missing_text_samples', 0) > 0:
-            print(f"  ⚠️  WARNING: {debug_stats.get('missing_text_samples', 0)} samples will be dropped during training!")
-        print("=" * 80)
-        # ------------------------------------------------------------------
-        # Now create a fresh collator for actual training/eval
-        # ------------------------------------------------------------------
-
         # Create collator that truncates from the start (keeps most recent events)
         collator = ClassificationCollator(
             tokenizer=self.tokenizer,
