@@ -103,7 +103,7 @@ class ClinicalBERTBaseline:
             eval_strategy="steps",
             save_strategy="steps",
             load_best_model_at_end=True,
-            metric_for_best_model="eval_auroc",
+            metric_for_best_model="f1",
             greater_is_better=True,
             dataloader_num_workers=int(self.training_config.get('dataloader_num_workers', 8)),
             report_to="none"  # Disable wandb for baselines
