@@ -205,6 +205,10 @@ class ClinicalBERTBaseline:
             max_length=self.data_config.get('max_length', 512),
             truncation=True,
         )
+        for i in range(10):
+            sample = datasets['train'][i]
+            print(f"Sample {i}: type={type(sample)} keys={list(sample.keys()) if isinstance(sample, dict) else sample}")
+      
         
         # Create trainer
         self.create_trainer(datasets['train'], datasets['tuning'], collator)
