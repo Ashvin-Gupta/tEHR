@@ -105,6 +105,7 @@ class ClassificationCollator:
         
         encoded_list = []
         for text in texts:
+            print(f"Text: {text}")
             encoded = self.tokenizer(text, **tokenizer_kwargs)
             
             # Add EOS token manually if needed (BERT usually adds SEP automatically via add_special_tokens=True)
