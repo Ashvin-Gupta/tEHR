@@ -35,12 +35,13 @@ class ClassificationCollator:
         self._warned_once = False  # Only warn once to avoid spam
         self._long_sequence_count = 0
         self._total_sequences = 0
+        self._missing_text_count = 0
     
     def __call__(self, batch: List[Dict[str, Any]]) -> Dict[str, torch.Tensor]:
         """
         Collate a batch of samples.
         """
-        # Filter out None values (patients without labels) and gently fix malformed items
+        # Filter out None values (patients without labels) and malformed items
         cleaned_batch = []
         for item in batch:
             if item is None:
@@ -55,15 +56,16 @@ class ClassificationCollator:
                     self._warned_once = True
                 continue
             
-            # If we have a label but no text, fall back to an empty string (rare edge case)
+            # If we have a label but no text, drop this sample and count it
             if 'label' in item and 'text' not in item:
+                self._missing_text_count += 1
                 if not self._warned_once:
                     warnings.warn(
                         "ClassificationCollator received an item with 'label' but no 'text'. "
-                        "Using empty string as text for this item."
+                        "This sample will be dropped from the batch."
                     )
                     self._warned_once = True
-                item = {**item, 'text': ""}
+                continue
             
             # Require both keys after any fixes
             if 'text' not in item or 'label' not in item:
@@ -181,12 +183,13 @@ class ClassificationCollator:
         }
     
     def get_stats(self):
-        """Return statistics about long sequences encountered."""
+        """Return statistics about long sequences and malformed samples encountered."""
         return {
             'total_sequences': self._total_sequences,
             'long_sequences': self._long_sequence_count,
             'percentage_long': (self._long_sequence_count / self._total_sequences * 100) 
-                               if self._total_sequences > 0 else 0
+                               if self._total_sequences > 0 else 0,
+            'missing_text_samples': self._missing_text_count,
         }
 
 

@@ -4,6 +4,11 @@ model:
   model_name: "emilyalsentzer/Bio_ClinicalBERT"
   num_labels: 2
 
+wandb:
+  enabled: true
+  project: "Pretrain-Qwen3-8B-Pancreas-classification"
+  run_name: "baseline-clinicalbert"
+
 training:
   output_dir: "/data/scratch/qc25022/pancreas/experiments/baselines/clinicalbert"
   overwrite_output_dir: true
