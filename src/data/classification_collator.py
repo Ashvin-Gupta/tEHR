@@ -48,37 +48,32 @@ class ClassificationCollator:
                 continue
             
             if not isinstance(item, dict):
+                # Only warn once
                 if not self._warned_once:
                     warnings.warn(f"Skipping non-dict item at index {i}. Type: {type(item)}")
                     self._warned_once = True
                 continue
             
-            # Check for required keys
+            # Check for required keys (Helpful debug info included)
             if 'text' not in item or 'label' not in item:
                 self._missing_text_count += 1
                 if not self._warned_once:
-                    # IMPROVED WARNING: Print available keys to help debug
                     warnings.warn(
-                        f"Skipping malformed item at index {i}. "
-                        f"Missing 'text' or 'label'. Found keys: {list(item.keys())}"
+                        f"Skipping malformed item. Missing 'text' or 'label'. "
+                        f"Found keys: {list(item.keys())}"
                     )
                     self._warned_once = True
                 continue
             
             cleaned_batch.append(item)
         
-        batch = cleaned_batch
-        
-        # 2. Handle Empty Batch (Crucial for preventing RuntimeError)
-        if not batch:
-            # Returning None usually causes the Trainer to crash, but it's better 
-            # than passing a 0-size tensor to the model.
-            # ideally, filter your dataset before training!
+        # 2. Handle Empty Batch (Prevents RuntimeError)
+        if not cleaned_batch:
             return None
         
         # Extract text and labels
-        texts = [item['text'] for item in batch]
-        labels = torch.stack([item['label'] for item in batch])
+        texts = [item['text'] for item in cleaned_batch]
+        labels = torch.stack([item['label'] for item in cleaned_batch])
         
         # Clean up text
         eos_token = self.tokenizer.eos_token if self.tokenizer.eos_token else ""
@@ -94,7 +89,7 @@ class ClassificationCollator:
         if self.binary_classification:
             labels = (labels > 0).long()
         
-        # Tokenize WITHOUT padding
+        # Tokenize WITHOUT padding initially
         tokenizer_kwargs = {
             'padding': False,
             'truncation': False,
@@ -105,15 +100,10 @@ class ClassificationCollator:
         
         encoded_list = []
         for text in texts:
-            print(f"Text: {text}")
             encoded = self.tokenizer(text, **tokenizer_kwargs)
             
-            # Add EOS token manually if needed (BERT usually adds SEP automatically via add_special_tokens=True)
-            # For BERT/ClinicalBERT, eos_token_id is usually SEP (102). 
-            # tokenizer(text) gives [CLS] ... [SEP]. 
-            # Only add explicitly if the tokenizer didn't (e.g., Llama).
+            # Manually add EOS if not present (Important for Llama, usually auto for BERT)
             if self.tokenizer.eos_token_id is not None:
-                # Check if last token is already EOS/SEP
                 last_token = encoded['input_ids'][0, -1]
                 if last_token != self.tokenizer.eos_token_id:
                     eos_tensor = torch.tensor([[self.tokenizer.eos_token_id]], dtype=encoded['input_ids'].dtype)
@@ -130,7 +120,6 @@ class ClassificationCollator:
                 
                 if has_cls:
                     # ClinicalBERT: Keep [CLS] + [Most Recent Events]
-                    # We need (max_length - 1) tokens from the END
                     trunc_len = self.max_length - 1
                     
                     cls_id = encoded['input_ids'][:, :1]      # The [CLS]
