@@ -197,7 +197,7 @@ class XGBoostBOWBaseline:
         # Get hyperparameters from config
         params = {
             'objective': 'binary:logistic',
-            'eval_metric': 'auc',
+            'eval_metric': 'f1',
             'max_depth': self.model_config.get('max_depth', 6),
             'learning_rate': self.model_config.get('learning_rate', 0.1),
             'n_estimators': self.model_config.get('n_estimators', 100),
