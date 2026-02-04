@@ -253,7 +253,6 @@ class FrozenLLMLinearBaseline:
         collator = ClassificationCollator(
             tokenizer=self.tokenizer,
             max_length=self.data_config.get('max_length', 12000),
-            padding=True
         )
         
         # Create trainer

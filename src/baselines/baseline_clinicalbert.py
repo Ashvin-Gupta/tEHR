@@ -199,13 +199,11 @@ class ClinicalBERTBaseline:
             tokenizer=self.tokenizer
         )
         
-        # Create collator that truncates from the left (preserves most recent events)
+        # Create collator that truncates from the start (keeps most recent events)
         collator = ClassificationCollator(
             tokenizer=self.tokenizer,
             max_length=self.data_config.get('max_length', 512),
-            padding=True,
             truncation=True,
-            truncation_side='left'  # keep the most recent (rightmost) events
         )
         
         # Create trainer
