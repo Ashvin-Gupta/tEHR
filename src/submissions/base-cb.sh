@@ -3,6 +3,7 @@
 #$ -pe smp 8
 #$ -l h_rt=24:0:0
 #$ -l h_vmem=32G
+#$ -l highmem
 #$ -j n
 #$ -o /data/home/qc25022/TextCancEHR2/HPC_Base/logo/
 #$ -e /data/home/qc25022/TextCancEHR2/HPC_Base/loge/
