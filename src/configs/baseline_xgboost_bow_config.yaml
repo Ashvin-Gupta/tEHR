@@ -12,7 +12,7 @@ model:
   reg_lambda: 1
 
 training:
-  output_dir: "/data/scratch/qc25022/pancreas/experiments/baselines/xgboost_bow"
+  output_dir: "/data/scratch/qc25022/pancreas_MEDS/experiments/baselines/xgboost_bow"
   overwrite_output_dir: true
   early_stopping_rounds: 10
   verbose: true

@@ -192,7 +192,7 @@ class EncoderTransformerBaseline:
         self.model_config = config.get('model', {})
         self.data_config = config['data']
         self.training_config = config.get('training', {})
-        self.output_dir = config.get('output_dir', './outputs/encoder_transformer')
+        self.output_dir = self.training_config.get('output_dir', './outputs/encoder_transformer')
         
         self.model = None
         self.vocab = None

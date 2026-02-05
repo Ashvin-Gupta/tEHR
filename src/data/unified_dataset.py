@@ -30,7 +30,7 @@ class UnifiedEHRDataset(Dataset):
         self.data_type = data_type
         # Load the patient records from the .pkl files for the specified split
         # self.patient_records = self._load_data(data_dir, split)
-        if split == 'tuning' or split == 'held_out' or split:
+        if split == 'tuning':
             self.patient_records = self._load_data(data_dir, split, limit=1)
         else:
             # Chaning to 5 to see result and inference
@@ -55,7 +55,7 @@ class UnifiedEHRDataset(Dataset):
             time_df = pd.read_csv(time_lookup_file)
             self.time_lookup = pd.Series(time_df['term'].values, index=time_df['code'].astype(str).str.upper()).to_dict()
 
-        labels_df = pd.read_csv(labels_file)
+        labels_df = pd.read_csv(labels_file, dtype={'site': str, 'cancerdate': str}, low_memory=False)
         labels_df['string_label'] = labels_df.apply(lambda row: 'Control' if row['is_case'] == 0 else row['site'], axis=1)
         
         unique_labels = sorted([l for l in labels_df['string_label'].unique() if l != 'Control'])

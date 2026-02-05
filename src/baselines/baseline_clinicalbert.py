@@ -39,7 +39,7 @@ class ClinicalBERTBaseline:
         self.data_config = config['data']
         self.training_config = config.get('training', {})
         self.wandb_config = config.get('wandb', {})
-        self.output_dir = config.get('output_dir', './outputs/clinicalbert')
+        self.output_dir = self.training_config.get('output_dir', './outputs/clinicalbert')
         
         self.model = None
         self.tokenizer = None

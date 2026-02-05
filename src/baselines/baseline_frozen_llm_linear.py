@@ -35,7 +35,8 @@ class FrozenLLMLinearBaseline:
         self.data_config = config['data']
         self.training_config = config.get('training', {})
         self.wandb_config = config.get('wandb', {})
-        self.output_dir = config.get('output_dir', './outputs/frozen_llm_linear')
+        self.training_config = config.get('training', {})
+        self.output_dir = self.training_config.get('output_dir', './outputs/frozen_llm_linear')
         
         self.base_model = None
         self.tokenizer = None

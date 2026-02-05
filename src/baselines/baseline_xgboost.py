@@ -80,7 +80,7 @@ class XGBoostBaseline:
         self.model_config = config.get('model', {})
         self.data_config = config['data']
         self.training_config = config.get('training', {})
-        self.output_dir = config.get('output_dir', './outputs/xgboost')
+        self.output_dir = self.training_config.get('output_dir', './outputs/xgboost')
         
         self.model = None
         self.feature_names = None
@@ -180,7 +180,7 @@ class XGBoostBaseline:
         # Get hyperparameters from config
         params = {
             'objective': 'binary:logistic',
-            'eval_metric': 'f1',
+            'eval_metric': 'auc',
             'max_depth': self.model_config.get('max_depth', 6),
             'learning_rate': self.model_config.get('learning_rate', 0.1),
             'n_estimators': self.model_config.get('n_estimators', 100),

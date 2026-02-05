@@ -19,7 +19,7 @@ wandb:
   run_name: "lora-6-month-logistic-refactored"
 
 training:
-  output_dir: "/data/scratch/qc25022/pancreas/experiments/lora-6-month-logistic-refactored"
+  output_dir: "/data/scratch/qc25022/pancreas_MEDS/experiments/lora-6-month-logistic-refactored"
   overwrite_output_dir: true
   epochs: 1
   batch_size: 2
@@ -38,7 +38,7 @@ training:
   multi_label: false
   # early_stopping_patience: 5
   # early_stopping_threshold: 0.001
-  dataloader_num_workers: 8
+  dataloader_num_workers: 0
 
 
 data:

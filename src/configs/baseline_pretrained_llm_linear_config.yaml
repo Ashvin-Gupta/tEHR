@@ -15,7 +15,7 @@ wandb:
   run_name: "baseline-pretrained-llm-linear"
 
 training:
-  output_dir: "/data/scratch/qc25022/pancreas/experiments/baselines/pretrained_llm_linear"
+  output_dir: "/data/scratch/qc25022/pancreas_MEDS/experiments/baselines/pretrained_llm_linear"
   overwrite_output_dir: true
   epochs: 3
   batch_size: 2
@@ -32,7 +32,7 @@ training:
   save_total_limit: 2
   load_in_4bit: true
   multi_label: false
-  dataloader_num_workers: 8
+  dataloader_num_workers: 0
 
 data:
   cutoff_months: 6

@@ -59,7 +59,7 @@ class XGBoostBOWBaseline:
         self.model_config = config.get('model', {})
         self.data_config = config['data']
         self.training_config = config.get('training', {})
-        self.output_dir = config.get('output_dir', './outputs/xgboost_bow')
+        self.output_dir = self.training_config.get('output_dir', './outputs/xgboost_bow')
         
         self.model = None
         self.token_to_idx = None
@@ -197,7 +197,7 @@ class XGBoostBOWBaseline:
         # Get hyperparameters from config
         params = {
             'objective': 'binary:logistic',
-            'eval_metric': 'f1',
+            'eval_metric': 'auc',
             'max_depth': self.model_config.get('max_depth', 6),
             'learning_rate': self.model_config.get('learning_rate', 0.1),
             'n_estimators': self.model_config.get('n_estimators', 100),

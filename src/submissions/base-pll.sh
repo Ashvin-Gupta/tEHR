@@ -1,8 +1,8 @@
 #!/bin/bash
 #$ -cwd                 
-#$ -pe smp 8
-#$ -l h_rt=1:0:0
-#$ -l h_vmem=11G
+#$ -pe smp 12
+#$ -l h_rt=24:0:0
+#$ -l h_vmem=7.5
 #$ -l gpu=1
 #$ -l gpu_type=ampere
 #$ -l cluster=andrena
@@ -28,7 +28,7 @@ cd "${BASE_DIR}"
 echo "Starting experiment from directory: $(pwd)"
 export PYTHONPATH="${BASE_DIR}:${PYTHONPATH}"
 
-python -m src.pipelines.run_baseline_frozen_llm_linear --config_filepath src/configs/baseline_frozen_llm_linear_config.yaml 
+python -m src.pipelines.run_baseline_pretrained_llm_linear --config_filepath src/configs/baseline_pretrained_llm_linear_config.yaml 
 
 echo "Pipeline finished."
 deactivate

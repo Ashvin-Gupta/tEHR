@@ -10,13 +10,13 @@ model:
   num_labels: 2
 
 training:
-  output_dir: "/data/scratch/qc25022/pancreas/experiments/baselines/encoder_transformer"
+  output_dir: "/data/scratch/qc25022/pancreas_MEDS/experiments/baselines/encoder_transformer"
   overwrite_output_dir: true
   epochs: 10
   batch_size: 32
   learning_rate: 1e-4
   weight_decay: 0.01
-  dataloader_num_workers: 4
+  dataloader_num_workers: 0
 
 data:
   cutoff_months: 6
