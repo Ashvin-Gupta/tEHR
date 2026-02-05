@@ -2,7 +2,7 @@
 #$ -cwd                 
 #$ -pe smp 12
 #$ -l h_rt=24:0:0
-#$ -l h_vmem=7.5
+#$ -l h_vmem=7.5G
 #$ -l gpu=1
 #$ -l gpu_type=ampere
 #$ -l cluster=andrena
