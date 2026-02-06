@@ -244,6 +244,11 @@ class EHRClassificationTrainer:
             ))
             print(f"  - Early stopping enabled with patience={early_stopping_patience}")
         
+        # Add batch shape callback for debugging (prints every 25 steps)
+        from src.training.callbacks import BatchShapeCallback
+        batch_callback = BatchShapeCallback(print_every_n_steps=25)
+        callbacks.append(batch_callback)
+        
         self.trainer = Trainer(
             model=self.classifier_model,
             args=training_args,
