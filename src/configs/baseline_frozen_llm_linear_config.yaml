@@ -32,7 +32,7 @@ training:
   save_total_limit: 2
   load_in_4bit: true
   multi_label: false
-  dataloader_num_workers: 0
+  dataloader_num_workers: 2
 
 data:
   cutoff_months: 6
