@@ -31,7 +31,7 @@ class UnifiedEHRDataset(Dataset):
         # Load the patient records from the .pkl files for the specified split
         # self.patient_records = self._load_data(data_dir, split)
         if split == 'tuning':
-            self.patient_records = self._load_data(data_dir, split, limit=1)
+            self.patient_records = self._load_data(data_dir, split, limit=3)
         else:
             # Chaning to 5 to see result and inference
             self.patient_records = self._load_data(data_dir, split)

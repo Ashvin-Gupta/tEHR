@@ -50,8 +50,9 @@ class LLMClassifier(nn.Module):
         self.tokenizer = tokenizer
         self.head_type = head_type
         
-        # Flag to track EOS token verification (done once)
-        self._eos_verified = False
+        # Debugging flags for EOS token verification
+        self._eos_check_count = 0          # How many batches we've checked
+        self._max_eos_checks = 5           # Max batches to print debug info for
 
         # Enable gradient checkpointing if available
         if hasattr(self.base_model, "gradient_checkpointing_enable"):
@@ -159,15 +160,12 @@ class LLMClassifier(nn.Module):
     ):
         """
         Verify that the token used for classification is actually the EOS token.
-        Checks one positive case and one negative control.
         
-        Args:
-            input_ids: (batch_size, seq_len) token IDs.
-            sequence_lengths: (batch_size,) position of last non-padding token.
-            labels: (batch_size,) ground truth labels.
+        - Prints batch-level stats (how many sequences end with EOS).
+        - Prints detailed info for one positive and one negative example.
         """
         print("\n" + "="*80)
-        print("EOS TOKEN VERIFICATION")
+        print(f"EOS TOKEN VERIFICATION - BATCH {self._eos_check_count + 1}")
         print("="*80)
         
         # Get EOS token ID
@@ -180,7 +178,28 @@ class LLMClassifier(nn.Module):
         print(f"Expected EOS token ID: {eos_token_id}")
         print(f"EOS token string: '{self.tokenizer.eos_token}'\n")
         
-        # Find one case (label=1) and one control (label=0)
+        batch_size = input_ids.size(0)
+        
+        # Batch-level check: how many classification tokens are EOS?
+        cls_token_ids = input_ids[torch.arange(batch_size), sequence_lengths]
+        is_eos_mask = (cls_token_ids == eos_token_id)
+        num_eos = is_eos_mask.sum().item()
+        
+        print(f"Batch size: {batch_size}")
+        print(f"Number of sequences where CLS token == EOS: {num_eos}")
+        print(f"Fraction of sequences with EOS at CLS: {num_eos / max(1, batch_size):.3f}\n")
+        
+        # Optionally, print a few sample sequences' CLS tokens
+        max_samples = min(5, batch_size)
+        print("Sample CLS tokens (first few sequences):")
+        for i in range(max_samples):
+            cls_id = cls_token_ids[i].item()
+            cls_str = self.tokenizer.decode([cls_id])
+            flag = "EOS" if cls_id == eos_token_id else "NON-EOS"
+            print(f"  Seq {i}: CLS token ID={cls_id}, token='{cls_str}', type={flag}")
+        print()
+        
+        # Find one case (label=1) and one control (label=0) for detailed inspection
         positive_idx = None
         negative_idx = None
         
@@ -193,9 +212,9 @@ class LLMClassifier(nn.Module):
             if positive_idx is not None and negative_idx is not None:
                 break
         
-        # Verify both samples
+        # Verify both samples in detail
         for sample_type, idx in [("CASE (label=1)", positive_idx), 
-                                   ("CONTROL (label=0)", negative_idx)]:
+                                 ("CONTROL (label=0)", negative_idx)]:
             if idx is None:
                 print(f"⚠️  {sample_type}: Not found in this batch\n")
                 continue
@@ -211,7 +230,7 @@ class LLMClassifier(nn.Module):
             status = "✓ CORRECT" if is_eos else "✗ INCORRECT"
             
             print(f"{sample_type}:")
-            print(f"  Position used for classification: {seq_len}")
+            print(f"  Position used for classification (CLS index): {seq_len}")
             print(f"  Actual token ID at that position: {actual_token_id}")
             print(f"  Token string: '{actual_token_str}'")
             print(f"  Status: {status}")
@@ -223,7 +242,7 @@ class LLMClassifier(nn.Module):
                 context_end = min(input_ids.size(1), seq_len + 3)
                 context_ids = input_ids[idx, context_start:context_end].tolist()
                 context_str = self.tokenizer.decode(context_ids)
-                print(f"  Context tokens: {context_ids}")
+                print(f"  Context tokens (around CLS): {context_ids}")
                 print(f"  Context string: '{context_str}'")
             print()
         
@@ -268,10 +287,14 @@ class LLMClassifier(nn.Module):
         batch_size = hidden_states.size(0)
         last_hidden_states = hidden_states[range(batch_size), sequence_lengths]
         
-        # === VERIFICATION: Check EOS token (run once) ===
-        if not self._eos_verified and self.tokenizer is not None and labels is not None:
+        # === VERIFICATION: Check EOS token on first few batches ===
+        if (
+            self.tokenizer is not None 
+            and labels is not None 
+            and self._eos_check_count < self._max_eos_checks
+        ):
             self._verify_eos_token(input_ids, sequence_lengths, labels)
-            self._eos_verified = True
+            self._eos_check_count += 1
         
         # Pass through classification head
         logits = self.classifier(last_hidden_states)

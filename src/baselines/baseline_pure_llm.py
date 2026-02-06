@@ -36,7 +36,18 @@ class PureLLMBaseline:
         
         self.model = None
         self.tokenizer = None
-        self.prompt_template = "Given this patient's medical history: {ehr_text}\n\nWhat is the risk of pancreatic cancer? Answer with a probability between 0 and 1."
+        # Strongly constrain the LLM to output ONLY a single 0 or 1 on its own line.
+        self.prompt_template = (
+            "You are a strict binary classifier for pancreatic cancer risk.\n"
+            "Given this patient's medical history:\n"
+            "Question: Does this patient have a high risk of pancreatic cancer within the prediction window?\n"
+            "Answer with EXACTLY one digit on a single line:\n"
+            "  - Output 1 if the patient is at high risk.\n"
+            "  - Output 0 if the patient is not at high risk.\n"
+            "Do NOT output any words, explanations, probabilities, or symbols. "
+            "Only output 0 or 1."
+            "Patient's medical history: {ehr_text}"
+        )
     
     def load_model(self):
         """Load base Qwen model (no pretraining, no LoRA)."""
@@ -79,7 +90,7 @@ class PureLLMBaseline:
         """
         Extract probability from model output.
         
-        Tries multiple strategies to parse probability from text.
+        Tries multiple strategies to parse probability / binary decision from text.
         
         Args:
             output_text: Model generated text
@@ -87,6 +98,14 @@ class PureLLMBaseline:
         Returns:
             Extracted probability (0.0 to 1.0), or 0.5 if parsing fails
         """
+        # Strategy 0: Strict binary output (0 or 1 on first non-empty line)
+        # We strongly instructed the model to output exactly "0" or "1".
+        text_stripped = output_text.strip()
+        if text_stripped:
+            first_line = text_stripped.splitlines()[0].strip()
+            if first_line in {"0", "1"}:
+                return float(first_line)
+        
         # Strategy 1: Look for explicit probability value
         # Pattern: "0.XX" or "0.XXX" or "0.X"
         prob_patterns = [
