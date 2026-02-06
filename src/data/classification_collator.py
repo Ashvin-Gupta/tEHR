@@ -36,6 +36,7 @@ class ClassificationCollator:
         """
         Collate a batch of samples.
         """
+        print(f"\n[ClassificationCollator] Received batch of size {len(batch)}")
         # 1. Filter None items
         batch = [item for item in batch if item is not None]
         
@@ -53,6 +54,7 @@ class ClassificationCollator:
             
             # --- Label Handling ---
             if 'label' not in item:
+                print(f"Item without label: {item}")
                 continue # Skip items without labels
                 
             label = item['label']
