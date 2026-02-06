@@ -36,7 +36,6 @@ class ClassificationCollator:
         """
         Collate a batch of samples.
         """
-        raise RuntimeError("DEBUG: ClassificationCollator.__call__ was invoked")
         # 1. Filter None items
         batch = [item for item in batch if item is not None]
         
@@ -109,23 +108,6 @@ class ClassificationCollator:
                     # Standard LLM: Just keep the end
                     ids = ids[-self.max_length:]
             
-            # --- DEBUG: Print a few sample trajectories seen by the model ---
-            if self._debug_samples_printed < self._max_debug_samples:
-                try:
-                    decoded = self.tokenizer.decode(ids, skip_special_tokens=False)
-                    print("\n" + "=" * 80)
-                    print("CLASSIFICATION COLLATOR DEBUG - SAMPLE TRAJECTORY")
-                    print("=" * 80)
-                    print(f"  Raw label: {item['label']}  →  Binary label: {label}")
-                    print(f"  Sequence length (tokens): {len(ids)}")
-                    print(f"  First 20 token IDs: {ids[:20]}")
-                    print(f"  Last 20 token IDs:  {ids[-20:]}")
-                    print("  Decoded text (truncated to 500 chars):")
-                    print("  " + decoded[:500] + ("..." if len(decoded) > 500 else ""))
-                    print("=" * 80 + "\n")
-                except Exception as e:
-                    print(f"CLASSIFICATION COLLATOR DEBUG: Failed to decode sample: {e}")
-                self._debug_samples_printed += 1
             
             input_ids_list.append(torch.tensor(ids, dtype=torch.long))
             labels_list.append(label)

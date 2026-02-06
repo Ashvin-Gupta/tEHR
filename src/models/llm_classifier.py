@@ -155,7 +155,8 @@ class LLMClassifier(nn.Module):
     def _verify_eos_token(
         self, 
         input_ids: torch.Tensor, 
-        sequence_lengths: torch.Tensor, 
+        sequence_lengths: torch.Tensor,
+        attention_mask: torch.Tensor,
         labels: torch.Tensor
     ):
         """
@@ -178,14 +179,15 @@ class LLMClassifier(nn.Module):
         print(f"Expected EOS token ID: {eos_token_id}")
         print(f"EOS token string: '{self.tokenizer.eos_token}'\n")
         
-        batch_size = input_ids.size(0)
+        # Batch shape: (batch_size, seq_len)
+        batch_size, seq_len = input_ids.size(0), input_ids.size(1)
         
         # Batch-level check: how many classification tokens are EOS?
         cls_token_ids = input_ids[torch.arange(batch_size), sequence_lengths]
         is_eos_mask = (cls_token_ids == eos_token_id)
         num_eos = is_eos_mask.sum().item()
         
-        print(f"Batch size: {batch_size}")
+        print(f"Batch shape: {input_ids.shape} (batch_size={batch_size}, seq_len={seq_len})")
         print(f"Number of sequences where CLS token == EOS: {num_eos}")
         print(f"Fraction of sequences with EOS at CLS: {num_eos / max(1, batch_size):.3f}\n")
         
@@ -197,6 +199,16 @@ class LLMClassifier(nn.Module):
             cls_str = self.tokenizer.decode([cls_id])
             flag = "EOS" if cls_id == eos_token_id else "NON-EOS"
             print(f"  Seq {i}: CLS token ID={cls_id}, token='{cls_str}', type={flag}")
+        print()
+        
+        # Also print a few decoded trajectories (non-padding tokens) so we see what the model sees
+        print("Sample decoded sequences (non-padding tokens):")
+        for i in range(max_samples):
+            non_pad = attention_mask[i].bool()
+            seq_ids = input_ids[i, non_pad].tolist()
+            decoded = self.tokenizer.decode(seq_ids, skip_special_tokens=False)
+            print(f"  Seq {i}: length={len(seq_ids)} tokens")
+            print(f"    Text: {decoded[:500]}{'...' if len(decoded) > 500 else ''}")
         print()
         
         # Find one case (label=1) and one control (label=0) for detailed inspection
@@ -293,7 +305,7 @@ class LLMClassifier(nn.Module):
             and labels is not None 
             and self._eos_check_count < self._max_eos_checks
         ):
-            self._verify_eos_token(input_ids, sequence_lengths, labels)
+            self._verify_eos_token(input_ids, sequence_lengths, attention_mask, labels)
             self._eos_check_count += 1
         
         # Pass through classification head
