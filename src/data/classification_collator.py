@@ -36,7 +36,7 @@ class ClassificationCollator:
         """
         Collate a batch of samples.
         """
-        print(f"\n[ClassificationCollator] Received batch of size {len(batch)}")
+        raise RuntimeError("DEBUG: ClassificationCollator.__call__ was invoked")
         # 1. Filter None items
         batch = [item for item in batch if item is not None]
         
