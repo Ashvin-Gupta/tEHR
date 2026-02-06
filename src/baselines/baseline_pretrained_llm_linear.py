@@ -154,6 +154,7 @@ class PretrainedLLMLinearBaseline:
             greater_is_better=True,
             dataloader_num_workers=int(self.training_config.get('dataloader_num_workers', 8)),
             report_to="wandb" if self.wandb_config.get('enabled', False) else "none",
+            remove_unused_columns=False,
         )
         
         self.trainer = Trainer(

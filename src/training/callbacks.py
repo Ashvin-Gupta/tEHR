@@ -47,7 +47,7 @@ class PackingVerificationCallback(TrainerCallback):
     (EOS appears between patients, not after the last one)
     """
     
-    def __init__(self, tokenizer, num_samples=3):
+    def __init__(self, tokenizer, num_samples=2):
         """
         Args:
             tokenizer: The tokenizer to decode tokens.
