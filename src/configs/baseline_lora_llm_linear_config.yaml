@@ -25,9 +25,9 @@ wandb:
 training:
   output_dir: "/data/scratch/qc25022/pancreas_MEDS/experiments/baselines/lora_llm_linear"
   overwrite_output_dir: true
-  epochs: 3
-  batch_size: 4
-  eval_batch_size: 4
+  epochs: 2
+  batch_size: 2
+  eval_batch_size: 2
   learning_rate: 1e-5
   weight_decay: 0.01
   warmup_steps: 100
