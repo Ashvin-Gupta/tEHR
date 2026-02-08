@@ -10,7 +10,7 @@ wandb:
   run_name: "baseline-clinicalbert"
 
 training:
-  output_dir: "/data/scratch/qc25022/pancreas/experiments/baselines/clinicalbert"
+  output_dir: "/data/scratch/qc25022/pancreas_MEDS/experiments/baselines/clinicalbert"
   overwrite_output_dir: true
   epochs: 3
   batch_size: 16
