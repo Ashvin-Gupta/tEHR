@@ -1,0 +1,55 @@
+name: "llm_classifier"
+
+model:
+  pretrained_checkpoint: "/data/scratch/qc25022/pancreas/experiments/Pretrain-Qwen3-8B-Pancreas-final/checkpoint-9000"
+  max_length: 12000           # Used when loading model 
+  hidden_size: 4096
+  num_labels: 2
+  freeze_llm: true            # Keep base model frozen, only LoRA + classifier train
+  train_lora: true            # Re-enable LoRA adapter parameters for training
+  
+  # Classification head architecture
+  head_type: "linear"         # Options: "linear", "mlp", "deep_mlp"
+  head_hidden_size: 512       # Hidden layer size for MLP heads (ignored for linear)
+  head_dropout: 0.1           # Dropout rate for MLP heads (ignored for linear)
+
+wandb:
+  enabled: true
+  project: "Pretrain-Qwen3-8B-Pancreas-classification"
+  run_name: "lora-3-month-logistic-refactored"
+
+training:
+  output_dir: "/data/scratch/qc25022/pancreas_MEDS/experiments/lora-3-month-logistic-refactored"
+  overwrite_output_dir: true
+  epochs: 1
+  batch_size: 2
+  eval_batch_size: 1
+  learning_rate: 1e-6
+  weight_decay: 0.01
+  warmup_steps: 100
+  gradient_accumulation_steps: 2
+  fp16: false
+  bf16: true
+  logging_steps: 50
+  eval_steps: 250
+  save_steps: 500
+  save_total_limit: 2
+  load_in_4bit: true
+  multi_label: false
+  # early_stopping_patience: 5
+  # early_stopping_threshold: 0.001
+  dataloader_num_workers: 2
+
+
+data:
+  cutoff_months: 3  # Remove last 5 month before diagnosis for cancer patients
+  data_dir: "/data/scratch/qc25022/pancreas/tokenised_data_pancreas_MEDS/cprd_upgi"
+  vocab_filepath: "/data/scratch/qc25022/pancreas/tokenised_data_pancreas_MEDS/cprd_upgi/vocab.csv"
+  labels_filepath: "/data/home/qc25022/cancer-extraction-pipeline/output/pancreas_MEDS/subject_information.csv"
+  medical_lookup_filepath: "/data/home/qc25022/TextCancEHR2/src/resources/MedicalDictTranslation2.csv"
+  lab_lookup_filepath: "/data/home/qc25022/TextCancEHR2/src/resources/LabLookUP.csv"
+  region_lookup_filepath: "/data/home/qc25022/TextCancEHR2/src/resources/RegionLookUp.csv"
+  time_lookup_filepath: "/data/home/qc25022/TextCancEHR2/src/resources/TimeLookUp.csv"
+  max_length: 12000           # Used by collator for truncation
+  handle_long_sequences: "warn"
+  sort_by_length: true
