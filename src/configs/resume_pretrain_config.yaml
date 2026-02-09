@@ -1,0 +1,52 @@
+# Example config for resuming pretraining
+# This should match your original pretraining config
+# Just update the checkpoint path when running
+
+name: "llama_pretraining_resume"
+
+model:
+  model_name: "unsloth/Qwen3-8B-Base-unsloth-bnb-4bit"
+  max_length: 8192
+  hf_token: null
+
+wandb:
+  enabled: true
+  project: "Pretrain-Qwen3-8B-Pancreas"
+
+lora:
+  r: 16
+  target_modules: ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
+  lora_alpha: 32
+  lora_dropout: 0.05
+  bias: "none"
+
+training:
+  output_dir: "/data/scratch/qc25022/pancreas/experiments/Pretrain-Qwen3-8B-Pancreas-final-continued"
+  overwrite_output_dir: false  # Don't overwrite when resuming
+  
+  epochs: 2
+  batch_size: 2
+  eval_batch_size: 2
+  learning_rate: 1e-5
+  weight_decay: 0.05
+  warmup_steps: 500
+  gradient_accumulation_steps: 1
+  gradient_checkpointing: false
+  fp16: false
+  bf16: true
+  logging_steps: 50
+  eval_steps: 250
+  save_steps: 1000
+  save_total_limit: 3
+  dataloader_num_workers: 4
+
+data:
+  cutoff_months: 1
+  data_dir: "/data/scratch/qc25022/pancreas/tokenised_data_pancreas_MEDS/cprd_upgi"
+  vocab_filepath: "/data/scratch/qc25022/pancreas/tokenised_data_pancreas_MEDS/cprd_upgi/vocab.csv"
+  labels_filepath: "/data/home/qc25022/cancer-extraction-pipeline/output/pancreas_MEDS/subject_information.csv"
+  medical_lookup_filepath: "/data/home/qc25022/TextCancEHR2/src/resources/MedicalDictTranslation2.csv"
+  lab_lookup_filepath: "/data/home/qc25022/TextCancEHR2/src/resources/LabLookUP.csv"
+  region_lookup_filepath: "/data/home/qc25022/TextCancEHR2/src/resources/RegionLookUp.csv"
+  time_lookup_filepath: "/data/home/qc25022/TextCancEHR2/src/resources/TimeLookUp.csv"
+
