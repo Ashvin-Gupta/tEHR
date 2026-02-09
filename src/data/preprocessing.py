@@ -42,7 +42,7 @@ def extract_text(base_dataset, tokenizer) -> List[str]:
         if item is not None:
             text = item['text']
             # Remove <end> token (if still present)
-            text = text.replace('<end>', '')
+            text = text.replace('<end>', '').replace(' <HEADER_SPLIT> ', '')
             
             # Clean up leading "; "
             if text.startswith('; '):

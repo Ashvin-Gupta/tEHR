@@ -88,6 +88,30 @@ class UnifiedEHRDataset(Dataset):
             
         return records
 
+    def _is_header_concept(self, token_code):
+        """
+        Check if a raw token code belongs to the demographic header.
+        Includes Age, Gender, Ethnicity, Region, and Vitals (BMI, Height, Weight).
+        """
+        token_code = str(token_code).upper()
+        
+        # 1. Standard Demographic Prefixes
+        # <start> is included so we don't split immediately at the beginning
+        if token_code.startswith(('<START>', 'AGE', 'GENDER', 'ETHNICITY', 'REGION', 'MEDS_BIRTH')):
+            return True
+            
+        # 2. Vitals (BMI, Height, Weight)
+        # Check raw code text first (fastest)
+        if 'BMI' in token_code: return True
+        
+        # Check translation for Height/Weight (handles cases where code is opaque like MEASUREMENT//123)
+        # We translate just to check the string content
+        trans = self._translate_token(token_code).upper()
+        if 'HEIGHT' in trans or 'WEIGHT' in trans or 'BMI' in trans:
+            return True
+            
+        return False
+
     def _translate_token(self, token_string):
         # This logic is the same as our narrative generator
         if not isinstance(token_string, str): return ""
@@ -194,9 +218,18 @@ class UnifiedEHRDataset(Dataset):
       
         string_codes = [self.id_to_token_map.get(tid, "") for tid in token_ids]
         translated_phrases = []
+
+        SPLIT_TOKEN = " <HEADER_SPLIT> "
+        split_inserted = False
+
         i = 0
         while i < len(string_codes):
             current_code = str(string_codes[i])
+
+            # Insert the split token if we haven't already and the current token is not a header concept
+            if not split_inserted and not self._is_header_concept(current_code):
+                translated_phrases.append(SPLIT_TOKEN)
+                split_inserted = True
             
             # Check if the current token is a measurable concept
             is_measurable = current_code.startswith(('LAB//', 'MEASUREMENT//', 'MEDICAL//BMI', 'MEDICAL//bp_'))

@@ -37,7 +37,7 @@ class ClassificationCollator:
         Collate a batch of samples.
         """
         # 1. Filter None items
-        batch = [item for item in batch if item is not None]
+        batch = [item for item in batch if item is not None and 'label' in item]
         
         input_ids_list = []
         labels_list = []
@@ -45,7 +45,10 @@ class ClassificationCollator:
         # Cache special tokens
         eos_id = getattr(self.tokenizer, "eos_token_id", None)
         cls_id = getattr(self.tokenizer, "cls_token_id", None)
+        bos_id = getattr(self.tokenizer, "bos_token_id", None)
         pad_id = self.tokenizer.pad_token_id if self.tokenizer.pad_token_id is not None else 0
+        
+        SPLIT_TOKEN = " <HEADER_SPLIT> "
         
         for item in batch:
           
@@ -85,30 +88,68 @@ class ClassificationCollator:
                 
                 # Cleanup
                 text = text.replace('<start>', '').replace('<end>', '').strip()
-                ids = self.tokenizer.encode(text, add_special_tokens=True)
-            
-            # --- EOS Enforcement ---
-            # Ensure sequence ends with EOS so "recent events" logic works
-            if eos_id is not None:
-                if not ids or ids[-1] != eos_id:
-                    ids.append(eos_id)
-            
-            # --- Truncation (The Critical Part) ---
-            if self.max_length is not None and len(ids) > self.max_length:
-                self._long_sequence_count += 1
-                
-                # Check for CLS at the start (ClinicalBERT/BERT)
-                has_cls = (cls_id is not None) and (len(ids) > 0) and (ids[0] == cls_id)
-                
-                if has_cls:
-                    # Keep [CLS] + [Most Recent Events (End)]
-                    # We take the CLS, and then the last (max_len - 1) tokens
-                    ids = [ids[0]] + ids[-(self.max_length - 1):]
+                if SPLIT_TOKEN in text:
+                    # 1. Split Text
+                    header_part, body_part = text.split(SPLIT_TOKEN, 1)
+                    
+                    # 2. Tokenize Parts Separately (No special tokens yet)
+                    header_ids = self.tokenizer.encode(header_part, add_special_tokens=False)
+                    body_ids = self.tokenizer.encode(body_part, add_special_tokens=False)
+                    
+                    # 3. Define Start/End Tokens
+                    start_tokens = []
+                    if cls_id is not None: 
+                        start_tokens.append(cls_id)
+                    elif bos_id is not None: 
+                        start_tokens.append(bos_id)
+                    if SPLIT_TOKEN in header_part:
+                        start_tokens.append(self.tokenizer.encode(SPLIT_TOKEN, add_special_tokens=False)[0])
+                    
+                    end_tokens = []
+                    if eos_id is not None: end_tokens.append(eos_id)
+                    
+                    # 4. Calculate Budget
+                    max_content_len = self.max_length - len(start_tokens) - len(end_tokens)
+                    
+                    # 5. Smart Truncation
+                    if len(header_ids) >= max_content_len:
+                        # Header is huge? Take what fits.
+                        content_ids = header_ids[:max_content_len]
+                    else:
+                        # Header fits. Fill remainder with TAIL of body.
+                        remaining_space = max_content_len - len(header_ids)
+                        content_ids = header_ids + body_ids[-remaining_space:]
+                    
+                    ids = start_tokens + content_ids + end_tokens
+                    
                 else:
-                    # Standard LLM: Just keep the end
-                    ids = ids[-self.max_length:]
-            
-            
+                    # ---------------------------------------------------------
+                    # FALLBACK: Standard Logic (No split token found)
+                    # ---------------------------------------------------------
+                    ids = self.tokenizer.encode(text, add_special_tokens=True)
+                    
+                    # Ensure EOS
+                    if eos_id is not None:
+                        if not ids or ids[-1] != eos_id:
+                            ids.append(eos_id)
+                    
+                    # Standard Truncation (Keep End)
+                    if self.max_length is not None and len(ids) > self.max_length:
+                        self._long_sequence_count += 1
+                        
+                        # Preserve CLS/BOS if present
+                        has_start_token = (len(ids) > 0) and (
+                            (cls_id is not None and ids[0] == cls_id) or
+                            (bos_id is not None and ids[0] == bos_id)
+                        )
+                        
+                        if has_start_token:
+                            # Keep [Start] + [End of Sequence]
+                            ids = [ids[0]] + ids[-(self.max_length - 1):]
+                        else:
+                            # Keep [End of Sequence]
+                            ids = ids[-self.max_length:]
+
             input_ids_list.append(torch.tensor(ids, dtype=torch.long))
             labels_list.append(label)
         
