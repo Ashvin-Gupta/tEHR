@@ -1,14 +1,14 @@
 #!/bin/bash
 #$ -cwd                 
 #$ -pe smp 12
-#$ -l h_rt=24:0:0
+#$ -l h_rt=1:0:0
 #$ -l h_vmem=7.5G
 #$ -l gpu=1
 #$ -l gpu_type=ampere
 #$ -l cluster=andrena
 #$ -j n
-#$ -o /data/home/qc25022/TextCancEHR2/HPC_Base/logo/
-#$ -e /data/home/qc25022/TextCancEHR2/HPC_Base/loge/
+#$ -o /data/home/qc25022/TextCancEHR2/HPC_Classifier/logo/
+#$ -e /data/home/qc25022/TextCancEHR2/HPC_Classifier/loge/
 
 set -e 
 
@@ -45,8 +45,8 @@ export PYTHONPATH="${BASE_DIR}:${PYTHONPATH}"
 #   --model_checkpoint /data/scratch/qc25022/pancreas_MEDS/experiments/baselines/lora_llm_linear/final_model
 
 python -m src.pipelines.evaluate_model \
-  --config_filepath src/configs/baseline_frozen_llm_linear_config.yaml \
-  --model_checkpoint /path/to/final_model
+  --config_filepath src/configs/baseline_pretrained_llm_linear_config.yaml \
+  --model_checkpoint /data/scratch/qc25022/pancreas_MEDS/experiments/baselines/pretrained_llm_linear/checkpoints/checkpoint-10000
 
 echo "Model evaluation finished."
 deactivate
