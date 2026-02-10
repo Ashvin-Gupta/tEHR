@@ -231,6 +231,29 @@ class ClinicalBERTBaseline:
             tokenizer=self.tokenizer
         )
 
+        # Debug: print the start of 3 translated patient trajectories
+        print("\n" + "=" * 80)
+        print("Debug: Showing the beginning of 3 translated training trajectories")
+        print("=" * 80)
+        shown = 0
+        for idx in range(len(datasets['train'])):
+            if shown >= 3:
+                break
+            item = datasets['train'][idx]
+            # UnifiedEHRDataset in 'text' format should yield dicts with 'text' and 'label'
+            if item is None or 'text' not in item:
+                continue
+            text = item['text']
+            label = item.get('label', None)
+            print(f"\n--- Sample {shown + 1} (index {idx}) ---")
+            print(f"Label: {label}")
+            # Print only the first 1000 characters for readability
+            print(text[:1000])
+            if len(text) > 1000:
+                print("...[TRUNCATED]...")
+            shown += 1
+        print("\n" + "=" * 80)
+
         print("Verifying dataset integrity...")
         valid_indices = []
         for i in range(len(datasets['train'])):
