@@ -274,6 +274,44 @@ class ClinicalBERTBaseline:
             max_length=self.data_config.get('max_length', 512),
             truncation=True,
         )
+
+        # Debug: show what the model actually sees after truncation for 3 patients
+        print("\n" + "=" * 80)
+        print("Debug: Showing tokenized & truncated inputs for 3 training trajectories")
+        print("=" * 80)
+        debug_samples = []
+        for idx in range(len(datasets['train'])):
+            if len(debug_samples) >= 3:
+                break
+            item = datasets['train'][idx]
+            if item is None or 'text' not in item:
+                continue
+            debug_samples.append(item)
+
+        if debug_samples:
+            batch = collator(debug_samples)
+            input_ids = batch["input_ids"]
+            labels = batch.get("labels", None)
+
+            for i in range(len(debug_samples)):
+                ids = input_ids[i]
+                decoded = self.tokenizer.decode(
+                    ids,
+                    skip_special_tokens=False,
+                    clean_up_tokenization_spaces=True,
+                )
+                print(f"\n--- Truncated Sample {i + 1} ---")
+                if labels is not None:
+                    print(f"Label: {int(labels[i])}")
+                print(f"Sequence length (tokens): {len(ids)}")
+                # Print first 1000 characters of what the model actually sees
+                print(decoded[:1000])
+                if len(decoded) > 1000:
+                    print("...[TRUNCATED]...")
+        else:
+            print("No valid debug samples found in training data.")
+
+        print("\n" + "=" * 80)
         
         # Create trainer
         self.create_trainer(datasets['train'], datasets['tuning'], collator, run_name)
