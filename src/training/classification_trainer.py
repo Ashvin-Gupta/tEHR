@@ -323,8 +323,10 @@ class EHRClassificationTrainer:
             print("  - Skipping ROC/PR plots for multi-label (not yet supported)")
             return
         
-        # Convert to probabilities
-        probs = torch.softmax(torch.tensor(logits), dim=1).numpy()[:, 1]
+        # Convert to probabilities.
+        # IMPORTANT: keep full [n_samples, n_classes] matrix so that downstream
+        # plotting code can handle both binary and multi-class cases.
+        probs = torch.softmax(torch.tensor(logits), dim=1).numpy()
         labels = pred_output.label_ids
         
         # Create plots
