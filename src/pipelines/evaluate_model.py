@@ -103,7 +103,8 @@ class ModelEvaluator:
         Wrap the loaded model with a classification head if needed.
         
         When Trainer saves an LLMClassifier, it saves the full model state.
-        We need to reconstruct the LLMClassifier wrapper and load the state.
+        We need to reconstruct the LLMClassifier wrapper and load the state so
+        that both the base model and the classifier head match training.
         """
         print("\n" + "=" * 80)
         print("Reconstructing classification model...")
@@ -129,7 +130,9 @@ class ModelEvaluator:
             # For evaluation, freeze everything
             trainable_keywords = []
             
-            # Create LLMClassifier wrapper
+            # Create LLMClassifier wrapper with the same config as training.
+            # We will then load the *full* state dict from the Trainer checkpoint
+            # so that the classifier head matches the trained one.
             classifier_model = LLMClassifier(
                 base_model=self.model,
                 hidden_size=hidden_size,
@@ -143,37 +146,34 @@ class ModelEvaluator:
                 head_dropout=head_dropout
             )
             
-            # Try to load the full model state (including classifier) if it exists
+            # Try to load the full model state (including classifier) if it exists.
             # Trainer saves the full model state in pytorch_model.bin or model.safetensors
             model_state_path = os.path.join(self.model_checkpoint, 'pytorch_model.bin')
             if not os.path.exists(model_state_path):
                 model_state_path = os.path.join(self.model_checkpoint, 'model.safetensors')
             
             if os.path.exists(model_state_path):
-                print(f"  - Loading full model state from checkpoint...")
+                print(f"  - Loading full model state from checkpoint: {model_state_path}")
                 try:
-                    # Load the state dict
+                    # Load the state dict saved by Trainer
                     if model_state_path.endswith('.safetensors'):
                         from safetensors.torch import load_file
                         state_dict = load_file(model_state_path)
                     else:
                         state_dict = torch.load(model_state_path, map_location='cpu')
-                    
-                    # Filter to only classifier weights (in case base model weights are also there)
-                    classifier_state = {
-                        k.replace('classifier.', ''): v 
-                        for k, v in state_dict.items() 
-                        if 'classifier' in k
-                    }
-                    
-                    if classifier_state:
-                        print(f"  - Found {len(classifier_state)} classifier parameters")
-                        classifier_model.classifier.load_state_dict(classifier_state, strict=False)
-                    else:
-                        print("  - ⚠️  No classifier weights found in checkpoint.")
-                        print("     Using randomly initialized head (this may not be correct!)")
+
+                    # Load the full state dict into the reconstructed LLMClassifier.
+                    # Using strict=False allows us to ignore any keys that don't match
+                    # exactly (e.g. if the base model checkpoint differs slightly),
+                    # while still restoring the trained classifier head weights.
+                    missing, unexpected = classifier_model.load_state_dict(state_dict, strict=False)
+                    if missing:
+                        print(f"  - Warning: {len(missing)} missing keys when loading state dict (first 5): {missing[:5]}")
+                    if unexpected:
+                        print(f"  - Warning: {len(unexpected)} unexpected keys when loading state dict (first 5): {unexpected[:5]}")
+                    print("  - Loaded classifier (and base model where matching) from checkpoint.")
                 except Exception as e:
-                    print(f"  - ⚠️  Warning: Could not load classifier weights: {e}")
+                    print(f"  - ⚠️  Warning: Could not load model state dict: {e}")
                     print("     Using randomly initialized head (this may not be correct!)")
             else:
                 print("  - ⚠️  No model state file found. Using randomly initialized head.")
