@@ -97,7 +97,7 @@ class UnifiedEHRDataset(Dataset):
         
         # 1. Standard Demographic Prefixes
         # <start> is included so we don't split immediately at the beginning
-        if token_code.startswith(('<START>', 'AGE', 'GENDER', 'ETHNICITY', 'REGION', 'MEDS_BIRTH')):
+        if token_code.startswith(('<START>', 'AGE', 'GENDER', 'ETHNICITY', 'REGION', 'MEDS_BIRTH', 'LIFESTYLE')) or token_code.replace('.', '', 1).isdigit():
             return True
             
         # 2. Vitals (BMI, Height, Weight)

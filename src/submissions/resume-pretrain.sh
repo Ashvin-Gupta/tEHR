@@ -7,8 +7,8 @@
 #$ -l gpu_type=ampere
 #$ -l cluster=andrena
 #$ -j n
-#$ -o /data/home/qc25022/TextCancEHR2/HPC_Base/logo/
-#$ -e /data/home/qc25022/TextCancEHR2/HPC_Base/loge/
+#$ -o /data/home/qc25022/TextCancEHR2/HPC_Pretrain/logo/
+#$ -e /data/home/qc25022/TextCancEHR2/HPC_Pretrain/loge/
 
 set -e 
 
