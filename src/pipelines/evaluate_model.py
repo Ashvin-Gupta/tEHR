@@ -279,10 +279,11 @@ class ModelEvaluator:
         )
         
         # Create trainer
+        self.create_trainer(datasets['held_out'], datasets['held_out'], collator)
         self.create_trainer(datasets['tuning'], datasets['held_out'], collator)
         
         # Evaluate
-        val_metrics = self.evaluate(datasets['tuning'], 'validation')
+        # val_metrics = self.evaluate(datasets['tuning'], 'validation')
         test_metrics = self.evaluate(datasets['held_out'], 'test')
         
         # Save summary
