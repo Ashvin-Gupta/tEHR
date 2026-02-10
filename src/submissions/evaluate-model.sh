@@ -45,8 +45,8 @@ export PYTHONPATH="${BASE_DIR}:${PYTHONPATH}"
 #   --model_checkpoint /data/scratch/qc25022/pancreas_MEDS/experiments/baselines/lora_llm_linear/final_model
 
 python -m src.pipelines.evaluate_model \
-  --config_filepath src/configs/baseline_pretrained_llm_linear_config.yaml \
-  --model_checkpoint /data/scratch/qc25022/pancreas_MEDS/experiments/baselines/pretrained_llm_linear/checkpoints/checkpoint-10000
+  --config_filepath src/configs/classification_config.yaml \
+  --model_checkpoint /data/scratch/qc25022/pancreas_MEDS/experiments/lora-12-month-logistic-refactored/final_model
 
 echo "Model evaluation finished."
 deactivate
