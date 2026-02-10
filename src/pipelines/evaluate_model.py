@@ -19,7 +19,7 @@ from src.models.llm_classifier import LLMClassifier
 from src.data.classification_collator import ClassificationCollator
 from src.training.metrics import compute_classification_metrics
 from src.evaluations.baseline_metrics import compute_baseline_metrics, plot_all_curves, save_results, print_results
-from src.training.model_loader import load_classification_model
+from src.training.model_loader import load_classification_model, load_pretrained_lora_model
 
 
 class ModelEvaluator:
@@ -48,36 +48,49 @@ class ModelEvaluator:
         self.local_rank = int(os.environ.get("LOCAL_RANK", 0))
     
     def load_model(self):
-        """Load the saved classification model."""
+        """Load the saved classification model (base LLM + LoRA, not the classifier head)."""
         print("\n" + "=" * 80)
-        print("Loading saved classification model...")
+        print("Loading saved base model for classification...")
         print("=" * 80)
         
         max_length = self.model_config.get('max_length', 12000)
         load_in_4bit = self.training_config.get('load_in_4bit', True)
         
-        # Try to load as a classification model (LLMClassifier)
-        # First, try loading the base model + tokenizer
+        # Case 1: Baselines that use a pretrained checkpoint (e.g. pretrained_llm_linear)
+        # In these cases we should load the *pretrained* LLM (with LoRA) as the base,
+        # and then separately load the classifier head from the classification checkpoint.
+        pretrained_ckpt = self.model_config.get('pretrained_checkpoint')
+        if pretrained_ckpt:
+            print(f"  - Detected pretrained_checkpoint in config: {pretrained_ckpt}")
+            print(f"  - max_length={max_length}, load_in_4bit={load_in_4bit}")
+            try:
+                self.model, self.tokenizer = load_pretrained_lora_model(
+                    pretrained_checkpoint=pretrained_ckpt,
+                    max_seq_length=max_length,
+                    load_in_4bit=load_in_4bit,
+                    local_rank=self.local_rank,
+                )
+                print(f"  - Base model loaded from pretrained checkpoint (for classification head from {self.model_checkpoint})")
+            except Exception as e:
+                raise RuntimeError(
+                    f"Failed to load base model from pretrained_checkpoint={pretrained_ckpt}. "
+                    f"Error: {e}\n"
+                    f"Make sure this path points to the Stage-1 pretraining checkpoint."
+                )
+            return
+        
+        # Case 2: Other models (e.g. off-the-shelf base models saved directly as classifiers)
+        # Fall back to loading the full classification model from the checkpoint directory.
         try:
             self.model, self.tokenizer = load_classification_model(
                 model_checkpoint=self.model_checkpoint,
                 max_seq_length=max_length,
                 load_in_4bit=load_in_4bit,
-                local_rank=self.local_rank
+                local_rank=self.local_rank,
             )
-            
-            # Check if this is an LLMClassifier or just a base model
-            # If it's saved from Trainer, it might be wrapped in LLMClassifier
-            # We need to check the saved files to determine this
-            
-            # For now, assume it's a base model and we need to wrap it
-            # But if it was saved as LLMClassifier, we might need different loading
-            # Let's try to detect if there's a classifier head
-            
-            print(f"  - Model loaded from: {self.model_checkpoint}")
+            print(f"  - Model loaded from classification checkpoint: {self.model_checkpoint}")
             print(f"  - Max length: {max_length}")
             print(f"  - 4-bit quantization: {load_in_4bit}")
-            
         except Exception as e:
             raise RuntimeError(
                 f"Failed to load model from {self.model_checkpoint}. "
