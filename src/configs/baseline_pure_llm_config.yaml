@@ -1,5 +1,14 @@
 name: "pure_llm_baseline"
 
+# Debug: set debug.enabled to true to save full raw outputs when extraction fails.
+# Outputs go to {output_dir}/debug_failed_extractions/failed_extractions.txt
+# print_first_n: print first N failures to stdout (0 = only short warning)
+debug:
+  enabled: false
+  print_first_n: 5
+
+# IMPORTANT: Use an *Instruct* model (e.g. Qwen3-8B-Instruct) for zero-shot prompting.
+# Base models are not instruction-tuned and often produce garbled output.
 model:
   model_name: "unsloth/Qwen3-8B-Base-unsloth-bnb-4bit"
   max_length: 16000

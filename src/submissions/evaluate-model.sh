@@ -46,7 +46,7 @@ export PYTHONPATH="${BASE_DIR}:${PYTHONPATH}"
 
 python -m src.pipelines.evaluate_model \
   --config_filepath src/configs/classification_config.yaml \
-  --model_checkpoint /data/scratch/qc25022/pancreas_MEDS/experiments/lora-6-month-logistic-refactored/checkpoint-5000
+  --model_checkpoint /data/scratch/qc25022/pancreas_MEDS/experiments/lora-3-month-logistic-refactored/final_model
 
 echo "Model evaluation finished."
 deactivate

@@ -86,7 +86,7 @@ class PureLLMBaseline:
         """
         return self.prompt_template.format(ehr_text=ehr_text)
     
-    def extract_probability(self, output_text: str) -> float:
+    def extract_probability(self, output_text: str, sample_idx: int = None, prompt: str = None) -> float:
         """
         Extract probability from model output.
         
@@ -94,6 +94,8 @@ class PureLLMBaseline:
         
         Args:
             output_text: Model generated text
+            sample_idx: Optional index for debugging failed extractions
+            prompt: Optional prompt for debugging failed extractions
         
         Returns:
             Extracted probability (0.0 to 1.0), or 0.5 if parsing fails
@@ -151,8 +153,43 @@ class PureLLMBaseline:
                 pass
         
         # Default: return 0.5 (neutral)
-        print(f"Warning: Could not extract probability from: {output_text[:100]}...")
+        self._log_extraction_failure(output_text, sample_idx=sample_idx, prompt=prompt)
         return 0.5
+
+    def _log_extraction_failure(self, output_text: str, sample_idx: int = None, prompt: str = None):
+        """Log failed extraction for debugging. Controlled by config debug flag."""
+        debug_cfg = self.config.get('debug', {})
+        if not debug_cfg.get('enabled', False):
+            print(f"Warning: Could not extract probability from: {output_text[:100]}...")
+            return
+        # Debug mode: save full details to single file (append each failure)
+        log_dir = os.path.join(self.output_dir, 'debug_failed_extractions')
+        os.makedirs(log_dir, exist_ok=True)
+        out_path = os.path.join(log_dir, "failed_extractions.txt")
+        with open(out_path, 'a', encoding='utf-8') as f:
+            f.write("=" * 80 + "\n")
+            if sample_idx is not None:
+                f.write(f"SAMPLE_INDEX: {sample_idx}\n")
+            f.write("RAW_OUTPUT (full):\n")
+            f.write(repr(output_text) + "\n\n")
+            f.write("RAW_OUTPUT (decoded):\n")
+            f.write(output_text + "\n\n")
+            if prompt:
+                f.write("PROMPT (first 500 chars):\n")
+                f.write(prompt[:500] + "...\n\n" if len(prompt) > 500 else prompt + "\n\n")
+            f.write("\n")
+        if debug_cfg.get('print_first_n', 0) > 0:
+            n = debug_cfg['print_first_n']
+            if not hasattr(self, '_debug_fail_count'):
+                self._debug_fail_count = 0
+            if self._debug_fail_count < n:
+                self._debug_fail_count += 1
+                print(f"\n[DEBUG] Failed extraction #{self._debug_fail_count} (sample_idx={sample_idx})")
+                print(f"[DEBUG] Full raw output: {repr(output_text)}")
+                if prompt:
+                    print(f"[DEBUG] Prompt (first 300 chars): {prompt[:300]}...")
+        else:
+            print(f"Warning: Could not extract probability from: {output_text[:100]}...")
     
     def predict_batch(self, texts: List[str], batch_size: int = 4) -> np.ndarray:
         """
@@ -167,6 +204,8 @@ class PureLLMBaseline:
         """
         self.model.eval()
         probs = []
+        if hasattr(self, '_debug_fail_count'):
+            delattr(self, '_debug_fail_count')
         
         with torch.no_grad():
             for i in tqdm(range(0, len(texts), batch_size), desc="Generating predictions"):
@@ -197,7 +236,12 @@ class PureLLMBaseline:
                     # Remove input tokens
                     generated_ids = output_ids[len(inputs['input_ids'][j]):]
                     output_text = self.tokenizer.decode(generated_ids, skip_special_tokens=True)
-                    prob = self.extract_probability(output_text)
+                    sample_idx = i + j
+                    prob = self.extract_probability(
+                        output_text,
+                        sample_idx=sample_idx if self.config.get('debug', {}).get('enabled') else None,
+                        prompt=batch_prompts[j] if self.config.get('debug', {}).get('enabled') else None,
+                    )
                     probs.append(prob)
         
         return np.array(probs)
