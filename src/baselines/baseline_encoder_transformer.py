@@ -21,20 +21,18 @@ def filter_tokens(token_list: List[str]) -> List[str]:
     """
     filtered = []
     for token in token_list:
-        # Convert to string if it's not already (safety check)
         token_str = str(token)
         
-        # 1. Remove time_interval tokens (e.g., <time_interval_30>)
+        # 1. Remove time_interval tokens
         if token_str.startswith('<time_interval_'):
             continue
             
-        # 2. Remove numeric tokens (raw values like '12.5' or '45')
-        # Replicating your logic: replace first '.' and check if isdigit
+        # 2. Remove numeric tokens (raw values like '12.5')
         if token_str.replace('.', '', 1).isdigit():
             continue
             
-        # 3. Remove legacy quantile tokens if they appear
-        if token_str in ['Q1', 'Q2', 'Q3', 'Q4']:
+        # 3. Remove legacy markers if they exist
+        if token_str in ['Q1', 'Q2', 'Q3', 'Q4', '<unknown>']:
             continue
 
         filtered.append(token_str)
@@ -42,36 +40,29 @@ def filter_tokens(token_list: List[str]) -> List[str]:
 
 
 class FilteredTokenDataset(Dataset):
-    """
-    Dataset wrapper that filters tokens from UnifiedEHRDataset by converting 
-    IDs to strings, filtering, and storing the resulting strings.
-    """
     def __init__(self, base_dataset):
         self.base_dataset = base_dataset
         self.filtered_samples = []
         
         # Access the mapping from the underlying dataset
-        # Note: UnifiedEHRDataset stores this in self.id_to_token_map
         id_to_token = getattr(base_dataset, 'id_to_token_map', {})
         
         print("Filtering tokens (removing raw numbers and time intervals)...")
         for i in tqdm(range(len(base_dataset)), desc="Filtering"):
             sample = base_dataset[i]
-            if sample is not None and 'tokens' in sample:
-                # Get the IDs (handle both tensor and list formats)
-                token_ids = sample['tokens']
-                if torch.is_tensor(token_ids):
-                    token_ids = token_ids.tolist()
+            # UnifiedEHRDataset returns None if a patient has no label
+            if sample is not None:
+                # Map IDs to strings for filtering
+                if 'tokens' in sample:
+                    token_ids = sample['tokens'].tolist() if torch.is_tensor(sample['tokens']) else sample['tokens']
+                    token_strings = [id_to_token.get(tid, str(tid)) for tid in token_ids]
+                    
+                    # Apply string-based filtering
+                    sample['tokens'] = filter_tokens(token_strings)
                 
-                # 1. Translate IDs to Strings
-                token_strings = [id_to_token.get(tid, str(tid)) for tid in token_ids]
-                
-                # 2. Filter the Strings
-                filtered_strings = filter_tokens(token_strings)
-                
-                # 3. Store the filtered strings back in the sample
-                sample['tokens'] = filtered_strings
-                self.filtered_samples.append(sample)
+                # Only keep samples that still have tokens after filtering
+                if len(sample.get('tokens', [])) > 0:
+                    self.filtered_samples.append(sample)
     
     def __len__(self):
         return len(self.filtered_samples)
@@ -319,14 +310,14 @@ class EncoderTransformerBaseline:
         print("Creating transformer encoder model...")
         print("=" * 80)
         
-        vocab_size = self.vocab['size']
-        hidden_dim = self.model_config.get('hidden_dim', 512)
-        num_layers = self.model_config.get('num_layers', 6)
-        num_heads = self.model_config.get('num_heads', 8)
-        ff_dim = self.model_config.get('ff_dim', 2048)
-        dropout = self.model_config.get('dropout', 0.1)
-        max_seq_length = self.model_config.get('max_seq_length', 512)
-        num_labels = self.model_config.get('num_labels', 2)
+        vocab_size = int(self.vocab['size'])
+        hidden_dim = int(self.model_config.get('hidden_dim', 512))
+        num_layers = int(self.model_config.get('num_layers', 6))
+        num_heads = int(self.model_config.get('num_heads', 8))
+        ff_dim = int(self.model_config.get('ff_dim', 2048))
+        dropout = float(self.model_config.get('dropout', 0.1))
+        max_seq_length = int(self.model_config.get('max_seq_length', 512))
+        num_labels = int(self.model_config.get('num_labels', 2))
         
         self.model = EHRTransformerEncoder(
             vocab_size=vocab_size,
@@ -447,39 +438,39 @@ class EncoderTransformerBaseline:
         self.model = self.model.to(device)
         
         # Create data loaders
-        batch_size = self.training_config.get('batch_size', 32)
+        batch_size = int(self.training_config.get('batch_size', 32))
         train_loader = DataLoader(
             filtered_datasets['train'],
             batch_size=batch_size,
             shuffle=True,
             collate_fn=self.collate_fn,
-            num_workers=self.training_config.get('dataloader_num_workers', 4)
+            num_workers=int(self.training_config.get('dataloader_num_workers', 4))
         )
         val_loader = DataLoader(
             filtered_datasets['tuning'],
             batch_size=batch_size,
             shuffle=False,
             collate_fn=self.collate_fn,
-            num_workers=self.training_config.get('dataloader_num_workers', 4)
+            num_workers=int(self.training_config.get('dataloader_num_workers', 4))
         )
         test_loader = DataLoader(
             filtered_datasets['held_out'],
             batch_size=batch_size,
             shuffle=False,
             collate_fn=self.collate_fn,
-            num_workers=self.training_config.get('dataloader_num_workers', 4)
+            num_workers=int(self.training_config.get('dataloader_num_workers', 4))
         )
         
         # Training setup
         optimizer = torch.optim.AdamW(
             self.model.parameters(),
-            lr=self.training_config.get('learning_rate', 1e-4),
-            weight_decay=self.training_config.get('weight_decay', 0.01)
+            lr=float(self.training_config.get('learning_rate', 1e-4)),
+            weight_decay=float(self.training_config.get('weight_decay', 0.01))
         )
         criterion = nn.CrossEntropyLoss()
         
         # Train
-        num_epochs = self.training_config.get('epochs', 10)
+        num_epochs = int(self.training_config.get('epochs', 10))
         print(f"\n" + "=" * 80)
         print(f"Training for {num_epochs} epochs...")
         print("=" * 80)
