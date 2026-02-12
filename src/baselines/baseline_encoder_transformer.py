@@ -15,53 +15,62 @@ from src.baselines.utils import load_baseline_config, setup_output_dir, load_dat
 from src.evaluations.baseline_metrics import compute_baseline_metrics, plot_all_curves, save_results, print_results
 
 
-def filter_tokens(token_list: List) -> List:
+def filter_tokens(token_list: List[str]) -> List[str]:
     """
-    Filter out quantile and time_interval tokens.
-    
-    Args:
-        token_list: List of tokens
-    
-    Returns:
-        Filtered list of tokens
+    Filter out time_interval tokens and raw numeric value tokens.
     """
     filtered = []
     for token in token_list:
-        if isinstance(token, str):
-            # Remove time_interval tokens
-            if token.startswith('<time_interval_'):
-                continue
-            # Remove quantile tokens (Q1, Q2, Q3, Q4)
-            if token in ['Q1', 'Q2', 'Q3', 'Q4']:
-                continue
-        filtered.append(token)
+        # Convert to string if it's not already (safety check)
+        token_str = str(token)
+        
+        # 1. Remove time_interval tokens (e.g., <time_interval_30>)
+        if token_str.startswith('<time_interval_'):
+            continue
+            
+        # 2. Remove numeric tokens (raw values like '12.5' or '45')
+        # Replicating your logic: replace first '.' and check if isdigit
+        if token_str.replace('.', '', 1).isdigit():
+            continue
+            
+        # 3. Remove legacy quantile tokens if they appear
+        if token_str in ['Q1', 'Q2', 'Q3', 'Q4']:
+            continue
+
+        filtered.append(token_str)
     return filtered
 
 
 class FilteredTokenDataset(Dataset):
     """
-    Dataset wrapper that filters tokens from UnifiedEHRDataset.
+    Dataset wrapper that filters tokens from UnifiedEHRDataset by converting 
+    IDs to strings, filtering, and storing the resulting strings.
     """
-    
     def __init__(self, base_dataset):
-        """
-        Initialize filtered token dataset.
-        
-        Args:
-            base_dataset: UnifiedEHRDataset instance with format='tokens'
-        """
         self.base_dataset = base_dataset
         self.filtered_samples = []
         
-        # Process all samples and filter tokens
-        print("Filtering tokens (removing quantile and time_interval tokens)...")
+        # Access the mapping from the underlying dataset
+        # Note: UnifiedEHRDataset stores this in self.id_to_token_map
+        id_to_token = getattr(base_dataset, 'id_to_token_map', {})
+        
+        print("Filtering tokens (removing raw numbers and time intervals)...")
         for i in tqdm(range(len(base_dataset)), desc="Filtering"):
             sample = base_dataset[i]
-            if sample is not None:
-                # Filter tokens
-                if 'tokens' in sample:
-                    filtered_tokens = filter_tokens(sample['tokens'])
-                    sample['tokens'] = filtered_tokens
+            if sample is not None and 'tokens' in sample:
+                # Get the IDs (handle both tensor and list formats)
+                token_ids = sample['tokens']
+                if torch.is_tensor(token_ids):
+                    token_ids = token_ids.tolist()
+                
+                # 1. Translate IDs to Strings
+                token_strings = [id_to_token.get(tid, str(tid)) for tid in token_ids]
+                
+                # 2. Filter the Strings
+                filtered_strings = filter_tokens(token_strings)
+                
+                # 3. Store the filtered strings back in the sample
+                sample['tokens'] = filtered_strings
                 self.filtered_samples.append(sample)
     
     def __len__(self):
