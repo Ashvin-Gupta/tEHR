@@ -40,29 +40,53 @@ def filter_tokens(token_list: List[str]) -> List[str]:
 
 
 class FilteredTokenDataset(Dataset):
+    """
+    Dataset wrapper that filters tokens using an ID blacklist.
+    """
     def __init__(self, base_dataset):
         self.base_dataset = base_dataset
         self.filtered_samples = []
         
-        # Access the mapping from the underlying dataset
+        # --- 1. PRE-CALCULATE BLACKLIST ---
+        # Get the mapping from the underlying dataset
         id_to_token = getattr(base_dataset, 'id_to_token_map', {})
+        exclude_ids = set()
         
-        print("Filtering tokens (removing raw numbers and time intervals)...")
+        print("Identifying tokens to exclude (numbers and time intervals)...")
+        for tid, token_str in id_to_token.items():
+            token_str = str(token_str)
+            
+            # Identify numbers: e.g., "12.5" or "45"
+            is_numeric = token_str.replace('.', '', 1).isdigit()
+            
+            # Identify time intervals: e.g., "<time_interval_30>"
+            is_time = token_str.startswith('<time_interval_')
+            
+            if is_numeric or is_time:
+                exclude_ids.add(tid)
+        
+        # --- 2. FILTER SEQUENCES USING BLACKLIST ---
+        print(f"Filtering {len(base_dataset)} samples...")
         for i in tqdm(range(len(base_dataset)), desc="Filtering"):
             sample = base_dataset[i]
-            # UnifiedEHRDataset returns None if a patient has no label
-            if sample is not None:
-                # Map IDs to strings for filtering
-                if 'tokens' in sample:
-                    token_ids = sample['tokens'].tolist() if torch.is_tensor(sample['tokens']) else sample['tokens']
-                    token_strings = [id_to_token.get(tid, str(tid)) for tid in token_ids]
-                    
-                    # Apply string-based filtering
-                    sample['tokens'] = filter_tokens(token_strings)
+            
+            # If sample is None, UnifiedEHRDataset couldn't find a label for this patient
+            if sample is not None and 'tokens' in sample:
+                token_ids = sample['tokens']
                 
-                # Only keep samples that still have tokens after filtering
-                if len(sample.get('tokens', [])) > 0:
+                # Fast filtering using the ID blacklist
+                # This keeps only IDs NOT in our exclude set
+                filtered_ids = [tid for tid in token_ids.tolist() if tid not in exclude_ids]
+                
+                # Re-assign the filtered IDs
+                sample['tokens'] = filtered_ids
+                
+                # Only keep the sample if it still has events left
+                if len(filtered_ids) > 0:
                     self.filtered_samples.append(sample)
+        
+        if len(self.filtered_samples) == 0:
+            print("WARNING: All samples were filtered out or skipped due to missing labels!")
     
     def __len__(self):
         return len(self.filtered_samples)
