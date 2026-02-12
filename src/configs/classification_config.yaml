@@ -1,7 +1,7 @@
 name: "llm_classifier"
 
 model:
-  pretrained_checkpoint: "/data/scratch/qc25022/pancreas/experiments/Pretrain-Qwen3-8B-Pancreas-final-continued/checkpoint-17000"
+  pretrained_checkpoint: "/data/scratch/qc25022/pancreas/experiments/Pretrain-Qwen3-8B-Pancreas-final-continued/checkpoint-9000"
   max_length: 12000           # Used when loading model 
   hidden_size: 4096
   num_labels: 2
@@ -16,10 +16,10 @@ model:
 wandb:
   enabled: true
   project: "Pretrain-Qwen3-8B-Pancreas-classification"
-  run_name: "lora-3-month-logistic-refactored-longerPretrain"
+  run_name: "lora-6-month-logistic-refactored-longerPretrain"
 
 training:
-  output_dir: "/data/scratch/qc25022/pancreas_MEDS/experiments/lora-3-month-logistic-refactored-longerPretrain"
+  output_dir: "/data/scratch/qc25022/pancreas_MEDS/experiments/lora-6-month-logistic-refactored-longerPretrain"
   overwrite_output_dir: true
   epochs: 1
   batch_size: 2
@@ -42,7 +42,7 @@ training:
 
 
 data:
-  cutoff_months: 12  # Remove last 5 month before diagnosis for cancer patients
+  cutoff_months: 6  # Remove last 5 month before diagnosis for cancer patients
   data_dir: "/data/scratch/qc25022/pancreas/tokenised_data_pancreas_MEDS/cprd_upgi"
   vocab_filepath: "/data/scratch/qc25022/pancreas/tokenised_data_pancreas_MEDS/cprd_upgi/vocab.csv"
   labels_filepath: "/data/home/qc25022/cancer-extraction-pipeline/output/pancreas_MEDS/subject_information.csv"
