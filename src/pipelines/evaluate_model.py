@@ -70,17 +70,25 @@ class ModelEvaluator:
                     load_in_4bit=load_in_4bit,
                     local_rank=self.local_rank,
                 )
-                print(f"  - Base model loaded from pretrained checkpoint (for classification head from {self.model_checkpoint})")
+                # If pretrained_ckpt is a HF model ID (base model), we need to apply LoRA
+                # to match the checkpoint structure. Classification checkpoints from pretrain
+                # already have LoRA; baseline lora_llm_linear trains LoRA from base.
+                lora_config = self.config.get('lora')
+                if lora_config is not None:
+                    has_lora = any('lora' in n.lower() for n, _ in self.model.named_parameters())
+                    if not has_lora:
+                        print(f"  - Base model loaded; applying LoRA from config...")
+                        self.model = self._apply_lora(self.model, lora_config)
+                print(f"  - Base model loaded (classifier weights from {self.model_checkpoint})")
             except Exception as e:
                 raise RuntimeError(
                     f"Failed to load base model from pretrained_checkpoint={pretrained_ckpt}. "
                     f"Error: {e}\n"
-                    f"Make sure this path points to the Stage-1 pretraining checkpoint."
+                    f"Make sure this path points to a valid model or checkpoint."
                 )
             return
-        
-        # Case 2: Other models (e.g. off-the-shelf base models saved directly as classifiers)
-        # Fall back to loading the full classification model from the checkpoint directory.
+
+        # Case 2: Other models (e.g. frozen_llm_linear final_model) - try direct load
         try:
             self.model, self.tokenizer = load_classification_model(
                 model_checkpoint=self.model_checkpoint,
@@ -98,6 +106,25 @@ class ModelEvaluator:
                 f"Make sure the checkpoint path is correct and contains valid model files."
             )
     
+    def _apply_lora(self, model, lora_config: Dict[str, Any]):
+        """Apply LoRA adapters to base model (for baseline when pretrained_ckpt is base model)."""
+        from unsloth import FastLanguageModel
+        return FastLanguageModel.get_peft_model(
+            model,
+            r=lora_config.get('r', 16),
+            target_modules=lora_config.get('target_modules', [
+                "q_proj", "k_proj", "v_proj", "o_proj",
+                "gate_proj", "up_proj", "down_proj"
+            ]),
+            lora_alpha=lora_config.get('lora_alpha', 16),
+            lora_dropout=lora_config.get('lora_dropout', 0.05),
+            bias=lora_config.get('bias', "none"),
+            use_gradient_checkpointing=self.training_config.get('gradient_checkpointing', 'unsloth'),
+            random_state=42,
+            use_rslora=lora_config.get('use_rslora', True),
+            loftq_config=lora_config.get('loftq_config', None),
+        )
+
     def wrap_with_classifier(self):
         """
         Wrap the loaded model with a classification head if needed.

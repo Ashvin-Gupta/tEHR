@@ -2,6 +2,9 @@ name: "lora_llm_linear_baseline"
 
 model:
   model_name: "unsloth/Qwen3-8B-Base-unsloth-bnb-4bit"
+  # For evaluation: load base from this path. Use model_name so we get base+LoRA structure
+  # (base loads from HF, then LoRA is applied). Classifier weights loaded from model_checkpoint.
+  pretrained_checkpoint: "unsloth/Qwen3-8B-Base-unsloth-bnb-4bit"
   max_length: 12000
   hidden_size: 4096
   num_labels: 2
