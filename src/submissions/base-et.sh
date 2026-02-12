@@ -1,6 +1,6 @@
 #!/bin/bash
 #$ -cwd                 
-#$ -pe smp 8
+#$ -pe smp 12
 #$ -l h_rt=1:0:0
 #$ -l h_vmem=4G
 #$ -j n
