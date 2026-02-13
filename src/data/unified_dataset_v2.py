@@ -314,11 +314,24 @@ class UnifiedEHRDataset(Dataset):
         # Apply time-based cutoff if needed
         token_ids = self._apply_time_cutoff(token_ids, timestamps, subject_id, label)
         
-        # Convert to string codes
-        string_codes = [self.id_to_token_map.get(tid, "") for tid in token_ids]
+        # Filter out tokens containing "cancer" (case-insensitive) - do this on token IDs
+        filtered_token_ids = []
+        for tid in token_ids:
+            token_str = str(self.id_to_token_map.get(tid, ""))
+            if 'cancer' not in token_str.lower():
+                filtered_token_ids.append(tid)
+        token_ids = filtered_token_ids
         
-        # Filter out tokens containing "cancer" (case-insensitive)
-        string_codes = [code for code in string_codes if 'cancer' not in str(code).lower()]
+        # Return format based on self.format
+        if self.format == 'tokens':
+            # For tokens format, return token IDs directly (after filtering)
+            return {
+                "tokens": token_ids,
+                "label": torch.tensor(label, dtype=torch.long)
+            }
+        
+        # For text format, continue with translation
+        string_codes = [self.id_to_token_map.get(tid, "") for tid in token_ids]
         
         # Translate to natural language
         translated_phrases = self._combine_measurement_tokens(string_codes)

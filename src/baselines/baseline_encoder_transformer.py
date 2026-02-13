@@ -73,26 +73,56 @@ class FilteredTokenDataset(Dataset):
         
         # --- 2. FILTER SEQUENCES USING BLACKLIST ---
         print(f"Filtering {len(base_dataset)} samples...")
+        samples_without_tokens = 0
+        samples_filtered_empty = 0
+        
         for i in tqdm(range(len(base_dataset)), desc="Filtering"):
             sample = base_dataset[i]
             
             # If sample is None, UnifiedEHRDataset couldn't find a label for this patient
-            if sample is not None and 'tokens' in sample:
-                token_ids = sample['tokens']
+            if sample is None:
+                continue
                 
-                # Fast filtering using the ID blacklist
-                # This keeps only IDs NOT in our exclude set
-                filtered_ids = [tid for tid in token_ids.tolist() if tid not in exclude_ids]
-                
-                # Re-assign the filtered IDs
-                sample['tokens'] = filtered_ids
-                
-                # Only keep the sample if it still has events left
-                if len(filtered_ids) > 0:
-                    self.filtered_samples.append(sample)
+            if 'tokens' not in sample:
+                samples_without_tokens += 1
+                if samples_without_tokens <= 5:  # Print first few for debugging
+                    print(f"  Warning: Sample {i} doesn't have 'tokens' key. Keys: {sample.keys()}")
+                continue
+            
+            token_ids = sample['tokens']
+            
+            # Handle both list and tensor formats
+            if hasattr(token_ids, 'tolist'):
+                token_ids = token_ids.tolist()
+            elif not isinstance(token_ids, list):
+                token_ids = list(token_ids)
+            
+            # Fast filtering using the ID blacklist
+            # This keeps only IDs NOT in our exclude set
+            filtered_ids = [tid for tid in token_ids if tid not in exclude_ids]
+            
+            # Re-assign the filtered IDs
+            sample['tokens'] = filtered_ids
+            
+            # Only keep the sample if it still has events left
+            if len(filtered_ids) > 0:
+                self.filtered_samples.append(sample)
+            else:
+                samples_filtered_empty += 1
+        
+        print(f"  - Excluded {len(exclude_ids):,} token IDs from vocabulary")
+        print(f"  - Kept {len(self.filtered_samples):,} samples after filtering")
+        if samples_without_tokens > 0:
+            print(f"  - Warning: {samples_without_tokens} samples didn't have 'tokens' key")
+        if samples_filtered_empty > 0:
+            print(f"  - Warning: {samples_filtered_empty} samples were filtered to empty sequences")
         
         if len(self.filtered_samples) == 0:
-            print("WARNING: All samples were filtered out or skipped due to missing labels!")
+            print("ERROR: All samples were filtered out or skipped!")
+            print("  This could mean:")
+            print("    1. All tokens were excluded by the filter")
+            print("    2. Samples don't have 'tokens' key (check dataset format)")
+            print("    3. Dataset is empty or has no valid labels")
     
     def __len__(self):
         return len(self.filtered_samples)

@@ -213,13 +213,24 @@ class UnifiedEHRDataset(Dataset):
                         truncated_ids.append(token_ids[i])
                 token_ids = truncated_ids
         
+        # Filter out tokens containing "cancer" (case-insensitive) - do this on token IDs
+        filtered_token_ids = []
+        for tid in token_ids:
+            token_str = str(self.id_to_token_map.get(tid, ""))
+            if 'cancer' not in token_str.lower():
+                filtered_token_ids.append(tid)
+        token_ids = filtered_token_ids
         
-   
-      
+        # Return format based on self.format
+        if self.format == 'tokens':
+            # For tokens format, return token IDs directly (after filtering)
+            return {
+                "tokens": token_ids,
+                "label": torch.tensor(label, dtype=torch.long)
+            }
+        
+        # For text format, continue with translation
         string_codes = [self.id_to_token_map.get(tid, "") for tid in token_ids]
-        
-        # Filter out tokens containing "cancer" (case-insensitive)
-        string_codes = [code for code in string_codes if 'cancer' not in str(code).lower()]
         
         translated_phrases = []
 
@@ -296,10 +307,27 @@ class UnifiedEHRDataset(Dataset):
                 
                 i += 1 
         
-        narrative = "".join(translated_phrases)
-        
-        return {
-            "text": narrative,
-            "label": torch.tensor(label, dtype=torch.long)
-        }
+        # Return format based on self.format
+        if self.format == 'tokens':
+            # For tokens format, return token IDs directly (after filtering)
+            # Convert filtered string_codes back to token IDs
+            filtered_token_ids = []
+            for code in string_codes:
+                # Find the token ID for this code
+                for tid, token_str in self.id_to_token_map.items():
+                    if str(token_str) == str(code):
+                        filtered_token_ids.append(tid)
+                        break
+            
+            return {
+                "tokens": filtered_token_ids,
+                "label": torch.tensor(label, dtype=torch.long)
+            }
+        else:
+            # For text format, return translated narrative
+            narrative = "".join(translated_phrases)
+            return {
+                "text": narrative,
+                "label": torch.tensor(label, dtype=torch.long)
+            }
        
