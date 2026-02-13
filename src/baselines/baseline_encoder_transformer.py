@@ -268,6 +268,7 @@ class EncoderTransformerBaseline:
         self.id_to_token = None
         # max_seq_length will be set when model is created
         self.max_seq_length = None
+        self._label_conversion_warned = False  # Track if we've warned about label conversion
     
     def build_vocabulary(self, datasets: Dict[str, Dataset]):
         """
@@ -362,7 +363,17 @@ class EncoderTransformerBaseline:
                 label = sample['label']
                 if hasattr(label, 'item'):
                     label = label.item()
-                labels_list.append(label)
+                
+                # Convert multi-class labels to binary: 0 = Control, >0 = Cancer (1)
+                # The dataset returns multi-class labels (0-19), but model expects binary (0 or 1)
+                binary_label = 0 if label == 0 else 1
+                
+                # Debug: print first conversion example
+                if not self._label_conversion_warned and len(labels_list) == 0:
+                    print(f"  Converting labels: multi-class label {label} -> binary label {binary_label}")
+                    self._label_conversion_warned = True
+                
+                labels_list.append(binary_label)
         
         # Ensure max_len doesn't exceed max_seq_length
         max_len = min(max_len, max_seq_length)
@@ -378,6 +389,11 @@ class EncoderTransformerBaseline:
             attention_mask[i, :seq_len] = 1
         
         labels = torch.tensor(labels_list, dtype=torch.long)
+        
+        # Verify binary labels
+        unique_labels = torch.unique(labels)
+        if len(unique_labels) > 2 or not all(l.item() in [0, 1] for l in unique_labels):
+            print(f"Warning: Expected binary labels [0, 1], got {unique_labels.tolist()}")
         
         return {
             'token_ids': padded_ids,
