@@ -217,6 +217,10 @@ class UnifiedEHRDataset(Dataset):
    
       
         string_codes = [self.id_to_token_map.get(tid, "") for tid in token_ids]
+        
+        # Filter out tokens containing "cancer" (case-insensitive)
+        string_codes = [code for code in string_codes if 'cancer' not in str(code).lower()]
+        
         translated_phrases = []
 
         SPLIT_TOKEN = " <HEADER_SPLIT> "

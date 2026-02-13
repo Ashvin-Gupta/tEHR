@@ -146,6 +146,9 @@ class XGBoostBaseline:
             # Convert token IDs to strings
             token_strings = [dataset.id_to_token_map.get(tid, "") for tid in token_ids]
             
+            # Filter out tokens containing "cancer" (case-insensitive)
+            token_strings = [token for token in token_strings if 'cancer' not in str(token).lower()]
+            
             # Create sample dict with tokens
             sample = {'tokens': token_strings}
             

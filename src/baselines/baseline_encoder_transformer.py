@@ -52,7 +52,7 @@ class FilteredTokenDataset(Dataset):
         id_to_token = getattr(base_dataset, 'id_to_token_map', {})
         exclude_ids = set()
         
-        print("Identifying tokens to exclude (numbers and time intervals)...")
+        print("Identifying tokens to exclude (numbers, time intervals, and cancer-related tokens)...")
         for tid, token_str in id_to_token.items():
             token_str = str(token_str)
             
@@ -62,7 +62,10 @@ class FilteredTokenDataset(Dataset):
             # Identify time intervals: e.g., "<time_interval_30>"
             is_time = token_str.startswith('<time_interval_')
             
-            if is_numeric or is_time:
+            # Identify cancer-related tokens
+            is_cancer = 'cancer' in token_str.lower()
+            
+            if is_numeric or is_time or is_cancer:
                 exclude_ids.add(tid)
         
         # --- 2. FILTER SEQUENCES USING BLACKLIST ---

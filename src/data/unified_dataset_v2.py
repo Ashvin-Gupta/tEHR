@@ -317,6 +317,9 @@ class UnifiedEHRDataset(Dataset):
         # Convert to string codes
         string_codes = [self.id_to_token_map.get(tid, "") for tid in token_ids]
         
+        # Filter out tokens containing "cancer" (case-insensitive)
+        string_codes = [code for code in string_codes if 'cancer' not in str(code).lower()]
+        
         # Translate to natural language
         translated_phrases = self._combine_measurement_tokens(string_codes)
         narrative = "".join(translated_phrases)

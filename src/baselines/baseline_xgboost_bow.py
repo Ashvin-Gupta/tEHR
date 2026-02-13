@@ -204,7 +204,8 @@ class XGBoostBOWBaseline:
                 # Convert token IDs to strings and filter
                 for token_id in token_ids:
                     token_str = str(dataset.id_to_token_map.get(token_id, ""))
-                    if token_str and should_include_token(token_str):
+                    # Filter out tokens containing "cancer" and apply other filters
+                    if token_str and 'cancer' not in token_str.lower() and should_include_token(token_str):
                         all_tokens.add(token_str)
         
         # Create vocabulary mapping
@@ -288,6 +289,9 @@ class XGBoostBOWBaseline:
             
             # Convert token IDs to strings
             token_strings = [dataset.id_to_token_map.get(tid, "") for tid in token_ids]
+            
+            # Filter out tokens containing "cancer" (case-insensitive)
+            token_strings = [token for token in token_strings if 'cancer' not in str(token).lower()]
             
             # Create sample dict with tokens
             sample = {'tokens': token_strings}
