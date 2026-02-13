@@ -9,10 +9,10 @@ model:
 wandb:
   enabled: true
   project: "Pretrain-Qwen3-8B-Pancreas-classification"
-  run_name: "baseline-qwen3-embedding"
+  run_name: "baseline-qwen3-embedding-6-month"
 
 training:
-  output_dir: "/data/scratch/qc25022/pancreas_MEDS/experiments/baselines/qwen3_embedding"
+  output_dir: "/data/scratch/qc25022/pancreas_MEDS/experiments/baselines/qwen3_embedding_6_month"
   overwrite_output_dir: true
   epochs: 3
   batch_size: 4
@@ -38,7 +38,6 @@ data:
   lab_lookup_filepath: "/data/home/qc25022/TextCancEHR2/src/resources/LabLookUP.csv"
   region_lookup_filepath: "/data/home/qc25022/TextCancEHR2/src/resources/RegionLookUp.csv"
   time_lookup_filepath: "/data/home/qc25022/TextCancEHR2/src/resources/TimeLookUp.csv"
-  max_length: 8192
-  handle_long_sequences: "truncate"
+  max_length: 16000
+  handle_long_sequences: "warn"
   sort_by_length: true
-  data_type: "binned"
