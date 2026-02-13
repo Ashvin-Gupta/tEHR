@@ -2,6 +2,21 @@
 Baseline 6b: XGBoost Classifier with Bag-of-Words Features
 
 Uses each unique token as a feature (bag-of-words approach) instead of aggregated counts.
+
+This implementation filters tokens to include only:
+- Medical events (MEDICAL//...)
+- Lab test names (LAB//...) - without their numeric values
+- Measurement codes (MEASUREMENT//...)
+- Demographics (AGE, GENDER//..., ETHNICITY//..., REGION//...)
+- Lifestyle codes (LIFESTYLE//...)
+- Special tokens (<start>, <end>, <unknown>, MEDS_BIRTH)
+
+Excludes:
+- Time intervals (<time_interval_...>)
+- Numeric values
+- Units (e.g., "mmol/L", "kg", "%")
+- Lab value categories (low, normal, high, etc.)
+- Quantile values (Q1, Q2, Q3, Q4)
 """
 import os
 import numpy as np
@@ -15,12 +30,105 @@ from src.baselines.utils import load_baseline_config, setup_output_dir, load_dat
 from src.evaluations.baseline_metrics import compute_baseline_metrics, plot_all_curves, save_results, print_results
 
 
+def should_include_token(token_str: str) -> bool:
+    """
+    Check if a token should be included in the bag-of-words features.
+    
+    Includes:
+    - Medical events (MEDICAL//...)
+    - Lab test names (LAB//...) - but not their values
+    - Measurement codes (MEASUREMENT//...)
+    - Demographics (AGE, GENDER//..., ETHNICITY//..., REGION//...)
+    - Lifestyle (LIFESTYLE//...)
+    - Special tokens (<start>, <end>, <unknown>, MEDS_BIRTH)
+    
+    Excludes:
+    - Time intervals (<time_interval_...>)
+    - Numeric values (pure numbers)
+    - Units (short strings that don't match code patterns)
+    - Lab value categories (low, normal, high, very low, very high)
+    - Quantile values (Q1, Q2, Q3, Q4)
+    
+    Args:
+        token_str: Token string to check
+    
+    Returns:
+        True if token should be included, False otherwise
+    """
+    if not isinstance(token_str, str) or not token_str:
+        return False
+    
+    token_upper = token_str.upper()
+    token_lower = token_str.lower()
+    
+    # Exclude time intervals
+    if token_str.startswith('<time_interval_'):
+        return False
+    
+    # Exclude numeric values (pure numbers, including negative and decimal)
+    if token_str.replace('.', '', 1).replace('-', '', 1).isdigit():
+        return False
+    
+    # Exclude quantile values (Q1, Q2, Q3, Q4)
+    if token_str.startswith('Q') and len(token_str) <= 4 and token_str[1:].isdigit():
+        return False
+    
+    # Exclude lab value categories
+    if token_lower in ['low', 'normal', 'high', 'very low', 'very high']:
+        return False
+    
+    # Include medical codes
+    if token_upper.startswith('MEDICAL//'):
+        return True
+    
+    # Include lab test names (but not their values - values are numeric and already excluded above)
+    if token_upper.startswith('LAB//'):
+        return True
+    
+    # Include measurement codes
+    if token_upper.startswith('MEASUREMENT//'):
+        return True
+    
+    # Include demographics
+    if token_upper.startswith(('AGE:', 'AGE', 'GENDER//', 'ETHNICITY//', 'REGION//')):
+        return True
+    
+    # Include lifestyle
+    if token_upper.startswith('LIFESTYLE//'):
+        return True
+    
+    # Include special tokens
+    if token_str in ['<start>', '<end>', '<unknown>', 'MEDS_BIRTH']:
+        return True
+    
+    # Exclude units - tokens that are short strings with unit-like characters
+    # but don't match any known code pattern
+    # Common units: "mmol/L", "mg/dL", "kg", "cm", "%", etc.
+    if len(token_str) <= 20:
+        # Check if it contains unit-like characters but isn't a code
+        has_unit_chars = any(char in token_str for char in ['/', '%', '°', 'µ', 'μ'])
+        # Or if it's a very short string (1-5 chars) that's all lowercase/uppercase letters
+        is_short_alpha = len(token_str) <= 5 and token_str.replace(' ', '').isalpha()
+        
+        # If it doesn't match any code pattern and looks like a unit, exclude it
+        if (has_unit_chars or is_short_alpha) and not token_upper.startswith((
+            '<', 'MEDICAL', 'LAB', 'MEASUREMENT', 'AGE', 'GENDER', 
+            'ETHNICITY', 'REGION', 'LIFESTYLE'
+        )):
+            return False
+    
+    # By default, exclude unknown tokens to be conservative
+    # Only include tokens that explicitly match known patterns
+    return False
+
+
 def extract_bow_features(patient_record: Dict, token_to_idx: Dict[str, int]) -> np.ndarray:
     """
     Extract bag-of-words features from patient record.
     
     Creates a feature vector where each position corresponds to a unique token,
     and the value is the count of that token in the patient's record.
+    Only includes tokens that pass the should_include_token filter.
     
     Args:
         patient_record: Patient record dictionary with 'tokens' key
@@ -31,8 +139,9 @@ def extract_bow_features(patient_record: Dict, token_to_idx: Dict[str, int]) -> 
     """
     tokens = patient_record.get('tokens', [])
     
-    # Count token occurrences
-    token_counts = Counter(str(token) for token in tokens)
+    # Filter tokens and count occurrences
+    filtered_tokens = [str(token) for token in tokens if should_include_token(str(token))]
+    token_counts = Counter(filtered_tokens)
     
     # Create feature vector
     feature_vector = np.zeros(len(token_to_idx), dtype=np.float32)
@@ -46,6 +155,9 @@ def extract_bow_features(patient_record: Dict, token_to_idx: Dict[str, int]) -> 
 class XGBoostBOWBaseline:
     """
     XGBoost baseline using bag-of-words token features.
+    
+    Only includes medical events, lab test names (without values), demographics,
+    and lifestyle tokens. Excludes time, units, numbers, and lab values.
     """
     
     def __init__(self, config: Dict[str, Any]):
@@ -82,17 +194,17 @@ class XGBoostBOWBaseline:
         
         all_tokens = set()
         
-        # Collect all unique tokens
+        # Collect all unique tokens (filtered to exclude time, units, numbers, lab values)
         for split_name, dataset in datasets.items():
             print(f"  - Processing {split_name} split...")
             for i in tqdm(range(len(dataset.patient_records)), desc=f"Collecting tokens from {split_name}"):
                 patient_record = dataset.patient_records[i]
                 token_ids = patient_record.get('tokens', [])
                 
-                # Convert token IDs to strings
+                # Convert token IDs to strings and filter
                 for token_id in token_ids:
                     token_str = str(dataset.id_to_token_map.get(token_id, ""))
-                    if token_str:  # Skip empty tokens
+                    if token_str and should_include_token(token_str):
                         all_tokens.add(token_str)
         
         # Create vocabulary mapping
@@ -102,7 +214,21 @@ class XGBoostBOWBaseline:
         self.token_to_idx = {token: idx for idx, token in enumerate(sorted_tokens)}
         self.idx_to_token = {idx: token for token, idx in self.token_to_idx.items()}
         
-        print(f"  - Vocabulary size: {self.vocab_size:,} unique tokens")
+        print(f"  - Vocabulary size: {self.vocab_size:,} unique tokens (filtered: medical events, lab test names, demographics only)")
+        
+        # Print some statistics about what was included
+        included_types = {
+            'medical': sum(1 for t in sorted_tokens if t.upper().startswith('MEDICAL//')),
+            'lab': sum(1 for t in sorted_tokens if t.upper().startswith('LAB//')),
+            'measurement': sum(1 for t in sorted_tokens if t.upper().startswith('MEASUREMENT//')),
+            'demographic': sum(1 for t in sorted_tokens if t.upper().startswith(('AGE', 'GENDER//', 'ETHNICITY//', 'REGION//'))),
+            'lifestyle': sum(1 for t in sorted_tokens if t.upper().startswith('LIFESTYLE//')),
+            'special': sum(1 for t in sorted_tokens if t in ['<start>', '<end>', '<unknown>', 'MEDS_BIRTH'])
+        }
+        print(f"  - Token breakdown:")
+        for token_type, count in included_types.items():
+            if count > 0:
+                print(f"    {token_type}: {count:,}")
         
         return self.token_to_idx
     
