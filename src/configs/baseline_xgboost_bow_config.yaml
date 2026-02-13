@@ -12,14 +12,14 @@ model:
   reg_lambda: 1
 
 training:
-  output_dir: "/data/scratch/qc25022/pancreas_MEDS/experiments/baselines/xgboost_bow-3"
+  output_dir: "/data/scratch/qc25022/pancreas_MEDS/experiments/baselines/xgboost_bow-1"
   overwrite_output_dir: true
   early_stopping_rounds: 10
   verbose: true
   n_jobs: -1
 
 data:
-  cutoff_months: 3
+  cutoff_months: 1
   data_dir: "/data/scratch/qc25022/pancreas/tokenised_data_pancreas_MEDS/cprd_upgi"
   vocab_filepath: "/data/scratch/qc25022/pancreas/tokenised_data_pancreas_MEDS/cprd_upgi/vocab.csv"
   labels_filepath: "/data/home/qc25022/cancer-extraction-pipeline/output/pancreas_MEDS/subject_information.csv"
