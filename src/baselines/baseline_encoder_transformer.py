@@ -1,7 +1,9 @@
 """
 Baseline 4: Encoder Transformer
 
-Uses transformer encoder on filtered EHR tokens (removes quantile and time_interval tokens).
+Uses transformer encoder on filtered EHR tokens. Uses the same filtering logic as XGBoost BOW:
+- Includes: Medical events, lab test names (without values), measurement codes, demographics, lifestyle, special tokens
+- Excludes: Time intervals, numeric values, units, lab value categories, quantile values, cancer-related tokens
 """
 import os
 import torch
@@ -13,35 +15,41 @@ from tqdm import tqdm
 
 from src.baselines.utils import load_baseline_config, setup_output_dir, load_datasets, get_labels_from_dataset
 from src.evaluations.baseline_metrics import compute_baseline_metrics, plot_all_curves, save_results, print_results
+from src.baselines.baseline_xgboost_bow import should_include_token
 
 
 def filter_tokens(token_list: List[str]) -> List[str]:
     """
-    Filter out time_interval tokens and raw numeric value tokens.
+    Filter out tokens using the same logic as XGBoost BOW baseline.
+    Uses should_include_token function to filter tokens.
     """
     filtered = []
     for token in token_list:
         token_str = str(token)
-        
-        # 1. Remove time_interval tokens
-        if token_str.startswith('<time_interval_'):
-            continue
-            
-        # 2. Remove numeric tokens (raw values like '12.5')
-        if token_str.replace('.', '', 1).isdigit():
-            continue
-            
-        # 3. Remove legacy markers if they exist
-        if token_str in ['Q1', 'Q2', 'Q3', 'Q4', '<unknown>']:
-            continue
-
-        filtered.append(token_str)
+        if should_include_token(token_str):
+            filtered.append(token_str)
     return filtered
 
 
 class FilteredTokenDataset(Dataset):
     """
-    Dataset wrapper that filters tokens using an ID blacklist.
+    Dataset wrapper that filters tokens using the same logic as XGBoost BOW baseline.
+    
+    Uses should_include_token function to filter out:
+    - Time intervals
+    - Numeric values
+    - Units
+    - Lab value categories
+    - Quantile values
+    - Cancer-related tokens
+    
+    Keeps only:
+    - Medical events (MEDICAL//...)
+    - Lab test names (LAB//...) - without values
+    - Measurement codes (MEASUREMENT//...)
+    - Demographics (AGE, GENDER//..., ETHNICITY//..., REGION//...)
+    - Lifestyle (LIFESTYLE//...)
+    - Special tokens (<start>, <end>, <unknown>, MEDS_BIRTH)
     """
     def __init__(self, base_dataset):
         self.base_dataset = base_dataset
@@ -52,20 +60,15 @@ class FilteredTokenDataset(Dataset):
         id_to_token = getattr(base_dataset, 'id_to_token_map', {})
         exclude_ids = set()
         
-        print("Identifying tokens to exclude (numbers, time intervals, and cancer-related tokens)...")
+        print("Identifying tokens to exclude using XGBoost BOW filtering logic...")
+        print("  (Excluding: time, units, numbers, lab values, quantiles, cancer-related tokens)")
         for tid, token_str in id_to_token.items():
             token_str = str(token_str)
             
-            # Identify numbers: e.g., "12.5" or "45"
-            is_numeric = token_str.replace('.', '', 1).isdigit()
-            
-            # Identify time intervals: e.g., "<time_interval_30>"
-            is_time = token_str.startswith('<time_interval_')
-            
-            # Identify cancer-related tokens
-            is_cancer = 'cancer' in token_str.lower()
-            
-            if is_numeric or is_time or is_cancer:
+            # Use the same filtering logic as XGBoost BOW
+            # Exclude tokens that don't pass should_include_token check
+            # Also exclude cancer-related tokens explicitly
+            if not should_include_token(token_str) or 'cancer' in token_str.lower():
                 exclude_ids.add(tid)
         
         # --- 2. FILTER SEQUENCES USING BLACKLIST ---
