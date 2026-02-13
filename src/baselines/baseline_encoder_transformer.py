@@ -204,11 +204,19 @@ class EHRTransformerEncoder(nn.Module):
         """
         batch_size, seq_len = token_ids.shape
         
+        # Truncate if sequence exceeds max_seq_length (safety check)
+        if seq_len > self.max_seq_length:
+            token_ids = token_ids[:, :self.max_seq_length]
+            if attention_mask is not None:
+                attention_mask = attention_mask[:, :self.max_seq_length]
+            seq_len = self.max_seq_length
+        
         # Embeddings
         x = self.token_embedding(token_ids)  # [batch, seq_len, hidden_dim]
         
-        # Add positional encoding
-        x = x + self.pos_encoding[:seq_len, :].unsqueeze(0)
+        # Add positional encoding (truncate pos_encoding if needed)
+        pos_len = min(seq_len, self.max_seq_length)
+        x = x + self.pos_encoding[:pos_len, :].unsqueeze(0)
         x = self.dropout(x)
         
         # Create attention mask (invert: 1 = attend, 0 = ignore)
@@ -258,6 +266,8 @@ class EncoderTransformerBaseline:
         self.vocab = None
         self.token_to_id = None
         self.id_to_token = None
+        # max_seq_length will be set when model is created
+        self.max_seq_length = None
     
     def build_vocabulary(self, datasets: Dict[str, Dataset]):
         """
@@ -330,6 +340,9 @@ class EncoderTransformerBaseline:
         Returns:
             Batched tensors
         """
+        # Get max_seq_length (default to 512 if not set)
+        max_seq_length = self.max_seq_length if self.max_seq_length is not None else 512
+        
         token_ids_list = []
         labels_list = []
         max_len = 0
@@ -338,6 +351,11 @@ class EncoderTransformerBaseline:
             if sample is not None:
                 tokens = sample.get('tokens', [])
                 token_ids = self.tokenize_sequence(tokens)
+                
+                # Truncate to max_seq_length if needed
+                if len(token_ids) > max_seq_length:
+                    token_ids = token_ids[:max_seq_length]
+                
                 token_ids_list.append(token_ids)
                 max_len = max(max_len, len(token_ids))
                 
@@ -346,14 +364,17 @@ class EncoderTransformerBaseline:
                     label = label.item()
                 labels_list.append(label)
         
+        # Ensure max_len doesn't exceed max_seq_length
+        max_len = min(max_len, max_seq_length)
+        
         # Pad sequences
         batch_size = len(token_ids_list)
         padded_ids = torch.zeros(batch_size, max_len, dtype=torch.long)
         attention_mask = torch.zeros(batch_size, max_len, dtype=torch.long)
         
         for i, token_ids in enumerate(token_ids_list):
-            seq_len = len(token_ids)
-            padded_ids[i, :seq_len] = token_ids
+            seq_len = min(len(token_ids), max_len)
+            padded_ids[i, :seq_len] = token_ids[:seq_len]
             attention_mask[i, :seq_len] = 1
         
         labels = torch.tensor(labels_list, dtype=torch.long)
@@ -378,6 +399,9 @@ class EncoderTransformerBaseline:
         dropout = float(self.model_config.get('dropout', 0.1))
         max_seq_length = int(self.model_config.get('max_seq_length', 512))
         num_labels = int(self.model_config.get('num_labels', 2))
+        
+        # Store max_seq_length for use in collate_fn
+        self.max_seq_length = max_seq_length
         
         self.model = EHRTransformerEncoder(
             vocab_size=vocab_size,

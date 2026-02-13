@@ -28,5 +28,4 @@ data:
   region_lookup_filepath: "/data/home/qc25022/TextCancEHR2/src/resources/RegionLookUp.csv"
   time_lookup_filepath: "/data/home/qc25022/TextCancEHR2/src/resources/TimeLookUp.csv"
   max_length: 512
-  data_type: "binned"
 
