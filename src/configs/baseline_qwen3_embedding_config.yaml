@@ -6,6 +6,25 @@ model:
   num_labels: 2
   head_dropout: 0.1
 
+  # Option 1: frozen embedding + trainable linear head only
+  # use_lora: false
+
+  # Option 2: frozen embedding + trainable LoRA + trainable linear head (set use_lora: true)
+  use_lora: true
+  lora:
+    r: 16
+    lora_alpha: 16
+    lora_dropout: 0.05
+    bias: "none"
+    target_modules:
+      - q_proj
+      - k_proj
+      - v_proj
+      - o_proj
+      - gate_proj
+      - up_proj
+      - down_proj
+
 wandb:
   enabled: true
   project: "Pretrain-Qwen3-8B-Pancreas-classification"
@@ -21,6 +40,7 @@ training:
   weight_decay: 0.01
   warmup_steps: 100
   gradient_accumulation_steps: 1
+  gradient_checkpointing: true   # Saves memory when base is frozen (fewer activations stored)
   fp16: false
   bf16: true
   logging_steps: 50

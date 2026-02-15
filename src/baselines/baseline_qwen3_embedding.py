@@ -9,6 +9,7 @@ import torch
 import numpy as np
 from typing import Dict, Any
 from transformers import AutoModel, AutoTokenizer, TrainingArguments, Trainer
+from peft import LoraConfig, get_peft_model, TaskType
 import wandb
 
 from src.baselines.utils import load_baseline_config, setup_output_dir, load_datasets
@@ -78,21 +79,62 @@ class Qwen3EmbeddingBaseline:
         # Load base embedding model
         base_model = AutoModel.from_pretrained(model_name)
 
-        # Wrap with classification head
+        # Two options only:
+        # 1) use_lora: false → frozen embedding + trainable linear head
+        # 2) use_lora: true  → frozen embedding + trainable LoRA adapters + trainable linear head
+        use_lora = self.model_config.get("use_lora", False)
+        if use_lora:
+            lora_config = self.model_config.get("lora", {})
+            target_modules = lora_config.get("target_modules", [
+                "q_proj", "k_proj", "v_proj", "o_proj",
+                "gate_proj", "up_proj", "down_proj",
+            ])
+            r = lora_config.get("r", 16)
+            lora_alpha = lora_config.get("lora_alpha", 16)
+            lora_dropout = lora_config.get("lora_dropout", 0.05)
+            bias = lora_config.get("bias", "none")
+            print(f"  - Mode: frozen embedding + trainable LoRA + trainable linear head")
+            print(f"  - LoRA: r={r}, alpha={lora_alpha}, dropout={lora_dropout}, target_modules={target_modules}")
+            peft_config = LoraConfig(
+                r=r,
+                target_modules=target_modules,
+                lora_alpha=lora_alpha,
+                lora_dropout=lora_dropout,
+                bias=bias,
+                task_type=TaskType.FEATURE_EXTRACTION,
+                inference_mode=False,
+            )
+            base_model = get_peft_model(base_model, peft_config)
+            print("  - LoRA adapters applied")
+            trainable_param_keywords = ["lora_"]
+        else:
+            print(f"  - Mode: frozen embedding + trainable linear head only")
+            trainable_param_keywords = []
+
+        # Always freeze base; only head (and LoRA if use_lora) stay trainable
         self.model = Qwen3EmbeddingClassifier(
             base_model=base_model,
             hidden_size=hidden_size,
             num_labels=num_labels,
             head_dropout=head_dropout,
+            freeze_base=True,
+            trainable_param_keywords=trainable_param_keywords,
         )
+
+        # Enable gradient checkpointing to reduce memory (base model stays frozen; saves activation memory)
+        if self.training_config.get("gradient_checkpointing", True):
+            self.model.gradient_checkpointing_enable(
+                gradient_checkpointing_kwargs={"use_reentrant": False}
+            )
 
         print(f"  - Model loaded successfully")
         print(f"  - Vocab size: {len(self.tokenizer)}")
 
         total_params = sum(p.numel() for p in self.model.parameters())
         trainable_params = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
+        pct = 100.0 * trainable_params / total_params if total_params else 0
         print(f"  - Total parameters: {total_params:,}")
-        print(f"  - Trainable parameters: {trainable_params:,}")
+        print(f"  - Trainable parameters: {trainable_params:,} / {total_params:,} ({pct:.2f}%)")
 
     def create_trainer(self, train_dataset, val_dataset, collator, run_name: str):
         """Create HuggingFace Trainer."""
@@ -113,6 +155,8 @@ class Qwen3EmbeddingBaseline:
             gradient_accumulation_steps=int(self.training_config.get('gradient_accumulation_steps', 2)),
             fp16=bool(self.training_config.get('fp16', False)),
             bf16=bool(self.training_config.get('bf16', True)),
+            gradient_checkpointing=bool(self.training_config.get('gradient_checkpointing', True)),
+            gradient_checkpointing_kwargs={"use_reentrant": False},
             logging_steps=int(self.training_config.get('logging_steps', 50)),
             eval_steps=int(self.training_config.get('eval_steps', 250)),
             save_steps=int(self.training_config.get('save_steps', 500)),

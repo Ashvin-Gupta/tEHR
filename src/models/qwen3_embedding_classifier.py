@@ -3,11 +3,12 @@ Qwen3-Embedding based classifier.
 
 Wraps Qwen3-Embedding-8B with a classification head for EHR-based prediction.
 Uses last-token pooling (as recommended for Qwen3-Embedding) and L2-normalized embeddings.
+Supports freezing the base model and training only the head (and optional LoRA adapters).
 """
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from typing import Dict, Optional
+from typing import Dict, Optional, List
 from torch import Tensor
 
 
@@ -52,6 +53,8 @@ class Qwen3EmbeddingClassifier(nn.Module):
         hidden_size: Embedding dimension (4096 for Qwen3-Embedding-8B).
         num_labels: Number of output classes (2 for binary).
         head_dropout: Dropout before classification head.
+        freeze_base: If True, freeze all base model parameters; only head (and LoRA if any) trainable.
+        trainable_param_keywords: Parameter name substrings to keep trainable (e.g. ["lora_"] for LoRA).
     """
     
     def __init__(
@@ -60,16 +63,46 @@ class Qwen3EmbeddingClassifier(nn.Module):
         hidden_size: int = 4096,
         num_labels: int = 2,
         head_dropout: float = 0.1,
+        freeze_base: bool = True,
+        trainable_param_keywords: Optional[List[str]] = None,
     ):
         super().__init__()
         self.base_model = base_model
         self.hidden_size = hidden_size
         self.num_labels = num_labels
+        self.trainable_param_keywords = trainable_param_keywords or []
+
+        if freeze_base:
+            for param in self.base_model.parameters():
+                param.requires_grad = False
+            if self.trainable_param_keywords:
+                reenabled = 0
+                for name, param in self.base_model.named_parameters():
+                    if any(kw in name for kw in self.trainable_param_keywords):
+                        param.requires_grad = True
+                        reenabled += 1
+                if reenabled:
+                    print(f"  - Re-enabled {reenabled} parameters matching: {self.trainable_param_keywords}")
+            else:
+                print("  - Froze all base model parameters (only classification head trainable)")
         
         self.classifier = nn.Sequential(
             nn.Dropout(head_dropout),
             nn.Linear(hidden_size, num_labels),
         )
+
+    def gradient_checkpointing_enable(self, gradient_checkpointing_kwargs=None):
+        """Enable gradient checkpointing on the base model to save memory."""
+        if hasattr(self.base_model, "gradient_checkpointing_enable"):
+            self.base_model.gradient_checkpointing_enable(
+                gradient_checkpointing_kwargs=gradient_checkpointing_kwargs or {}
+            )
+            print("  - Gradient checkpointing enabled for base model")
+
+    def gradient_checkpointing_disable(self):
+        """Disable gradient checkpointing."""
+        if hasattr(self.base_model, "gradient_checkpointing_disable"):
+            self.base_model.gradient_checkpointing_disable()
     
     def forward(
         self,
