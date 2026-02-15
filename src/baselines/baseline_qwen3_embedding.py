@@ -80,7 +80,7 @@ class Qwen3EmbeddingBaseline:
         base_model = AutoModel.from_pretrained(
             model_name, 
             torch_dtype=torch.bfloat16,
-            attn_implementation="flash_attention_2" # Optional: drastically reduces memory for long sequences
+            # attn_implementation="flash_attention_2" # Optional: drastically reduces memory for long sequences
         )
 
         # Two options only:
