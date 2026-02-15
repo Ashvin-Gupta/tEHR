@@ -77,7 +77,11 @@ class Qwen3EmbeddingBaseline:
             self.tokenizer.pad_token = self.tokenizer.eos_token
 
         # Load base embedding model
-        base_model = AutoModel.from_pretrained(model_name)
+        base_model = AutoModel.from_pretrained(
+            model_name, 
+            torch_dtype=torch.bfloat16,
+            attn_implementation="flash_attention_2" # Optional: drastically reduces memory for long sequences
+        )
 
         # Two options only:
         # 1) use_lora: false → frozen embedding + trainable linear head
