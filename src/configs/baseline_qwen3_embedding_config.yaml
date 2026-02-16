@@ -34,8 +34,8 @@ training:
   output_dir: "/data/scratch/qc25022/pancreas_MEDS/experiments/baselines/qwen3_embedding_6_month"
   overwrite_output_dir: true
   epochs: 1
-  batch_size: 4
-  eval_batch_size: 4
+  batch_size: 3
+  eval_batch_size: 3
   learning_rate: 1e-5
   weight_decay: 0.01
   warmup_steps: 100
