@@ -12,6 +12,7 @@ import numpy as np
 from typing import Dict, Any, List
 from torch.utils.data import Dataset, DataLoader
 from tqdm import tqdm
+from collections import Counter
 
 from src.baselines.utils import load_baseline_config, setup_output_dir, load_datasets, get_labels_from_dataset
 from src.evaluations.baseline_metrics import compute_baseline_metrics, plot_all_curves, save_results, print_results
@@ -281,9 +282,9 @@ class EncoderTransformerBaseline:
         print("Building vocabulary from datasets...")
         print("=" * 80)
         
-        all_tokens = set()
+        # Count token frequencies across all datasets
+        token_counter: Counter = Counter()
         
-        # Collect all unique tokens
         for split_name, dataset in datasets.items():
             print(f"  - Processing {split_name} split...")
             for i in tqdm(range(len(dataset)), desc=f"Collecting tokens from {split_name}"):
@@ -292,16 +293,28 @@ class EncoderTransformerBaseline:
                     tokens = sample['tokens']
                     for token in tokens:
                         if isinstance(token, (int, str)):
-                            all_tokens.add(str(token))
+                            token_str = str(token)
+                            token_counter[token_str] += 1
         
-        # Create vocabulary
-        all_tokens = sorted(list(all_tokens))
-        vocab_size = len(all_tokens) + 2  # +2 for PAD and UNK
+        # Report total unique tokens before truncation
+        num_unique_tokens = len(token_counter)
+        print(f"  - Total unique tokens observed: {num_unique_tokens:,}")
+        
+        # Keep only the top K most frequent tokens
+        max_vocab_tokens = 5000
+        most_common_tokens = token_counter.most_common(max_vocab_tokens)
+        kept_tokens = [tok for tok, _ in most_common_tokens]
+        
+        print(f"  - Keeping top {len(kept_tokens):,} most frequent tokens for vocabulary")
+        
+        # Create vocabulary from kept tokens only
+        kept_tokens = sorted(kept_tokens)
+        vocab_size = len(kept_tokens) + 2  # +2 for PAD and UNK
         
         self.token_to_id = {'<PAD>': 0, '<UNK>': 1}
         self.id_to_token = {0: '<PAD>', 1: '<UNK>'}
         
-        for i, token in enumerate(all_tokens, start=2):
+        for i, token in enumerate(kept_tokens, start=2):
             self.token_to_id[token] = i
             self.id_to_token[i] = token
         
@@ -311,8 +324,7 @@ class EncoderTransformerBaseline:
             'size': vocab_size
         }
         
-        print(f"  - Vocabulary size: {vocab_size:,}")
-        print(f"  - Unique tokens: {len(all_tokens):,}")
+        print(f"  - Final vocabulary size (including PAD/UNK): {vocab_size:,}")
     
     def tokenize_sequence(self, tokens: List) -> torch.Tensor:
         """
@@ -327,8 +339,16 @@ class EncoderTransformerBaseline:
         token_ids = []
         for token in tokens:
             token_str = str(token)
-            token_id = self.token_to_id.get(token_str, 1)  # 1 = UNK
-            token_ids.append(token_id)
+            # Only keep tokens that are in the top-K vocabulary.
+            # Tokens not in vocab are removed from the stream.
+            if token_str in self.token_to_id:
+                token_ids.append(self.token_to_id[token_str])
+        
+        # If all tokens were filtered out for this sequence, return a single PAD token
+        # so that downstream code always sees at least one token.
+        if len(token_ids) == 0:
+            token_ids = [self.token_to_id['<PAD>']]
+        
         return torch.tensor(token_ids, dtype=torch.long)
     
     def collate_fn(self, batch):
