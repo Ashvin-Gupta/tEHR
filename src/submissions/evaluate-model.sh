@@ -49,8 +49,8 @@ export PYTHONPATH="${BASE_DIR}:${PYTHONPATH}"
 #   --model_checkpoint /data/scratch/qc25022/pancreas_MEDS/experiments/lora-3-month-logistic-refactored/final_model
 
 python -m src.pipelines.evaluate_model \
-  --config_filepath src/configs/baseline_lora_llm_linear_config.yaml \
-  --model_checkpoint /data/scratch/qc25022/pancreas_MEDS/experiments/baselines/lora_llm_linear/checkpoints/checkpoint-11000
+  --config_filepath src/configs/baseline_qwen3_embedding_config.yaml \
+  --model_checkpoint //data/scratch/qc25022/pancreas_MEDS/experiments/baselines/qwen3_embedding_6_month/checkpoints/checkpoint-4000
 echo "Model evaluation finished."
 deactivate
 
