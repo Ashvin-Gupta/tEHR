@@ -1,7 +1,7 @@
 name: "llm_classifier"
 
 model:
-  pretrained_checkpoint: "/data/scratch/qc25022/pancreas/experiments/Pretrain-Qwen3-8B-Pancreas-Mistral/checkpoint-7000"
+  pretrained_checkpoint: "/data/scratch/qc25022/pancreas/experiments/Pretrain-Qwen3-8B-Pancreas-Mistral/checkpoint-9000"
   max_length: 12000           # Used when loading model 
   hidden_size: 4096
   num_labels: 2
