@@ -10,7 +10,7 @@ model:
 
 wandb:
   enabled: true
-  project: "Pretrain-Qwen3-1.7B-Pancreas"
+  project: "Pretrain-Qwen3-8B-Pancreas"
   run_name: "Pretrain-Qwen3-1.7B-Pancreas"
 
 lora:
