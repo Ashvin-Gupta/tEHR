@@ -6,6 +6,10 @@ model:
   num_labels: 2
   head_dropout: 0.1
 
+pretrain:
+  enabled: true
+
+
   # Option 1: frozen embedding + trainable linear head only
   # use_lora: false
 

@@ -1,8 +1,16 @@
 """
-Baseline: Qwen3-Embedding-8B with Linear Classifier
+Baseline: Qwen3-Embedding-8B with two-stage training.
 
-Uses Qwen3-Embedding-8B (text embedding model) as encoder with a linear classification head.
-Similar to ClinicalBERT but with the Qwen3 embedding model for better performance.
+Stage 1 (optional):
+    - LoRA adapters + Qwen3-Embedding
+    - Masked language modeling (packed EHR trajectories, no per-patient truncation)
+    - Full stream of patients, separated by EOS/separator tokens; multiple patients
+      can appear in a single sequence and a single patient can span multiple sequences.
+
+Stage 2:
+    - Frozen (or LoRA-only) Qwen3-Embedding encoder
+    - CLS-pooled embedding → linear head (logistic regression-style) for binary
+      classification.
 """
 import os
 import torch
@@ -11,12 +19,17 @@ from typing import Dict, Any
 from transformers import AutoModel, AutoTokenizer, TrainingArguments, Trainer
 from peft import LoraConfig, get_peft_model, TaskType
 import wandb
+from datasets import Dataset
 
 from src.baselines.utils import load_baseline_config, setup_output_dir, load_datasets
 from src.models.qwen3_embedding_classifier import Qwen3EmbeddingClassifier
+from src.models.qwen3_embedding_mlm import Qwen3EmbeddingMLMHead
 from src.data.classification_collator import ClassificationCollator
+from src.data.qwen3_mlm_collator import Qwen3MLMCollator
 from src.training.metrics import compute_classification_metrics
 from src.evaluations.baseline_metrics import compute_baseline_metrics, plot_all_curves, save_results, print_results
+from src.data.preprocessing import extract_text
+from src.training.trainer import pack_and_chunk_texts
 
 
 class Qwen3EmbeddingBaseline:
@@ -32,11 +45,16 @@ class Qwen3EmbeddingBaseline:
         self.data_config = config['data']
         self.training_config = config.get('training', {})
         self.wandb_config = config.get('wandb', {})
+        self.pretrain_config = config.get('pretrain', {})  # optional stage-1 config
         self.output_dir = self.training_config.get('output_dir', './outputs/qwen3_embedding')
 
+        # Shared components
+        self.base_model = None
         self.model = None
+        self.mlm_model = None
         self.tokenizer = None
         self.trainer = None
+        self.mlm_trainer = None
         self.local_rank = int(os.environ.get("LOCAL_RANK", 0))
 
     def setup_wandb(self) -> str:
@@ -53,10 +71,17 @@ class Qwen3EmbeddingBaseline:
             return run_name
         return "qwen3-embedding-run"
 
-    def load_model(self):
-        """Load Qwen3-Embedding model and tokenizer."""
+    def load_base_model(self):
+        """
+        Load Qwen3-Embedding base model and tokenizer, optionally with LoRA.
+
+        This prepares `self.base_model` and `self.tokenizer` that can then be
+        wrapped by either:
+          - `Qwen3EmbeddingMLMHead` for stage-1 MLM
+          - `Qwen3EmbeddingClassifier` for stage-2 classification
+        """
         print("\n" + "=" * 80)
-        print("Loading Qwen3-Embedding model...")
+        print("Loading Qwen3-Embedding base model...")
         print("=" * 80)
 
         model_name = self.model_config.get('model_name', 'Qwen/Qwen3-Embedding-8B')
@@ -78,7 +103,7 @@ class Qwen3EmbeddingBaseline:
 
         # Load base embedding model
         base_model = AutoModel.from_pretrained(
-            model_name, 
+            model_name,
             torch_dtype=torch.bfloat16,
             # attn_implementation="flash_attention_2" # Optional: drastically reduces memory for long sequences
         )
@@ -115,30 +140,104 @@ class Qwen3EmbeddingBaseline:
             print(f"  - Mode: frozen embedding + trainable linear head only")
             trainable_param_keywords = []
 
-        # Always freeze base; only head (and LoRA if use_lora) stay trainable
-        self.model = Qwen3EmbeddingClassifier(
-            base_model=base_model,
-            hidden_size=hidden_size,
-            num_labels=num_labels,
-            head_dropout=head_dropout,
-            freeze_base=True,
-            trainable_param_keywords=trainable_param_keywords,
-        )
+        # Store base model and metadata; heads are created per-stage
+        self.base_model = base_model
+        self.hidden_size = hidden_size
+        self.num_labels = num_labels
+        self.head_dropout = head_dropout
+        self.trainable_param_keywords = trainable_param_keywords
 
-        # Enable gradient checkpointing to reduce memory (base model stays frozen; saves activation memory)
+        # Enable gradient checkpointing to reduce memory (saves activation memory)
         if self.training_config.get("gradient_checkpointing", True):
-            self.model.gradient_checkpointing_enable(
-                gradient_checkpointing_kwargs={"use_reentrant": False}
-            )
+            if hasattr(self.base_model, "gradient_checkpointing_enable"):
+                self.base_model.gradient_checkpointing_enable(
+                    gradient_checkpointing_kwargs={"use_reentrant": False}
+                )
 
-        print(f"  - Model loaded successfully")
+        print(f"  - Base model loaded successfully")
         print(f"  - Vocab size: {len(self.tokenizer)}")
 
-        total_params = sum(p.numel() for p in self.model.parameters())
-        trainable_params = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
+        total_params = sum(p.numel() for p in self.base_model.parameters())
+        trainable_params = sum(p.numel() for p in self.base_model.parameters() if p.requires_grad)
         pct = 100.0 * trainable_params / total_params if total_params else 0
         print(f"  - Total parameters: {total_params:,}")
         print(f"  - Trainable parameters: {trainable_params:,} / {total_params:,} ({pct:.2f}%)")
+
+    def build_classifier_model(self):
+        """
+        Wrap the shared `base_model` with a classification head.
+        """
+        if self.base_model is None:
+            self.load_base_model()
+
+        self.model = Qwen3EmbeddingClassifier(
+            base_model=self.base_model,
+            hidden_size=self.hidden_size,
+            num_labels=self.num_labels,
+            head_dropout=self.head_dropout,
+            freeze_base=True,
+            trainable_param_keywords=self.trainable_param_keywords,
+        )
+
+    def build_mlm_model(self):
+        """
+        Wrap the shared `base_model` with an MLM head for stage-1 pretraining.
+        """
+        if self.base_model is None:
+            self.load_base_model()
+
+        vocab_size = len(self.tokenizer)
+        self.mlm_model = Qwen3EmbeddingMLMHead(
+            base_model=self.base_model,
+            hidden_size=self.hidden_size,
+            vocab_size=vocab_size,
+            freeze_base=True,
+            trainable_param_keywords=self.trainable_param_keywords,
+        )
+
+    def prepare_mlm_datasets(self, datasets: Dict[str, Any]) -> Dict[str, Dataset]:
+        """
+        Prepare packed MLM datasets from patient-level text.
+
+        This mirrors the `EHRPretrainer` behaviour:
+          - Extract full patient trajectories as text.
+          - Tokenize & concatenate all patients into one long stream with EOS
+            separators between patients.
+          - Slice into fixed-length chunks (no per-patient truncation).
+        """
+        print("\n" + "=" * 80)
+        print("Preparing packed MLM datasets (no per-patient padding/truncation)...")
+        print("=" * 80)
+
+        max_length = self.data_config.get("max_length", 8192)
+
+        mlm_datasets = {}
+        for split_name in ["train", "tuning"]:
+            base_dataset = datasets[split_name]
+            print(f"\n  - Extracting text for split: {split_name}")
+            text_list = extract_text(base_dataset, self.tokenizer)
+            print(f"    • Patients in {split_name}: {len(text_list)}")
+
+            print(f"    • Packing to context length: {max_length}")
+            chunk_ids = pack_and_chunk_texts(text_list, self.tokenizer, max_length)
+
+            print(f"    • Created {len(chunk_ids)} packed sequences for {split_name}")
+            if len(chunk_ids) > 0:
+                lengths = [len(seq) for seq in chunk_ids]
+                print(
+                    f"    • Sequence lengths (min/mean/max): "
+                    f"{min(lengths)}/{sum(lengths)/len(lengths):.1f}/{max(lengths)}"
+                )
+                # Debug: show first two sequences' first/last few tokens
+                for i in range(min(2, len(chunk_ids))):
+                    seq = chunk_ids[i]
+                    print(f"    • Example seq {i}: len={len(seq)}, "
+                          f"head={seq[:10]}, tail={seq[-10:]}")
+
+            mlm_datasets[split_name] = Dataset.from_dict({"input_ids": chunk_ids})
+
+        print("\nPacked MLM datasets ready.\n" + "=" * 80)
+        return mlm_datasets
 
     def create_trainer(self, train_dataset, val_dataset, collator, run_name: str):
         """Create HuggingFace Trainer."""
@@ -186,6 +285,118 @@ class Qwen3EmbeddingBaseline:
         )
 
         print("  - Trainer created successfully")
+
+        # Debug: print shapes of the first two training batches
+        print("\n" + "=" * 80)
+        print("DEBUG: First two classification batches (shapes)")
+        print("=" * 80)
+        try:
+            train_dl = self.trainer.get_train_dataloader()
+            for i, batch in enumerate(train_dl):
+                input_shape = tuple(batch["input_ids"].shape)
+                mask_shape = tuple(batch["attention_mask"].shape)
+                labels_shape = tuple(batch["labels"].shape)
+                print(
+                    f"  - Batch {i}: "
+                    f"input_ids {input_shape}, "
+                    f"attention_mask {mask_shape}, "
+                    f"labels {labels_shape}"
+                )
+                if i >= 1:
+                    break
+        except Exception as e:
+            print(f"  ⚠️  Error inspecting classification dataloader: {e}")
+        print("=" * 80)
+
+    def create_mlm_trainer(self, train_dataset, val_dataset, run_name: str):
+        """
+        Create a Trainer for masked language modeling (stage-1).
+        """
+        print("\n" + "=" * 80)
+        print("Setting up MLM pretraining...")
+        print("=" * 80)
+
+        pretrain_cfg = self.pretrain_config or {}
+
+        training_args = TrainingArguments(
+            output_dir=os.path.join(self.output_dir, "mlm_checkpoints"),
+            run_name=f"{run_name}-mlm",
+            overwrite_output_dir=pretrain_cfg.get("overwrite_output_dir", True),
+            num_train_epochs=int(pretrain_cfg.get("epochs", self.training_config.get("epochs", 1))),
+            per_device_train_batch_size=int(pretrain_cfg.get("batch_size", 4)),
+            per_device_eval_batch_size=int(pretrain_cfg.get("eval_batch_size", 8)),
+            learning_rate=float(pretrain_cfg.get("learning_rate", 2e-5)),
+            weight_decay=float(pretrain_cfg.get("weight_decay", 0.01)),
+            warmup_steps=int(pretrain_cfg.get("warmup_steps", 100)),
+            gradient_accumulation_steps=int(pretrain_cfg.get("gradient_accumulation_steps", 1)),
+            fp16=bool(pretrain_cfg.get("fp16", self.training_config.get("fp16", False))),
+            bf16=bool(pretrain_cfg.get("bf16", self.training_config.get("bf16", True))),
+            gradient_checkpointing=bool(
+                pretrain_cfg.get(
+                    "gradient_checkpointing",
+                    self.training_config.get("gradient_checkpointing", True),
+                )
+            ),
+            gradient_checkpointing_kwargs={"use_reentrant": False},
+            logging_steps=int(pretrain_cfg.get("logging_steps", self.training_config.get("logging_steps", 50))),
+            eval_steps=int(pretrain_cfg.get("eval_steps", self.training_config.get("eval_steps", 250))),
+            save_steps=int(pretrain_cfg.get("save_steps", self.training_config.get("save_steps", 500))),
+            save_total_limit=int(pretrain_cfg.get("save_total_limit", self.training_config.get("save_total_limit", 2))),
+            eval_strategy="steps",
+            save_strategy="steps",
+            load_best_model_at_end=True,
+            metric_for_best_model="loss",
+            greater_is_better=False,
+            dataloader_num_workers=int(pretrain_cfg.get("dataloader_num_workers", 4)),
+            report_to="wandb" if self.wandb_config.get("enabled", False) else "none",
+            remove_unused_columns=False,
+        )
+
+        mlm_collator = Qwen3MLMCollator(
+            tokenizer=self.tokenizer,
+            mlm_probability=float(pretrain_cfg.get("mlm_probability", 0.15)),
+        )
+
+        self.mlm_trainer = Trainer(
+            model=self.mlm_model,
+            args=training_args,
+            train_dataset=train_dataset,
+            eval_dataset=val_dataset,
+            tokenizer=self.tokenizer,
+            data_collator=mlm_collator,
+        )
+
+        print("  - MLM Trainer created successfully")
+
+        # Debug: print shapes of the first two MLM batches
+        print("\n" + "=" * 80)
+        print("DEBUG: First two MLM batches (shapes)")
+        print("=" * 80)
+        try:
+            train_dl = self.mlm_trainer.get_train_dataloader()
+            for i, batch in enumerate(train_dl):
+                input_shape = tuple(batch["input_ids"].shape)
+                mask_shape = tuple(batch["attention_mask"].shape)
+                labels_shape = tuple(batch["labels"].shape)
+                print(
+                    f"  - MLM Batch {i}: "
+                    f"input_ids {input_shape}, "
+                    f"attention_mask {mask_shape}, "
+                    f"labels {labels_shape}"
+                )
+                if i >= 1:
+                    break
+        except Exception as e:
+            print(f"  ⚠️  Error inspecting MLM dataloader: {e}")
+        print("=" * 80)
+
+    def train_mlm(self):
+        """Run the stage-1 MLM pretraining loop."""
+        print("\n" + "=" * 80)
+        print("Stage 1: MLM pretraining (Qwen3-Embedding + LoRA)")
+        print("=" * 80)
+        self.mlm_trainer.train()
+        print("\nStage 1 (MLM) completed!")
 
     def train(self):
         """Train the model."""
@@ -243,18 +454,35 @@ class Qwen3EmbeddingBaseline:
         print(f"\n  - Model saved to: {final_model_path}")
 
     def run(self):
-        """Run the complete baseline pipeline."""
+        """Run the complete baseline pipeline (optional two-stage training)."""
         setup_output_dir(self.output_dir, overwrite=self.training_config.get('overwrite_output_dir', False))
 
         run_name = self.setup_wandb()
-        self.load_model()
+        self.load_base_model()
 
+        # Load datasets once (text format for classification & for MLM packing)
         datasets = load_datasets(
             self.data_config,
             splits=['train', 'tuning', 'held_out'],
             format='text',
             tokenizer=self.tokenizer
         )
+
+        # Optional Stage 1: MLM pretraining with LoRA adapters only
+        if self.pretrain_config.get("enabled", False):
+            print("\n" + "=" * 80)
+            print("Two-stage training ENABLED: running MLM pretraining first.")
+            print("=" * 80)
+            # Prepare packed MLM datasets (no per-patient truncation)
+            mlm_datasets = self.prepare_mlm_datasets(datasets)
+            self.build_mlm_model()
+            self.create_mlm_trainer(mlm_datasets['train'], mlm_datasets['tuning'], run_name)
+            self.train_mlm()
+        else:
+            print("\nTwo-stage training disabled (no MLM pretraining). Proceeding directly to classification.")
+
+        # Stage 2: supervised classification with logistic regression head
+        self.build_classifier_model()
 
         collator = ClassificationCollator(
             tokenizer=self.tokenizer,

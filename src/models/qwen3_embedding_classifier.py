@@ -2,7 +2,7 @@
 Qwen3-Embedding based classifier.
 
 Wraps Qwen3-Embedding-8B with a classification head for EHR-based prediction.
-Uses last-token pooling (as recommended for Qwen3-Embedding) and L2-normalized embeddings.
+Uses CLS-token pooling (first non-padding token) and L2-normalized embeddings.
 Supports freezing the base model and training only the head (and optional LoRA adapters).
 """
 import torch
@@ -12,30 +12,32 @@ from typing import Dict, Optional, List
 from torch import Tensor
 
 
-def last_token_pool(last_hidden_states: Tensor, attention_mask: Tensor) -> Tensor:
+def cls_pool(last_hidden_states: Tensor, attention_mask: Tensor) -> Tensor:
     """
-    Pool embeddings using the last non-padding token (as per Qwen3-Embedding docs).
-    
-    For left-padding: return last_hidden_states[:, -1].
-    For right-padding: use sequence_lengths to index the last real token.
-    
+    Pool embeddings using the CLS token representation.
+
+    We assume sequences are right-padded (as produced by the collator), so
+    the CLS token is at position 0 for every sequence. As a safety check,
+    we still respect the attention_mask and treat the first non-padding
+    position as CLS if needed.
+
     Args:
         last_hidden_states: [batch_size, seq_len, hidden_dim]
         attention_mask: [batch_size, seq_len], 1 = real token, 0 = pad
-    
+
     Returns:
         pooled: [batch_size, hidden_dim]
     """
-    left_padding = (attention_mask[:, -1].sum() == attention_mask.shape[0])
-    if left_padding:
-        return last_hidden_states[:, -1]
-    else:
-        sequence_lengths = attention_mask.sum(dim=1) - 1
-        batch_size = last_hidden_states.shape[0]
-        return last_hidden_states[
-            torch.arange(batch_size, device=last_hidden_states.device),
-            sequence_lengths
-        ]
+    batch_size, seq_len, _ = last_hidden_states.shape
+
+    # Index of first non-padding token per sequence
+    # (argmax over attention_mask along seq dim gives first 1 when pads are 0s)
+    first_non_pad = attention_mask.float().argmax(dim=1)
+    pooled = last_hidden_states[
+        torch.arange(batch_size, device=last_hidden_states.device),
+        first_non_pad,
+    ]
+    return pooled
 
 
 class Qwen3EmbeddingClassifier(nn.Module):
@@ -90,6 +92,7 @@ class Qwen3EmbeddingClassifier(nn.Module):
             nn.Dropout(head_dropout),
             nn.Linear(hidden_size, num_labels),
         )
+        self._debug_pooled_once = False
 
     def gradient_checkpointing_enable(self, gradient_checkpointing_kwargs=None):
         """Enable gradient checkpointing on the base model to save memory."""
@@ -127,10 +130,18 @@ class Qwen3EmbeddingClassifier(nn.Module):
             attention_mask=attention_mask,
             return_dict=True,
         )
-        
-        # Pool: last token (per Qwen3-Embedding recommendation)
-        pooled = last_token_pool(outputs.last_hidden_state, attention_mask)
-        
+
+        # Pool: CLS token (first non-padding token)
+        pooled = cls_pool(outputs.last_hidden_state, attention_mask)
+
+        # Debug print (once) to confirm CLS pooling behaviour and shapes
+        if not self._debug_pooled_once:
+            print("\n[Qwen3EmbeddingClassifier] Using CLS pooling for classification head.")
+            print(f"  - input_ids shape: {tuple(input_ids.shape)}")
+            print(f"  - attention_mask shape: {tuple(attention_mask.shape)}")
+            print(f"  - pooled (CLS) shape: {tuple(pooled.shape)}")
+            self._debug_pooled_once = True
+
         # L2 normalize (per Qwen3-Embedding)
         pooled = F.normalize(pooled, p=2, dim=1)
         
