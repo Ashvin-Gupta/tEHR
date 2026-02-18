@@ -6,14 +6,9 @@ model:
   num_labels: 2
   head_dropout: 0.1
 
-pretrain:
-  enabled: true
-
-
-  # Option 1: frozen embedding + trainable linear head only
-  # use_lora: false
-
-  # Option 2: frozen embedding + trainable LoRA + trainable linear head (set use_lora: true)
+  # Two options only:
+  # - use_lora: false → frozen embedding + trainable linear head only
+  # - use_lora: true  → frozen embedding + trainable LoRA adapters + trainable linear head
   use_lora: true
   lora:
     r: 16
@@ -29,13 +24,21 @@ pretrain:
       - up_proj
       - down_proj
 
+pretrain:
+  enabled: true
+  # Keep this small for memory; 12k–16k contexts will OOM even with LoRA.
+  max_length: 8192
+  mlm_probability: 0.15
+  # Adds a real [MASK] token if missing (removes warning and enables standard 80/10/10 masking)
+  add_mask_token: true
+
 wandb:
   enabled: true
   project: "Pretrain-Qwen3-8B-Pancreas-classification"
-  run_name: "baseline-qwen3-embedding-6-month"
+  run_name: "baseline-qwen3-embedding-6-month-two-stage"
 
 training:
-  output_dir: "/data/scratch/qc25022/pancreas_MEDS/experiments/baselines/qwen3_embedding_6_month"
+  output_dir: "/data/scratch/qc25022/pancreas_MEDS/experiments/baselines/qwen3_embedding_6_month-two-stage"
   overwrite_output_dir: true
   epochs: 1
   batch_size: 2

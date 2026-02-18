@@ -101,12 +101,23 @@ class Qwen3EmbeddingBaseline:
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
 
+        # Stage-1 (optional) uses MLM masking; Qwen tokenizers typically don't ship a mask token.
+        # If enabled, we add one so masking uses [MASK] instead of random-token-only replacement.
+        if self.pretrain_config.get("enabled", False) and self.pretrain_config.get("add_mask_token", True):
+            if getattr(self.tokenizer, "mask_token", None) is None:
+                self.tokenizer.add_special_tokens({"mask_token": "[MASK]"})
+                print("  - Added [MASK] token to tokenizer for stage-1 MLM")
+
         # Load base embedding model
         base_model = AutoModel.from_pretrained(
             model_name,
             torch_dtype=torch.bfloat16,
             # attn_implementation="flash_attention_2" # Optional: drastically reduces memory for long sequences
         )
+
+        # If we added tokens (e.g. [MASK]), resize the embedding matrix.
+        if hasattr(base_model, "resize_token_embeddings"):
+            base_model.resize_token_embeddings(len(self.tokenizer))
 
         # Two options only:
         # 1) use_lora: false → frozen embedding + trainable linear head
@@ -140,6 +151,19 @@ class Qwen3EmbeddingBaseline:
             print(f"  - Mode: frozen embedding + trainable linear head only")
             trainable_param_keywords = []
 
+        # Freeze base weights always; keep LoRA params trainable if enabled.
+        for p in base_model.parameters():
+            p.requires_grad = False
+        if use_lora:
+            for name, p in base_model.named_parameters():
+                if "lora_" in name:
+                    p.requires_grad = True
+
+        # Enable gradient checkpointing to reduce memory (saves activation memory when training LoRA)
+        if self.training_config.get("gradient_checkpointing", True) and hasattr(base_model, "gradient_checkpointing_enable"):
+            base_model.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
+            print("  - Enabled gradient checkpointing for base model")
+
         # Store base model and metadata; heads are created per-stage
         self.base_model = base_model
         self.hidden_size = hidden_size
@@ -148,11 +172,11 @@ class Qwen3EmbeddingBaseline:
         self.trainable_param_keywords = trainable_param_keywords
 
         # Enable gradient checkpointing to reduce memory (saves activation memory)
-        if self.training_config.get("gradient_checkpointing", True):
-            if hasattr(self.base_model, "gradient_checkpointing_enable"):
-                self.base_model.gradient_checkpointing_enable(
-                    gradient_checkpointing_kwargs={"use_reentrant": False}
-                )
+        # if self.training_config.get("gradient_checkpointing", True):
+        #     if hasattr(self.base_model, "gradient_checkpointing_enable"):
+        #         self.base_model.gradient_checkpointing_enable(
+        #             gradient_checkpointing_kwargs={"use_reentrant": False}
+        #         )
 
         print(f"  - Base model loaded successfully")
         print(f"  - Vocab size: {len(self.tokenizer)}")
@@ -209,7 +233,8 @@ class Qwen3EmbeddingBaseline:
         print("Preparing packed MLM datasets (no per-patient padding/truncation)...")
         print("=" * 80)
 
-        max_length = self.data_config.get("max_length", 8192)
+        # IMPORTANT: keep stage-1 context length separate from classification max_length to avoid OOM
+        max_length = int(self.pretrain_config.get("max_length", 2048))
 
         mlm_datasets = {}
         for split_name in ["train", "tuning"]:
@@ -323,8 +348,8 @@ class Qwen3EmbeddingBaseline:
             run_name=f"{run_name}-mlm",
             overwrite_output_dir=pretrain_cfg.get("overwrite_output_dir", True),
             num_train_epochs=int(pretrain_cfg.get("epochs", self.training_config.get("epochs", 1))),
-            per_device_train_batch_size=int(pretrain_cfg.get("batch_size", 4)),
-            per_device_eval_batch_size=int(pretrain_cfg.get("eval_batch_size", 8)),
+            per_device_train_batch_size=int(pretrain_cfg.get("batch_size", self.training_config.get("batch_size", 1))),
+            per_device_eval_batch_size=int(pretrain_cfg.get("eval_batch_size", self.training_config.get("eval_batch_size", 1))),
             learning_rate=float(pretrain_cfg.get("learning_rate", 2e-5)),
             weight_decay=float(pretrain_cfg.get("weight_decay", 0.01)),
             warmup_steps=int(pretrain_cfg.get("warmup_steps", 100)),
