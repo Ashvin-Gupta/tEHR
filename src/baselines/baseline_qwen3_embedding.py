@@ -160,9 +160,9 @@ class Qwen3EmbeddingBaseline:
                     p.requires_grad = True
 
         # Enable gradient checkpointing to reduce memory (saves activation memory when training LoRA)
-        if self.training_config.get("gradient_checkpointing", True) and hasattr(base_model, "gradient_checkpointing_enable"):
-            base_model.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
-            print("  - Enabled gradient checkpointing for base model")
+        # if self.training_config.get("gradient_checkpointing", True) and hasattr(base_model, "gradient_checkpointing_enable"):
+        #     base_model.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
+        #     print("  - Enabled gradient checkpointing for base model")
 
         # Store base model and metadata; heads are created per-stage
         self.base_model = base_model

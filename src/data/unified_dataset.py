@@ -118,7 +118,9 @@ class UnifiedEHRDataset(Dataset):
         try:
             if token_string.startswith('<time_interval_'):
                 time_part = token_string.split('_')[-1].strip('>')
-                return f"{self.time_lookup.get(time_part, time_part)}; "
+                time_str = self.time_lookup.get(time_part, time_part)
+            elif token_string.startswith('TIME '):
+                return f"{token_string[5:]}; "
             elif token_string.startswith('AGE: ') or token_string.startswith('AGE'):
                 return f"{token_string}; "
             elif token_string.startswith('MEDICAL//BMI'):
