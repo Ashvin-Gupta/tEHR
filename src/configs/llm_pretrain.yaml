@@ -4,14 +4,14 @@ name: "llama_pretraining"
 
 model:
   # Model to pretrain (unsloth/mistral-7b-v0.3-bnb-4bit , "unsloth/Qwen3-8B-Base-unsloth-bnb-4bit", unsloth/Qwen3-1.7B-Base-unsloth-bnb-4bit)
-  model_name: "unsloth/Qwen3-1.7B-Base-unsloth-bnb-4bit"
+  model_name: "unsloth/Qwen3-8B-Base-unsloth-bnb-4bit"
   max_length: 8192  # Context window for sequence packing
   hf_token: null
 
 wandb:
   enabled: true
   project: "Pretrain-Qwen3-8B-Pancreas"
-  run_name: "Pretrain-Qwen3-1.7B-Pancreas"
+  run_name: "Pretrain-Qwen3-8B-Pancreas-new-time"
 
 lora:
   r: 16
@@ -21,7 +21,7 @@ lora:
   bias: "none"
 
 training:
-  output_dir: "/data/scratch/qc25022/pancreas/experiments/Pretrain-Qwen3-1.7B-Pancreas-new-time"
+  output_dir: "/data/scratch/qc25022/pancreas/experiments/Pretrain-Qwen3-8B-Pancreas-new-time"
   overwrite_output_dir: true
 
   
