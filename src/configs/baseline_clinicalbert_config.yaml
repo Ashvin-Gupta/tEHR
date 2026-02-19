@@ -10,7 +10,7 @@ wandb:
   run_name: "baseline-clinicalbert"
 
 training:
-  output_dir: "/data/scratch/qc25022/pancreas_MEDS/experiments/baselines/clinicalbert"
+  output_dir: "/data/scratch/qc25022/pancreas_MEDS/experiments/baselines/clinicalbert_test"
   overwrite_output_dir: true
   epochs: 3
   batch_size: 16
@@ -29,8 +29,8 @@ training:
 
 data:
   cutoff_months: 6
-  data_dir: "/data/scratch/qc25022/pancreas/tokenised_data_pancreas_MEDS/cprd_upgi"
-  vocab_filepath: "/data/scratch/qc25022/pancreas/tokenised_data_pancreas_MEDS/cprd_upgi/vocab.csv"
+  data_dir: "/data/scratch/qc25022/pancreas/tokenised_data_pancreas_MEDS_new_time/cprd_upgi"
+  vocab_filepath: "/data/scratch/qc25022/pancreas/tokenised_data_pancreas_MEDS_new_time/cprd_upgi/vocab.csv"
   labels_filepath: "/data/home/qc25022/cancer-extraction-pipeline/output/pancreas_MEDS/subject_information.csv"
   medical_lookup_filepath: "/data/home/qc25022/TextCancEHR2/src/resources/MedicalDictTranslation2.csv"
   lab_lookup_filepath: "/data/home/qc25022/TextCancEHR2/src/resources/LabLookUP.csv"
