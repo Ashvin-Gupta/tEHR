@@ -182,26 +182,21 @@ class EHRTransformerEncoder(nn.Module):
         )
         self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
         
-        # Classification head
-        self.classifier = nn.Sequential(
-            nn.Linear(hidden_dim, hidden_dim // 2),
-            nn.ReLU(),
-            nn.Dropout(dropout),
-            nn.Linear(hidden_dim // 2, num_labels)
-        )
+        # Classification head (logistic regression-style)
+        self.classifier = nn.Linear(hidden_dim, num_labels)
         
         self.dropout = nn.Dropout(dropout)
     
-    def forward(self, token_ids: torch.Tensor, attention_mask: torch.Tensor = None) -> torch.Tensor:
+    def encode(self, token_ids: torch.Tensor, attention_mask: torch.Tensor = None) -> torch.Tensor:
         """
-        Forward pass.
+        Encode token IDs into contextual representations (no pooling or head).
         
         Args:
             token_ids: Token IDs [batch_size, seq_len]
             attention_mask: Attention mask [batch_size, seq_len]
         
         Returns:
-            Logits [batch_size, num_labels]
+            Sequence output [batch_size, seq_len, hidden_dim]
         """
         batch_size, seq_len = token_ids.shape
         
@@ -229,11 +224,24 @@ class EHRTransformerEncoder(nn.Module):
         
         # Transformer encoder
         x = self.transformer(x, src_key_padding_mask=mask)  # [batch, seq_len, hidden_dim]
+        return x
+    
+    def forward(self, token_ids: torch.Tensor, attention_mask: torch.Tensor = None) -> torch.Tensor:
+        """
+        Forward pass for classification.
+        
+        Args:
+            token_ids: Token IDs [batch_size, seq_len]
+            attention_mask: Attention mask [batch_size, seq_len]
+        
+        Returns:
+            Logits [batch_size, num_labels]
+        """
+        x = self.encode(token_ids, attention_mask)
         
         # Pool: use mean pooling over sequence
         if attention_mask is not None:
-            # Masked mean pooling
-            mask_expanded = (1 - attention_mask.float()).unsqueeze(-1)
+            mask_expanded = attention_mask.float().unsqueeze(-1)
             x = x * mask_expanded
             pooled = x.sum(dim=1) / mask_expanded.sum(dim=1).clamp(min=1)
         else:
@@ -243,6 +251,45 @@ class EHRTransformerEncoder(nn.Module):
         logits = self.classifier(pooled)  # [batch, num_labels]
         
         return logits
+
+
+class EHRTransformerMLMHead(nn.Module):
+    """
+    MLM head that wraps an encoder and predicts token IDs.
+    """
+    
+    def __init__(self, encoder: EHRTransformerEncoder, vocab_size: int):
+        super().__init__()
+        self.encoder = encoder
+        self.vocab_size = vocab_size
+        self.lm_head = nn.Linear(encoder.hidden_dim, vocab_size)
+    
+    def forward(
+        self,
+        token_ids: torch.Tensor,
+        attention_mask: torch.Tensor = None,
+        labels: torch.Tensor = None,
+    ):
+        """
+        Args:
+            token_ids: [batch, seq_len]
+            attention_mask: [batch, seq_len]
+            labels: [batch, seq_len] with -100 at non-MLM positions
+        
+        Returns:
+            loss (optional), logits [batch, seq_len, vocab_size]
+        """
+        sequence_output = self.encoder.encode(token_ids, attention_mask)
+        logits = self.lm_head(sequence_output)
+        
+        loss = None
+        if labels is not None:
+            loss_fct = nn.CrossEntropyLoss(ignore_index=-100)
+            loss = loss_fct(
+                logits.view(-1, self.vocab_size),
+                labels.view(-1),
+            )
+        return loss, logits
 
 
 class EncoderTransformerBaseline:
@@ -264,12 +311,14 @@ class EncoderTransformerBaseline:
         self.output_dir = self.training_config.get('output_dir', './outputs/encoder_transformer')
         
         self.model = None
+        self.mlm_model = None
         self.vocab = None
         self.token_to_id = None
         self.id_to_token = None
         # max_seq_length will be set when model is created
         self.max_seq_length = None
         self._label_conversion_warned = False  # Track if we've warned about label conversion
+        self.pretrain_config = config.get('pretrain', {})  # Optional stage-1 config
     
     def build_vocabulary(self, datasets: Dict[str, Dataset]):
         """
@@ -309,12 +358,13 @@ class EncoderTransformerBaseline:
         
         # Create vocabulary from kept tokens only
         kept_tokens = sorted(kept_tokens)
-        vocab_size = len(kept_tokens) + 2  # +2 for PAD and UNK
+        # Reserve special tokens: PAD, UNK, MASK
+        vocab_size = len(kept_tokens) + 3
         
-        self.token_to_id = {'<PAD>': 0, '<UNK>': 1}
-        self.id_to_token = {0: '<PAD>', 1: '<UNK>'}
+        self.token_to_id = {'<PAD>': 0, '<UNK>': 1, '<MASK>': 2}
+        self.id_to_token = {0: '<PAD>', 1: '<UNK>', 2: '<MASK>'}
         
-        for i, token in enumerate(kept_tokens, start=2):
+        for i, token in enumerate(kept_tokens, start=3):
             self.token_to_id[token] = i
             self.id_to_token[i] = token
         
@@ -350,6 +400,48 @@ class EncoderTransformerBaseline:
             token_ids = [self.token_to_id['<PAD>']]
         
         return torch.tensor(token_ids, dtype=torch.long)
+    
+    def mlm_collate_fn(self, batch):
+        """
+        Collate function for MLM pretraining.
+        
+        Returns input_ids, attention_mask, and MLM labels.
+        """
+        base_batch = self.collate_fn(batch)
+        input_ids = base_batch['token_ids']
+        attention_mask = base_batch['attention_mask']
+        
+        labels = input_ids.clone()
+        
+        # Do not predict on padding tokens
+        pad_id = self.token_to_id['<PAD>']
+        special_mask = input_ids.eq(pad_id)
+        
+        mlm_probability = float(self.pretrain_config.get('mlm_probability', 0.15))
+        probability_matrix = torch.full(labels.shape, mlm_probability)
+        probability_matrix.masked_fill_(special_mask, 0.0)
+        masked_indices = torch.bernoulli(probability_matrix).bool()
+        
+        labels[~masked_indices] = -100
+        
+        mask_token_id = self.token_to_id.get('<MASK>', self.token_to_id['<UNK>'])
+        
+        # 80% of selected tokens → [MASK]
+        indices_replaced = torch.bernoulli(torch.full(labels.shape, 0.8)).bool() & masked_indices
+        input_ids[indices_replaced] = mask_token_id
+        
+        # 10% → random token
+        indices_random = torch.bernoulli(torch.full(labels.shape, 0.5)).bool() & masked_indices & ~indices_replaced
+        random_words = torch.randint(len(self.token_to_id), labels.shape, dtype=torch.long)
+        input_ids[indices_random] = random_words[indices_random]
+        
+        # 10% → keep original token (already handled by masked_indices but not in indices_replaced/indices_random)
+        
+        return {
+            'token_ids': input_ids,
+            'attention_mask': attention_mask,
+            'labels': labels,
+        }
     
     def collate_fn(self, batch):
         """
@@ -456,6 +548,53 @@ class EncoderTransformerBaseline:
         print(f"  - Total parameters: {total_params:,}")
         print(f"  - Trainable parameters: {trainable_params:,}")
     
+    def create_mlm_model(self):
+        """Create MLM head that wraps the encoder."""
+        if self.model is None:
+            self.create_model()
+        
+        vocab_size = int(self.vocab['size'])
+        self.mlm_model = EHRTransformerMLMHead(self.model, vocab_size=vocab_size)
+    
+    def train_mlm_epoch(self, train_loader, optimizer, device):
+        """Train MLM for one epoch."""
+        self.mlm_model.train()
+        total_loss = 0.0
+        num_batches = 0
+        
+        for batch in tqdm(train_loader, desc="MLM Training"):
+            token_ids = batch['token_ids'].to(device)
+            attention_mask = batch['attention_mask'].to(device)
+            labels = batch['labels'].to(device)
+            
+            optimizer.zero_grad()
+            loss, _ = self.mlm_model(token_ids, attention_mask, labels)
+            loss.backward()
+            optimizer.step()
+            
+            total_loss += loss.item()
+            num_batches += 1
+        
+        return total_loss / max(num_batches, 1)
+    
+    def evaluate_mlm(self, data_loader, device):
+        """Compute average MLM loss on validation set."""
+        self.mlm_model.eval()
+        total_loss = 0.0
+        num_batches = 0
+        
+        with torch.no_grad():
+            for batch in tqdm(data_loader, desc="MLM Eval"):
+                token_ids = batch['token_ids'].to(device)
+                attention_mask = batch['attention_mask'].to(device)
+                labels = batch['labels'].to(device)
+                
+                loss, _ = self.mlm_model(token_ids, attention_mask, labels)
+                total_loss += loss.item()
+                num_batches += 1
+        
+        return total_loss / max(num_batches, 1)
+    
     def train_epoch(self, train_loader, optimizer, criterion, device):
         """Train for one epoch."""
         self.model.train()
@@ -557,7 +696,58 @@ class EncoderTransformerBaseline:
         self.create_model()
         self.model = self.model.to(device)
         
-        # Create data loaders
+        # Optional Stage 1: MLM pretraining on encoder
+        if self.pretrain_config.get('enabled', False):
+            print("\n" + "=" * 80)
+            print("Stage 1: MLM pretraining for encoder transformer")
+            print("=" * 80)
+            
+            # Freeze classification head during MLM
+            for p in self.model.classifier.parameters():
+                p.requires_grad = False
+            
+            self.create_mlm_model()
+            self.mlm_model = self.mlm_model.to(device)
+            
+            mlm_batch_size = int(self.pretrain_config.get('batch_size', self.training_config.get('batch_size', 32)))
+            mlm_train_loader = DataLoader(
+                filtered_datasets['train'],
+                batch_size=mlm_batch_size,
+                shuffle=True,
+                collate_fn=self.mlm_collate_fn,
+                num_workers=int(self.pretrain_config.get('dataloader_num_workers', self.training_config.get('dataloader_num_workers', 4)))
+            )
+            mlm_val_loader = DataLoader(
+                filtered_datasets['tuning'],
+                batch_size=mlm_batch_size,
+                shuffle=False,
+                collate_fn=self.mlm_collate_fn,
+                num_workers=int(self.pretrain_config.get('dataloader_num_workers', self.training_config.get('dataloader_num_workers', 4)))
+            )
+            
+            mlm_optimizer = torch.optim.AdamW(
+                self.mlm_model.parameters(),
+                lr=float(self.pretrain_config.get('learning_rate', self.training_config.get('learning_rate', 1e-4))),
+                weight_decay=float(self.pretrain_config.get('weight_decay', self.training_config.get('weight_decay', 0.01)))
+            )
+            mlm_epochs = int(self.pretrain_config.get('epochs', 1))
+            
+            best_mlm_loss = float('inf')
+            for epoch in range(mlm_epochs):
+                print(f"\n[MLM] Epoch {epoch + 1}/{mlm_epochs}")
+                train_mlm_loss = self.train_mlm_epoch(mlm_train_loader, mlm_optimizer, device)
+                val_mlm_loss = self.evaluate_mlm(mlm_val_loader, device)
+                print(f"  - MLM train loss: {train_mlm_loss:.4f}")
+                print(f"  - MLM val loss:   {val_mlm_loss:.4f}")
+                best_mlm_loss = min(best_mlm_loss, val_mlm_loss)
+            
+            print(f"\nFinished MLM pretraining. Best val loss: {best_mlm_loss:.4f}")
+            
+            # Re-enable classification head for supervised fine-tuning
+            for p in self.model.classifier.parameters():
+                p.requires_grad = True
+        
+        # Create data loaders for supervised training
         batch_size = int(self.training_config.get('batch_size', 32))
         train_loader = DataLoader(
             filtered_datasets['train'],
@@ -581,7 +771,7 @@ class EncoderTransformerBaseline:
             num_workers=int(self.training_config.get('dataloader_num_workers', 4))
         )
         
-        # Training setup
+        # Training setup for supervised classification
         optimizer = torch.optim.AdamW(
             self.model.parameters(),
             lr=float(self.training_config.get('learning_rate', 1e-4)),
@@ -592,13 +782,13 @@ class EncoderTransformerBaseline:
         # Train
         num_epochs = int(self.training_config.get('epochs', 10))
         print(f"\n" + "=" * 80)
-        print(f"Training for {num_epochs} epochs...")
+        print(f"Stage 2: Supervised training for {num_epochs} epochs...")
         print("=" * 80)
         
         best_val_auroc = 0.0
         
         for epoch in range(num_epochs):
-            print(f"\nEpoch {epoch + 1}/{num_epochs}")
+            print(f"\n[Classification] Epoch {epoch + 1}/{num_epochs}")
             train_loss = self.train_epoch(train_loader, optimizer, criterion, device)
             print(f"  - Train loss: {train_loss:.4f}")
             

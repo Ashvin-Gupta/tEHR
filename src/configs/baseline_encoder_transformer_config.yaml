@@ -18,6 +18,15 @@ training:
   weight_decay: 0.01
   dataloader_num_workers: 2
 
+pretrain:
+  enabled: true
+  epochs: 5
+  batch_size: 64
+  learning_rate: 1e-4
+  weight_decay: 0.01
+  mlm_probability: 0.15
+  dataloader_num_workers: 2
+
 data:
   cutoff_months: 6
   data_dir: "/data/scratch/qc25022/pancreas/tokenised_data_pancreas_MEDS/cprd_upgi"
