@@ -192,13 +192,17 @@ class EHRClassificationTrainer:
         print("Setting up trainer...")
         print("=" * 80)
 
-        # # If model name contains 'mistral', add save_safetensors=False to training_args
-        # extra_training_args = {}
-        # if "mistral" in self.training_config.get("model_name", "").lower():
-        #     extra_training_args["save_safetensors"] = False
-              # Add this line
-        
-        training_args = TrainingArguments(
+        # If model name contains 'mistral', add save_safetensors=False to training_args
+        model_name = (
+            self.model_config.get("model_name", "") 
+            if hasattr(self, "model_config") 
+            else self.training_config.get("model_name", "")
+        )
+        save_safetensors = None
+        if "mistral" in model_name.lower():
+            save_safetensors = False
+
+        training_args_kwargs = dict(
             output_dir=self.training_config['output_dir'],
             run_name=run_name,
             report_to="wandb" if self.wandb_config.get('enabled', False) else "none",
@@ -239,6 +243,10 @@ class EHRClassificationTrainer:
             # Other
             remove_unused_columns=False,
         )
+        if save_safetensors is not None:
+            training_args_kwargs["save_safetensors"] = save_safetensors
+
+        training_args = TrainingArguments(**training_args_kwargs)
         
         # Create callbacks
         callbacks = []
