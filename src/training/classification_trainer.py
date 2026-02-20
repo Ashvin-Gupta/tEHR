@@ -191,6 +191,12 @@ class EHRClassificationTrainer:
         print("\n" + "=" * 80)
         print("Setting up trainer...")
         print("=" * 80)
+
+        # # If model name contains 'mistral', add save_safetensors=False to training_args
+        # extra_training_args = {}
+        # if "mistral" in self.training_config.get("model_name", "").lower():
+        #     extra_training_args["save_safetensors"] = False
+              # Add this line
         
         training_args = TrainingArguments(
             output_dir=self.training_config['output_dir'],

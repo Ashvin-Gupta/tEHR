@@ -1,9 +1,9 @@
 name: "llm_classifier"
 
 model:
-  pretrained_checkpoint: "/data/scratch/qc25022/pancreas/experiments/Pretrain-Qwen3-1.7B-Pancreas-new-time/checkpoint-15000"
+  pretrained_checkpoint: "/data/scratch/qc25022/pancreas/experiments/Pretrain-Qwen3-8B-Pancreas-new-time/checkpoint-9000"
   max_length: 12000           # Used when loading model 
-  hidden_size: 2048
+  hidden_size: 4096
   num_labels: 2
   freeze_llm: true            # Keep base model frozen, only LoRA + classifier train
   train_lora: true            # Re-enable LoRA adapter parameters for training
@@ -16,10 +16,10 @@ model:
 wandb:
   enabled: true
   project: "Pretrain-Qwen3-8B-Pancreas-classification"
-  run_name: "lora-6-month-logistic-refactored-new-time-pretrain-1.7B"
+  run_name: "lora-6-month-logistic-refactored-new-time-pretrain-8B"
 
 training:
-  output_dir: "/data/scratch/qc25022/pancreas_MEDS/experiments/lora-6-month-logistic-refactored-new-time-pretrain-1.7B"
+  output_dir: "/data/scratch/qc25022/pancreas_MEDS/experiments/lora-6-month-logistic-refactored-new-time-pretrain-8B"
   overwrite_output_dir: true
   epochs: 1
   batch_size: 2
@@ -43,8 +43,8 @@ training:
 
 data:
   cutoff_months: 6  # Remove last 5 month before diagnosis for cancer patients
-  data_dir: "/data/scratch/qc25022/pancreas/tokenised_data_pancreas_MEDS/cprd_upgi"
-  vocab_filepath: "/data/scratch/qc25022/pancreas/tokenised_data_pancreas_MEDS/cprd_upgi/vocab.csv"
+  data_dir: "/data/scratch/qc25022/pancreas/tokenised_data_pancreas_MEDS_new_time/cprd_upgi"
+  vocab_filepath: "/data/scratch/qc25022/pancreas/tokenised_data_pancreas_MEDS_new_time/cprd_upgi/vocab.csv"
   labels_filepath: "/data/home/qc25022/cancer-extraction-pipeline/output/pancreas_MEDS/subject_information.csv"
   medical_lookup_filepath: "/data/home/qc25022/TextCancEHR2/src/resources/MedicalDictTranslation2.csv"
   lab_lookup_filepath: "/data/home/qc25022/TextCancEHR2/src/resources/LabLookUP.csv"
