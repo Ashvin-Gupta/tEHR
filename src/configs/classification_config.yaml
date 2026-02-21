@@ -2,6 +2,7 @@ name: "llm_classifier"
 # /data/scratch/qc25022/pancreas/experiments/Pretrain-Qwen3-8B-Pancreas-new-time/checkpoint-11000
 model:
   pretrained_checkpoint: "/data/scratch/qc25022/pancreas/experiments/Pretrain-Qwen3-8B-Pancreas-new-time/checkpoint-11000"
+  max_length: 12000
   hidden_size: 4096
   num_labels: 2
   freeze_llm: true            # Keep base model frozen, only LoRA + classifier train
