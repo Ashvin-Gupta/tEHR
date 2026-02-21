@@ -796,13 +796,23 @@ class EncoderTransformerBaseline:
             val_metrics = self.evaluate(val_loader, device, 'validation')
             if val_metrics['auroc'] > best_val_auroc:
                 best_val_auroc = val_metrics['auroc']
-                # Save best model
+                # Save best model (by validation AUROC)
+                os.makedirs(os.path.join(self.output_dir, 'models'), exist_ok=True)
                 torch.save(self.model.state_dict(), os.path.join(self.output_dir, 'models', 'best_model.pt'))
+                print(f"  - Saved best model (val AUROC {best_val_auroc:.4f})")
         
-        # Load best model
-        self.model.load_state_dict(torch.load(os.path.join(self.output_dir, 'models', 'best_model.pt')))
+        # Load best model (by validation AUROC) for final evaluation and saving
+        best_path = os.path.join(self.output_dir, 'models', 'best_model.pt')
+        self.model.load_state_dict(torch.load(best_path, map_location=device))
+        print(f"\nLoaded best model (best val AUROC) for final evaluation.")
         
-        # Final evaluation
+        # Save best model to final_model for consistency with other baselines
+        final_model_dir = os.path.join(self.output_dir, 'final_model')
+        os.makedirs(final_model_dir, exist_ok=True)
+        torch.save(self.model.state_dict(), os.path.join(final_model_dir, 'pytorch_model.bin'))
+        print(f"  - Best model saved to: {final_model_dir}")
+        
+        # Final evaluation (on best model)
         val_metrics = self.evaluate(val_loader, device, 'validation')
         test_metrics = self.evaluate(test_loader, device, 'test')
         

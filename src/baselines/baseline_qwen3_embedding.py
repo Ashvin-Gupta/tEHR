@@ -292,7 +292,7 @@ class Qwen3EmbeddingBaseline:
             eval_strategy="steps",
             save_strategy="steps",
             load_best_model_at_end=True,
-            metric_for_best_model="f1",
+            metric_for_best_model="auroc",
             greater_is_better=True,
             dataloader_num_workers=int(self.training_config.get('dataloader_num_workers', 4)),
             report_to="wandb" if self.wandb_config.get('enabled', False) else "none",
