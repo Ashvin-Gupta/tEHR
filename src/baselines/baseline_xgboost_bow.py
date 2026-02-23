@@ -76,6 +76,20 @@ def should_include_token(token_str: str) -> bool:
     if token_str.startswith('Q') and len(token_str) <= 4 and token_str[1:].isdigit():
         return False
     
+    # Exclude tokens containing "6866.00"
+    if "6866.00" in token_str:
+        print(f"Excluding token: {token_str}")
+        return False
+    
+    if "22J..00" in token_str:
+        return False
+    
+    if "BB5B.00" in token_str:
+        return False
+    
+    if "8CMG.00" in token_str:
+        return False
+    
     # Exclude lab value categories
     if token_lower in ['low', 'normal', 'high', 'very low', 'very high']:
         return False
@@ -95,20 +109,6 @@ def should_include_token(token_str: str) -> bool:
     # Include demographics
     if token_upper.startswith(('AGE:', 'AGE', 'GENDER//', 'ETHNICITY//', 'REGION//')):
         return True
-    
-    # Exclude tokens containing "6866.00"
-    if "6866.00" in token_str:
-        print(f"Excluding token: {token_str}")
-        return False
-    
-    if "22J..00" in token_str:
-        return False
-    
-    if "BB5B.00" in token_str:
-        return False
-    
-    if "8CMG.00" in token_str:
-        return False
     
     # Include lifestyle
     if token_upper.startswith('LIFESTYLE//'):
