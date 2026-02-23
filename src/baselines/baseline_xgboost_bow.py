@@ -65,6 +65,9 @@ def should_include_token(token_str: str) -> bool:
     if token_str.startswith('<time_interval_'):
         return False
     
+    if token_str.startswith('TIME '):
+        return False
+    
     # Exclude numeric values (pure numbers, including negative and decimal)
     if token_str.replace('.', '', 1).replace('-', '', 1).isdigit():
         return False
