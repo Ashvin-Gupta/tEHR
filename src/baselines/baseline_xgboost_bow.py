@@ -94,28 +94,28 @@ def should_include_token(token_str: str) -> bool:
     if token_lower in ['low', 'normal', 'high', 'very low', 'very high']:
         return False
     
-    # Include medical codes
-    if token_upper.startswith('MEDICAL//'):
-        return True
-    
     # Include lab test names (but not their values - values are numeric and already excluded above)
     if token_upper.startswith('LAB//'):
-        return True
+        return False
     
     # Include measurement codes
     if token_upper.startswith('MEASUREMENT//'):
-        return True
+        return False
     
     # Include demographics
     if token_upper.startswith(('AGE:', 'AGE', 'GENDER//', 'ETHNICITY//', 'REGION//')):
-        return True
+        return False
     
     # Include lifestyle
     if token_upper.startswith('LIFESTYLE//'):
-        return True
+        return False
     
     # Include special tokens
     if token_str in ['<start>', '<end>', '<unknown>', 'MEDS_BIRTH']:
+        return False
+    
+    # Include medical codes
+    if token_upper.startswith('MEDICAL//'):
         return True
     
     # Exclude units - tokens that are short strings with unit-like characters
