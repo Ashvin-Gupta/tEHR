@@ -97,6 +97,19 @@ def should_include_token(token_str: str) -> bool:
         return True
     
     # Include lifestyle
+    # Exclude tokens containing "6866.00"
+    if "6866.00" in token_str:
+        return False
+    
+    if "22J..00" in token_str:
+        return False
+    
+    if "BB5B.00" in token_str:
+        return False
+    
+    if "8CMG.00" in token_str:
+        return False
+
     if token_upper.startswith('LIFESTYLE//'):
         return True
     
