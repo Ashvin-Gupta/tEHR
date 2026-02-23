@@ -78,7 +78,6 @@ def should_include_token(token_str: str) -> bool:
     
     # Exclude tokens containing "6866.00"
     if "6866.00" in token_str:
-        print(f"Excluding token: {token_str}")
         return False
     
     if "22J..00" in token_str:
