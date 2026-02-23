@@ -96,9 +96,9 @@ def should_include_token(token_str: str) -> bool:
     if token_upper.startswith(('AGE:', 'AGE', 'GENDER//', 'ETHNICITY//', 'REGION//')):
         return True
     
-    # Include lifestyle
     # Exclude tokens containing "6866.00"
     if "6866.00" in token_str:
+        print(f"Excluding token: {token_str}")
         return False
     
     if "22J..00" in token_str:
@@ -109,7 +109,8 @@ def should_include_token(token_str: str) -> bool:
     
     if "8CMG.00" in token_str:
         return False
-
+    
+    # Include lifestyle
     if token_upper.startswith('LIFESTYLE//'):
         return True
     
