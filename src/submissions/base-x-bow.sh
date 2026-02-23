@@ -1,7 +1,7 @@
 #!/bin/bash
 #$ -cwd                 
-#$ -pe smp 8
-#$ -l h_rt=1:0:0
+#$ -pe smp 4
+#$ -l h_rt=0:20:0
 #$ -l h_vmem=4G
 #$ -j n
 #$ -o /data/home/qc25022/TextCancEHR2/HPC_Base/logo/
