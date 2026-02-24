@@ -279,6 +279,13 @@ class EHRPretrainer:
         callbacks = []
         if inference_prompt:
             callbacks.append(InferenceCallback(self.model, self.tokenizer, inference_prompt))
+
+        # Always add a batch shape callback so we can monitor
+        # the actual batch size and sequence length during pretraining.
+        # Default: print every 25 steps, but allow overriding via config.
+        batch_shape_print_every = self.training_config.get('batch_shape_print_every', 25)
+        if batch_shape_print_every is not None and batch_shape_print_every >= 0:
+            callbacks.append(BatchShapeCallback(print_every_n_steps=batch_shape_print_every))
         
         print("\nInitializing SFTTrainer...")
         
