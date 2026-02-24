@@ -264,8 +264,6 @@ class XGBoostBOWBaseline:
         labels_list = []
         
         print("Extracting bag-of-words features from dataset...")
-        print(f"  - cutoff_months on dataset: {dataset.cutoff_months}")
-        print(f"  - raw patient_records: {len(dataset.patient_records)}")
         
         # Load labels file directly to get binary is_case labels
         labels_df = pd.read_csv(self.data_config['labels_filepath'])
@@ -273,20 +271,6 @@ class XGBoostBOWBaseline:
             labels_df['is_case'].values,
             index=labels_df['subject_id']
         ).to_dict()
-        
-        # Simple debug flag (no extra config needed)
-        debug = self.training_config.get('debug_bow', True)
-        max_debug_examples = 10
-        debug_examples_shown = 0
-        
-        # Aggregate stats for sanity checks
-        num_cases = 0
-        num_controls = 0
-        orig_tokens_cases = 0
-        orig_tokens_controls = 0
-        trunc_tokens_cases = 0
-        trunc_tokens_controls = 0
-        cancer_tokens_removed_total = 0
         
         # Access patient records directly to get raw tokens without translation
         for i in tqdm(range(len(dataset.patient_records)), desc="Processing samples"):
@@ -298,21 +282,17 @@ class XGBoostBOWBaseline:
             if pd.isna(label) if hasattr(pd, 'isna') else (label is None):
                 continue  # Skip patients without labels
             
-            is_case = int(label) == 1
-            
             # Get raw token IDs and timestamps
             token_ids = patient_record['tokens']
             timestamps = patient_record['timestamps']
-            orig_len = len(token_ids)
             
             # Apply time cutoff if needed (same logic as dataset)
             cutoff_date = None
-            cutoff_timestamp = None
             if dataset.cutoff_months is not None:
                 actual_cutoff = dataset.cutoff_months
                 cancer_date = dataset.subject_to_cancer_date.get(subject_id)
                 
-                # --- MATCH UnifiedEHRDataset.__getitem__ LOGIC ---
+                # Match UnifiedEHRDataset.__getitem__ logic
                 if pd.notna(cancer_date) if hasattr(pd, 'notna') else (cancer_date is not None):
                     # Cases (or any subject with a cancer date): anchor on cancer_date
                     cutoff_date = cancer_date - pd.DateOffset(months=actual_cutoff)
@@ -338,19 +318,13 @@ class XGBoostBOWBaseline:
                             truncated_ids.append(token_ids[j])
                     token_ids = truncated_ids
             
-            trunc_len_before_cancer_filter = len(token_ids)
-            
-            # Convert token IDs to strings and filter out cancer tokens,
-            # while counting how many we drop for debugging.
+            # Convert token IDs to strings and filter out cancer tokens
             token_strings = []
-            cancer_tokens_removed = 0
             for tid in token_ids:
                 tok = dataset.id_to_token_map.get(tid, "")
                 if 'cancer' in str(tok).lower():
-                    cancer_tokens_removed += 1
                     continue
                 token_strings.append(tok)
-            cancer_tokens_removed_total += cancer_tokens_removed
             
             # Create sample dict with tokens
             sample = {'tokens': token_strings}
@@ -361,38 +335,6 @@ class XGBoostBOWBaseline:
             
             # Use is_case directly (already binary: 0 = Control, 1 = Pancreatic Cancer)
             labels_list.append(int(label))
-            
-            # Update aggregate stats
-            if is_case:
-                num_cases += 1
-                orig_tokens_cases += orig_len
-                trunc_tokens_cases += trunc_len_before_cancer_filter
-            else:
-                num_controls += 1
-                orig_tokens_controls += orig_len
-                trunc_tokens_controls += trunc_len_before_cancer_filter
-            
-            # Show a few detailed examples for sanity checking
-            if debug and debug_examples_shown < max_debug_examples:
-                debug_examples_shown += 1
-                
-                # Derive some simple time stats for this patient
-                valid_ts = [ts for ts in timestamps if ts is not None and ts > 0]
-                min_ts = min(valid_ts) if valid_ts else None
-                max_ts = max(valid_ts) if valid_ts else None
-                
-                print("\n[DEBUG] Example patient:")
-                print(f"  subject_id: {subject_id}")
-                print(f"  is_case (is_case label): {int(label)}")
-                print(f"  original #tokens: {orig_len}")
-                print(f"  #tokens after cutoff (before cancer filter): {trunc_len_before_cancer_filter}")
-                print(f"  #tokens after cancer-token filter: {len(token_strings)}")
-                print(f"  #cancer tokens removed: {cancer_tokens_removed}")
-                print(f"  min timestamp (raw): {min_ts}")
-                print(f"  max timestamp (raw): {max_ts}")
-                print(f"  cutoff_months: {dataset.cutoff_months}")
-                print(f"  cutoff_date (if cancer_date known): {cutoff_date}")
-                print(f"  cutoff_timestamp (if applicable): {cutoff_timestamp}")
         
         # Convert to numpy arrays
         features_array = np.array(features_list)
@@ -404,26 +346,8 @@ class XGBoostBOWBaseline:
         print(f"  - Feature matrix shape: {features_array.shape}")
         print(f"  - Sparsity: {(features_array == 0).sum() / features_array.size * 100:.2f}% zeros")
         
-        # Extra label distribution info
-        if features_array.shape[0] > 0:
-            class_counts = {int(lbl): int((labels_array == lbl).sum()) for lbl in unique_labels}
-            print(f"  - Label counts: {class_counts}")
-        
         if len(unique_labels) > 2 or not all(l in [0, 1] for l in unique_labels):
             raise ValueError(f"Expected binary labels [0, 1] from is_case, got {unique_labels}")
-        
-        # Aggregate truncation stats
-        total_patients = num_cases + num_controls
-        print("\n[DEBUG] Dataset truncation summary:")
-        print(f"  total patients with labels: {total_patients}")
-        print(f"  num_cases: {num_cases}, num_controls: {num_controls}")
-        if num_cases > 0:
-            print(f"  avg original tokens (cases): {orig_tokens_cases / max(num_cases, 1):.2f}")
-            print(f"  avg tokens after cutoff (cases, before cancer-filter): {trunc_tokens_cases / max(num_cases, 1):.2f}")
-        if num_controls > 0:
-            print(f"  avg original tokens (controls): {orig_tokens_controls / max(num_controls, 1):.2f}")
-            print(f"  avg tokens after cutoff (controls, before cancer-filter): {trunc_tokens_controls / max(num_controls, 1):.2f}")
-        print(f"  total cancer tokens removed across all patients: {cancer_tokens_removed_total}")
         
         return features_array, labels_array
     
