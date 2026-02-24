@@ -19,7 +19,7 @@ training:
   n_jobs: -1
 
 data:
-  cutoff_months: 36
+  cutoff_months: 54
   data_dir: "/data/scratch/qc25022/pancreas/tokenised_data_pancreas_MEDS_new_time/cprd_upgi"
   vocab_filepath: "/data/scratch/qc25022/pancreas/tokenised_data_pancreas_MEDS_new_time/cprd_upgi/vocab.csv"
   labels_filepath: "/data/home/qc25022/cancer-extraction-pipeline/output/pancreas_MEDS/subject_information.csv"
