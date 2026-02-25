@@ -7,7 +7,7 @@ import argparse
 import yaml
 import pprint
 
-from src.training.utils import seed_all, print_sample_translations
+from src.training.utils import seed_all, print_sample_translations_mimic, print_sample_translations_mimic
 from src.training.trainer import EHRPretrainer
 
 
@@ -49,7 +49,10 @@ def main(config_path: str):
     print("=" * 80)
     
     # Print sample translations before training
-    print_sample_translations(config, num_samples=3)
+    if config['data']['dataset'] == 'CPRD':
+        print_sample_translations(config, num_samples=3)
+    else:
+        print_sample_translations_mimic(config, num_samples=3)
 
     # Create pretrainer and run the full pipeline
     pretrainer = EHRPretrainer(config)

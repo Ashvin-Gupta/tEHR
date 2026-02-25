@@ -5,7 +5,7 @@ from transformers import set_seed as hf_set_seed
 import random
 import numpy as np
 import torch
-
+from src.data.MIMIC_unified_dataset import MIMICUnifiedDataset
 
 def seed_all(seed: int):
     """
@@ -117,6 +117,69 @@ def print_sample_translations(config: dict, num_samples: int = 4):
         else:
             print("(Text is shorter than 1000 characters, see above)")
         
+        print("\n")
+    
+    print("=" * 80)
+    print("END OF SAMPLE TRANSLATIONS")
+    print("=" * 80 + "\n")
+
+def print_sample_translations_mimic(config: dict, num_samples: int = 4):
+    """
+    Print sample patient translations to verify data quality for MIMIC-IV.
+    """
+    print("\n" + "=" * 80)
+    print("SAMPLE PATIENT TRANSLATIONS (MIMIC-IV)")
+    print("=" * 80)
+    
+    data_config = config['data']
+    
+    # Initialize using the new directory-based structure
+    dataset = MIMICUnifiedDataset(
+        data_dir=data_config['data_dir'],
+        vocab_file=data_config['vocab_filepath'],
+        aces_label_dir=data_config['aces_label_dir'], # New key
+        lookup_dir=data_config['lookup_dir'],         # New key
+        task='pretrain',                              # Uses the 'everything' view
+        split='train'
+    )
+    
+    print(f"Loaded dataset with {len(dataset)} patients from {data_config['data_dir']}\n")
+    
+    # Sample patients
+    # Note: For pretraining, most will be 'Controls' in the context of a specific task,
+    # but the dataset will still provide the full narrative.
+    num_to_sample = min(num_samples, len(dataset))
+    sample_indices = random.sample(range(len(dataset)), num_to_sample)
+    
+    for i, idx in enumerate(sample_indices, 1):
+        sample = dataset[idx]
+        if sample is None:
+            continue
+            
+        text = sample['text']
+        label = sample['label'].item()
+        
+        print("=" * 80)
+        print(f"PATIENT SAMPLE {i} (Index: {idx})")
+        print("=" * 80)
+        print(f"Task Label: {label} (0=Control/Alive, 1=Case/Mortality)")
+        print(f"Total Text Length: {len(text):,} characters")
+        
+        print("\n" + "-" * 80)
+        print("FIRST 1000 CHARACTERS:")
+        print("-" * 80)
+        print(text[:1000])
+        if len(text) > 1000:
+            print("...")
+            
+        print("\n" + "-" * 80)
+        print("LAST 1000 CHARACTERS:")
+        print("-" * 80)
+        if len(text) > 1000:
+            print("...")
+            print(text[-1000:])
+        else:
+            print("(Full text shown above)")
         print("\n")
     
     print("=" * 80)

@@ -2,6 +2,7 @@ HPC_Pretrain/
 HPC_Classifier/
 HPC_Base/
 outputs/
+logs/
 wandb/
 unsloth_compiled_cache/
 .DS_Store
