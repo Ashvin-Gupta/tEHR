@@ -12,6 +12,7 @@ from trl import SFTTrainer, SFTConfig
 import wandb
 
 from src.data.unified_dataset import UnifiedEHRDataset
+from src.data.MIMIC_unified_dataset import MIMICUnifiedDataset
 from src.data.preprocessing import extract_text
 from src.training.callbacks import InferenceCallback, PackingVerificationCallback, BatchShapeCallback
 
@@ -170,28 +171,47 @@ class EHRPretrainer:
         Returns:
             Tuple of (train_dataset, val_dataset)
         """
-        dataset_args = {
-            "data_dir": self.data_config["data_dir"],
-            "vocab_file": self.data_config["vocab_filepath"],
-            "labels_file": self.data_config["labels_filepath"],
-            "medical_lookup_file": self.data_config["medical_lookup_filepath"],
-            "lab_lookup_file": self.data_config["lab_lookup_filepath"],
-            "region_lookup_file": self.data_config["region_lookup_filepath"],
-            "time_lookup_file": self.data_config["time_lookup_filepath"],
-            "format": 'text',
-            "cutoff_months": self.data_config.get("cutoff_months", 1),
-            "max_sequence_length": None,  # No truncation - we'll pack sequences
-            "data_type": self.training_config.get('input_data', 'binned'),
-        }
-        
-        print("\nLoading training data...")
-        train_base_dataset = UnifiedEHRDataset(split="train", **dataset_args)
-        print(f"  - Loaded {len(train_base_dataset)} training patients")
-        
-        print("\nLoading validation data...")
-        val_base_dataset = UnifiedEHRDataset(split="tuning", **dataset_args)
-        print(f"  - Loaded {len(val_base_dataset)} validation patients")
-
+        if self.data_config['dataset'] == 'CPRD':
+            dataset_args = {
+                "data_dir": self.data_config["data_dir"],
+                "vocab_file": self.data_config["vocab_filepath"],
+                "labels_file": self.data_config["labels_filepath"],
+                "medical_lookup_file": self.data_config["medical_lookup_filepath"],
+                "lab_lookup_file": self.data_config["lab_lookup_filepath"],
+                "region_lookup_file": self.data_config["region_lookup_filepath"],
+                "time_lookup_file": self.data_config["time_lookup_filepath"],
+                "format": 'text',
+                "cutoff_months": self.data_config.get("cutoff_months", 1),
+                "max_sequence_length": None,  # No truncation - we'll pack sequences
+                "data_type": self.training_config.get('input_data', 'binned'),
+            }
+            
+            print("\nLoading training data...")
+            train_base_dataset = UnifiedEHRDataset(split="train", **dataset_args)
+            print(f"  - Loaded {len(train_base_dataset)} training patients")
+            
+            print("\nLoading validation data...")
+            val_base_dataset = UnifiedEHRDataset(split="tuning", **dataset_args)
+            print(f"  - Loaded {len(val_base_dataset)} validation patients")
+        else:
+            dataset_args = {
+                "data_dir": self.data_config["data_dir"],
+                "vocab_file": self.data_config["vocab_filepath"],
+                "aces_label_dir": self.data_config["aces_label_dir"], # Directory containing /train, /tuning
+                "lookup_dir": self.data_config["lookup_dir"],       # Directory containing d_labitems, etc.
+                "task": 'pretrain',                                 # Set task to 'pretrain'
+                "max_sequence_length": None,
+            }
+            
+            print("\nLoading MIMIC training data for pretraining...")
+            train_base_dataset = MIMICUnifiedDataset(split="train", **dataset_args)
+            print(f"  - Loaded {len(train_base_dataset)} training patients")
+            
+            print("\nLoading MIMIC validation data for pretraining...")
+            val_base_dataset = MIMICUnifiedDataset(split="tuning", **dataset_args)
+            print(f"  - Loaded {len(val_base_dataset)} validation patients")
+    
+    
         # Extract text from datasets
         print("  - Extracting text for pretraining...")
         train_text_list = extract_text(train_base_dataset, self.tokenizer)
@@ -279,6 +299,10 @@ class EHRPretrainer:
         callbacks = []
         if inference_prompt:
             callbacks.append(InferenceCallback(self.model, self.tokenizer, inference_prompt))
+
+        batch_shape_print_every = 50
+        if batch_shape_print_every is not None and batch_shape_print_every >= 0:
+            callbacks.append(BatchShapeCallback(print_every_n_steps=batch_shape_print_every))
         
         print("\nInitializing SFTTrainer...")
         
