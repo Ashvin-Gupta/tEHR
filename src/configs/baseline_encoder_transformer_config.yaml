@@ -10,7 +10,7 @@ model:
   num_labels: 2
 
 training:
-  output_dir: "/data/scratch/qc25022/pancreas_MEDS/experiments/baselines/encoder_transformer-12months"
+  output_dir: "/data/scratch/qc25022/pancreas_MEDS/experiments/baselines/encoder_transformer-1months"
   overwrite_output_dir: true
   epochs: 10
   batch_size: 32
@@ -20,7 +20,7 @@ training:
 
 pretrain:
   enabled: true
-  epochs: 30
+  epochs: 50
   batch_size: 64
   learning_rate: 1e-4
   weight_decay: 0.01
@@ -28,7 +28,7 @@ pretrain:
   dataloader_num_workers: 2
 
 data:
-  cutoff_months: 12
+  cutoff_months: 1
   data_dir: "/data/scratch/qc25022/pancreas/tokenised_data_pancreas_MEDS/cprd_upgi"
   vocab_filepath: "/data/scratch/qc25022/pancreas/tokenised_data_pancreas_MEDS/cprd_upgi/vocab.csv"
   labels_filepath: "/data/home/qc25022/cancer-extraction-pipeline/output/pancreas_MEDS/subject_information.csv"

@@ -282,32 +282,49 @@ class XGBoostBOWBaseline:
             if pd.isna(label) if hasattr(pd, 'isna') else (label is None):
                 continue  # Skip patients without labels
             
-            # Get raw token IDs and convert to strings using vocab
+            # Get raw token IDs and timestamps
             token_ids = patient_record['tokens']
             timestamps = patient_record['timestamps']
             
             # Apply time cutoff if needed (same logic as dataset)
+            cutoff_date = None
             if dataset.cutoff_months is not None:
                 actual_cutoff = dataset.cutoff_months
                 cancer_date = dataset.subject_to_cancer_date.get(subject_id)
                 
+                # Match UnifiedEHRDataset.__getitem__ logic
                 if pd.notna(cancer_date) if hasattr(pd, 'notna') else (cancer_date is not None):
+                    # Cases (or any subject with a cancer date): anchor on cancer_date
                     cutoff_date = cancer_date - pd.DateOffset(months=actual_cutoff)
+                else:
+                    # Controls or subjects without cancer date: anchor on last valid timestamp
+                    valid_timestamps = [ts for ts in timestamps if ts is not None and ts > 0]
+                    if valid_timestamps:
+                        last_timestamp = max(valid_timestamps)
+                        last_date = pd.Timestamp.fromtimestamp(last_timestamp)
+                        cutoff_date = last_date - pd.DateOffset(months=actual_cutoff)
+                    else:
+                        cutoff_date = None
+                
+                if cutoff_date is not None:
                     cutoff_timestamp = cutoff_date.timestamp()
                     
                     truncated_ids = []
                     for j, ts in enumerate(timestamps):
                         token_str = dataset.id_to_token_map.get(token_ids[j], "")
+                        # Keep: special tokens (ts == 0), tokens strictly before cutoff, OR the <end> token
                         is_end_token = (token_str == '<end>')
                         if ts == 0 or (ts is not None and ts < cutoff_timestamp) or is_end_token:
                             truncated_ids.append(token_ids[j])
                     token_ids = truncated_ids
             
-            # Convert token IDs to strings
-            token_strings = [dataset.id_to_token_map.get(tid, "") for tid in token_ids]
-            
-            # Filter out tokens containing "cancer" (case-insensitive)
-            token_strings = [token for token in token_strings if 'cancer' not in str(token).lower()]
+            # Convert token IDs to strings and filter out cancer tokens
+            token_strings = []
+            for tid in token_ids:
+                tok = dataset.id_to_token_map.get(tid, "")
+                if 'cancer' in str(tok).lower():
+                    continue
+                token_strings.append(tok)
             
             # Create sample dict with tokens
             sample = {'tokens': token_strings}

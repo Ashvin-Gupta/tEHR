@@ -283,8 +283,8 @@ class Qwen3EmbeddingBaseline:
             gradient_accumulation_steps=int(self.training_config.get('gradient_accumulation_steps', 2)),
             fp16=bool(self.training_config.get('fp16', False)),
             bf16=bool(self.training_config.get('bf16', True)),
-            gradient_checkpointing=bool(self.training_config.get('gradient_checkpointing', True)),
-            gradient_checkpointing_kwargs={"use_reentrant": False},
+            # gradient_checkpointing=bool(self.training_config.get('gradient_checkpointing', True)),
+            # gradient_checkpointing_kwargs={"use_reentrant": False},
             logging_steps=int(self.training_config.get('logging_steps', 50)),
             eval_steps=int(self.training_config.get('eval_steps', 250)),
             save_steps=int(self.training_config.get('save_steps', 500)),
@@ -356,13 +356,13 @@ class Qwen3EmbeddingBaseline:
             gradient_accumulation_steps=int(pretrain_cfg.get("gradient_accumulation_steps", 1)),
             fp16=bool(pretrain_cfg.get("fp16", self.training_config.get("fp16", False))),
             bf16=bool(pretrain_cfg.get("bf16", self.training_config.get("bf16", True))),
-            gradient_checkpointing=bool(
-                pretrain_cfg.get(
-                    "gradient_checkpointing",
-                    self.training_config.get("gradient_checkpointing", True),
-                )
-            ),
-            gradient_checkpointing_kwargs={"use_reentrant": False},
+            # gradient_checkpointing=bool(
+            #     pretrain_cfg.get(
+            #         "gradient_checkpointing",
+            #         self.training_config.get("gradient_checkpointing", True),
+            #     )
+            # ),
+            # gradient_checkpointing_kwargs={"use_reentrant": False},
             logging_steps=int(pretrain_cfg.get("logging_steps", self.training_config.get("logging_steps", 50))),
             eval_steps=int(pretrain_cfg.get("eval_steps", self.training_config.get("eval_steps", 250))),
             save_steps=int(pretrain_cfg.get("save_steps", self.training_config.get("save_steps", 500))),
