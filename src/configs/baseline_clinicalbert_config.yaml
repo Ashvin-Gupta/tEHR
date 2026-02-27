@@ -7,10 +7,10 @@ model:
 wandb:
   enabled: true
   project: "Pretrain-Qwen3-8B-Pancreas-classification"
-  run_name: "baseline-clinicalbert-6months"
+  run_name: "baseline-clinicalbert-3months"
 
 training:
-  output_dir: "/data/scratch/qc25022/pancreas_MEDS/experiments/baselines/clinicalbert-6months"
+  output_dir: "/data/scratch/qc25022/pancreas_MEDS/experiments/baselines/clinicalbert-3months"
   overwrite_output_dir: true
   epochs: 3
   batch_size: 16
@@ -28,7 +28,7 @@ training:
   dataloader_num_workers: 8
 
 data:
-  cutoff_months: 6
+  cutoff_months: 3
   data_dir: "/data/scratch/qc25022/pancreas/tokenised_data_pancreas_MEDS_new_time/cprd_upgi"
   vocab_filepath: "/data/scratch/qc25022/pancreas/tokenised_data_pancreas_MEDS_new_time/cprd_upgi/vocab.csv"
   labels_filepath: "/data/home/qc25022/cancer-extraction-pipeline/output/pancreas_MEDS/subject_information.csv"
