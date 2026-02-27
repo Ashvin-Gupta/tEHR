@@ -7,7 +7,7 @@ import argparse
 import yaml
 import pprint
 
-from src.training.utils import seed_all, print_sample_translations_mimic, print_sample_translations_mimic
+from src.training.utils import seed_all, print_sample_translations_mimic, print_sample_translations
 from src.training.trainer import EHRPretrainer
 
 
