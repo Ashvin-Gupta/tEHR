@@ -287,6 +287,10 @@ class EHRClassificationTrainer:
         print("\n" + "=" * 80)
         print("Saving final model...")
         print("=" * 80)
+
+        if not self.training_config.get('save_model', True):
+            print("  - Skipping model save because 'save_model' is set to False in training config.")
+            return
         
         final_model_path = os.path.join(self.training_config['output_dir'], "final_model")
         self.trainer.save_model(final_model_path)

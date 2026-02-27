@@ -6,8 +6,10 @@ pretrained model from Stage 1 (continued pretraining) and fine-tuning it
 with a classification head for binary cancer prediction.
 """
 import argparse
-import yaml
+import os
 import pprint
+import random
+import yaml
 
 from src.training.utils import seed_all
 from src.training.classification_trainer import EHRClassificationTrainer
@@ -20,9 +22,6 @@ def main(config_path: str):
     Args:
         config_path: Path to YAML configuration file.
     """
-    # Set seed for reproducibility
-    seed_all(42)
-    
     # Load configuration
     print("=" * 80)
     print("LLM Binary Classification Fine-tuning")
@@ -36,6 +35,19 @@ def main(config_path: str):
     pprint.pprint(config)
     print("=" * 80)
 
+    # Draw a fresh random seed for this run and apply it everywhere
+    seed = random.SystemRandom().randint(0, 2**32 - 1)
+    config.setdefault("training", {})["seed"] = seed
+    print(f"\nUsing random seed for this run: {seed}")
+    seed_all(seed)
+
+    # Make seed-specific output directory so plots (and any artifacts) are separated
+    base_output_dir = config["training"].get("output_dir")
+    if base_output_dir:
+        seed_output_dir = os.path.join(base_output_dir, f"seed_{seed}")
+        config["training"]["output_dir"] = seed_output_dir
+        print(f"Outputs (including plots) will be written to: {seed_output_dir}")
+
     # Create classification trainer and run the full pipeline
     trainer = EHRClassificationTrainer(config)
     eval_results, test_results = trainer.run_full_pipeline()
@@ -43,7 +55,9 @@ def main(config_path: str):
     print("\n" + "=" * 80)
     print("Training completed successfully!")
     print("=" * 80)
-    print(f"\nFinal model saved to: {config['training']['output_dir']}/final_model")
+
+    if config["training"].get("save_model", True):
+        print(f"\nFinal model saved to: {config['training']['output_dir']}/final_model")
     
     return eval_results, test_results
 
