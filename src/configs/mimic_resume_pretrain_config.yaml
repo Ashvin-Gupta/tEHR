@@ -1,0 +1,50 @@
+# Example config for resuming pretraining
+# This should match your original pretraining config
+# Just update the checkpoint path when running
+
+name: "mistral_pretraining_resume"
+
+model:
+  model_name: "unsloth/mistral-7b-v0.3-bnb-4bit"
+  max_length: 8192
+  hf_token: null
+
+wandb:
+  enabled: true
+  project: "Pretrain-Mistral-7B"
+
+lora:
+  r: 16
+  target_modules: ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
+  lora_alpha: 32
+  lora_dropout: 0.05
+  bias: "none"
+
+training:
+  output_dir: "/rds/general/user/ag619/ephemeral/MIMIC/experiments/Pretrain-Mistral-7B-Pretrain-continued"
+  overwrite_output_dir: false  # Don't overwrite when resuming
+  
+  epochs: 2
+  batch_size: 2
+  eval_batch_size: 2
+  learning_rate: 1e-5
+  weight_decay: 0.05
+  warmup_steps: 500
+  gradient_accumulation_steps: 1
+  gradient_checkpointing: false
+  fp16: false
+  bf16: true
+  logging_steps: 50
+  eval_steps: 250
+  save_steps: 1000
+  save_total_limit: 3
+  dataloader_num_workers: 4
+
+data:
+  cutoff_months: 1
+  data_dir: "/rds/general/user/ag619/home/ashvin/MEDS/tokenised_data/MIMIC-IV tokensiation"
+  vocab_filepath: "/rds/general/user/ag619/home/ashvin/MEDS/tokenised_data/MIMIC-IV tokensiation/vocab.csv"
+  aces_label_dir: "/rds/general/user/ag619/home/ashvin/MIMIC-IV/MEDS-Output/labels/icu_mortality"
+  lookup_dir: "/rds/general/user/ag619/home/ashvin/MIMIC-IV/mimic-iv-3.1/hosp"
+  dataset: "MIMIC"
+
