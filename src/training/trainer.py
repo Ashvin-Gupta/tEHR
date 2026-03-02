@@ -5,8 +5,9 @@ import os
 from datetime import datetime
 from typing import Dict, Any, Optional
 import torch
+import time
 from datasets import Dataset
-from transformers import TrainingArguments
+from transformers import TrainingArguments, DataCollatorForLanguageModeling
 from unsloth import FastLanguageModel
 from trl import SFTTrainer, SFTConfig
 import wandb
@@ -18,39 +19,42 @@ from src.training.callbacks import InferenceCallback, PackingVerificationCallbac
 
 
 def pack_and_chunk_texts(texts, tokenizer, chunk_size):
-        """
-        Manually packs and chunks texts into fixed-size windows.
-        This replaces SFTTrainer's internal packing mechanism.
-        """
-        print(f"  - Tokenizing and packing {len(texts)} texts into {chunk_size}-token chunks...")
-        
-        all_token_ids = []
-        
-        # 1. Tokenize all texts and flatten into one giant list
-        # We use a generator or loop to avoid holding too much in RAM if possible, 
-        # but for typical EHR datasets, a simple loop is fine.
-        for text in texts:
-            # Tokenize (add_special_tokens=False because we handle EOS manually or it's in the text)
-            token_ids = tokenizer(text, add_special_tokens=False)["input_ids"]
-            all_token_ids.extend(token_ids)
-            
-            # CRITICAL: Ensure there is an EOS token between patients
-            # If your extract_text function already adds it, this check prevents doubling it.
-            if not token_ids or token_ids[-1] != tokenizer.eos_token_id:
-                all_token_ids.append(tokenizer.eos_token_id)
-        
-        # 2. Slice into fixed chunks (Store IDs directly, DO NOT DECODE)
-        chunked_input_ids = []
-        total_tokens = len(all_token_ids)
-        
-        for i in range(0, total_tokens, chunk_size):
-            chunk_ids = all_token_ids[i : i + chunk_size]
-            if len(chunk_ids) > 0:
-                chunked_input_ids.append(chunk_ids)
-                
-        print(f"  - Created {len(chunked_input_ids)} packed sequences.")
-        return chunked_input_ids  # Returns list of lists of ints
+    """
+    Optimized packing and chunking to prevent CPU RAM OOM.
+    """
+    print(f"  - Tokenizing and packing {len(texts)} texts into {chunk_size}-token chunks...")
+    
+    # 1. Use the tokenizer's batch capability (much faster and more memory efficient)
+    # We do NOT return tensors here to keep memory low
+    tokenized = tokenizer(
+        texts, 
+        add_special_tokens=False, 
+        truncation=False, 
+        padding=False
+    )["input_ids"]
 
+    # 2. Flatten efficiently
+    all_token_ids = []
+    eos_id = tokenizer.eos_token_id
+    for ids in tokenized:
+        all_token_ids.extend(ids)
+        if not ids or ids[-1] != eos_id:
+            all_token_ids.append(eos_id)
+            
+    # Free up the intermediate list immediately
+    del tokenized 
+    
+    # 3. Slice into fixed chunks
+    chunked_input_ids = [
+        all_token_ids[i : i + chunk_size] 
+        for i in range(0, len(all_token_ids), chunk_size)
+        if (i + chunk_size) <= len(all_token_ids) # Drop partial final chunk for stability
+    ]
+                
+    print(f"  - Created {len(chunked_input_ids)} packed sequences.")
+    return chunked_input_ids
+
+    
 class EHRPretrainer:
     """
     Manages the entire workflow for continued pretraining of LLMs on EHR data.
@@ -166,65 +170,106 @@ class EHRPretrainer:
     
     def prepare_datasets(self) -> tuple[Dataset, Optional[Dataset]]:
         """
-        Prepare training and validation datasets.
-        
-        Returns:
-            Tuple of (train_dataset, val_dataset)
+        Prepare training and validation datasets using a Rank-0-only processing pattern.
         """
-        if self.data_config['dataset'] == 'CPRD':
-            dataset_args = {
-                "data_dir": self.data_config["data_dir"],
-                "vocab_file": self.data_config["vocab_filepath"],
-                "labels_file": self.data_config["labels_filepath"],
-                "medical_lookup_file": self.data_config["medical_lookup_filepath"],
-                "lab_lookup_file": self.data_config["lab_lookup_filepath"],
-                "region_lookup_file": self.data_config["region_lookup_filepath"],
-                "time_lookup_file": self.data_config["time_lookup_filepath"],
-                "format": 'text',
-                "cutoff_months": self.data_config.get("cutoff_months", 1),
-                "max_sequence_length": None,  # No truncation - we'll pack sequences
-                "data_type": self.training_config.get('input_data', 'binned'),
-            }
-            
-            print("\nLoading training data...")
-            train_base_dataset = UnifiedEHRDataset(split="train", **dataset_args)
-            print(f"  - Loaded {len(train_base_dataset)} training patients")
-            
-            print("\nLoading validation data...")
-            val_base_dataset = UnifiedEHRDataset(split="tuning", **dataset_args)
-            print(f"  - Loaded {len(val_base_dataset)} validation patients")
-        else:
-            dataset_args = {
-                "data_dir": self.data_config["data_dir"],
-                "vocab_file": self.data_config["vocab_filepath"],
-                "aces_label_dir": self.data_config["aces_label_dir"], # Directory containing /train, /tuning
-                "lookup_dir": self.data_config["lookup_dir"],       # Directory containing d_labitems, etc.
-                "task": 'pretrain',                                 # Set task to 'pretrain'
-                "max_sequence_length": None,
-            }
-            
-            print("\nLoading MIMIC training data for pretraining...")
-            train_base_dataset = MIMICUnifiedDataset(split="train", **dataset_args)
-            print(f"  - Loaded {len(train_base_dataset)} training patients")
-            
-            print("\nLoading MIMIC validation data for pretraining...")
-            val_base_dataset = MIMICUnifiedDataset(split="tuning", **dataset_args)
-            print(f"  - Loaded {len(val_base_dataset)} validation patients")
-    
-    
-        # Extract text from datasets
-        print("  - Extracting text for pretraining...")
-        train_text_list = extract_text(train_base_dataset, self.tokenizer)
-        val_text_list = extract_text(val_base_dataset, self.tokenizer)
+        # 1. Define paths
+        cache_dir = os.path.join(self.training_config['output_dir'], "data_cache")
+        train_cache_path = os.path.join(cache_dir, "train_packed")
+        val_cache_path = os.path.join(cache_dir, "val_packed")
 
-        print(f"  - Manually packing to context length: {self.model_config['max_length']}")
-        train_chunk_ids = pack_and_chunk_texts(train_text_list, self.tokenizer, self.model_config['max_length'])
-        val_chunk_ids = pack_and_chunk_texts(val_text_list, self.tokenizer, self.model_config['max_length'])
+        if not torch.distributed.is_initialized():
+            # Fallback for some environments: ensure we know who we are
+            if "WORLD_SIZE" in os.environ:
+                torch.distributed.init_process_group(backend="nccl")
 
-        # Create dataset with input_ids directly
-        train_dataset = Dataset.from_dict({"input_ids": train_chunk_ids})
-        val_dataset = Dataset.from_dict({"input_ids": val_chunk_ids})
+        # 2. Only Rank 0 performs the heavy lifting
+        if self.local_rank == 0:
+            try:
+                if not os.path.exists(os.path.join(train_cache_path, "dataset_info.json")):
+                    os.makedirs(cache_dir, exist_ok=True)
+                    print("\n--- Data Preparation (Rank 0 Only) ---")
+
+                    # Set up the dataset arguments based on config
+                    if self.data_config['dataset'] == 'CPRD':
+                        dataset_args = {
+                            "data_dir": self.data_config["data_dir"],
+                            "vocab_file": self.data_config["vocab_filepath"],
+                            "labels_file": self.data_config["labels_filepath"],
+                            "medical_lookup_file": self.data_config["medical_lookup_filepath"],
+                            "lab_lookup_file": self.data_config["lab_lookup_filepath"],
+                            "region_lookup_file": self.data_config["region_lookup_filepath"],
+                            "time_lookup_file": self.data_config["time_lookup_filepath"],
+                            "format": 'text',
+                            "cutoff_months": self.data_config.get("cutoff_months", 1),
+                            "max_sequence_length": None,
+                            "data_type": self.training_config.get('input_data', 'binned'),
+                        }
+                        train_base = UnifiedEHRDataset(split="train", **dataset_args)
+                        val_base = UnifiedEHRDataset(split="tuning", **dataset_args)
+                    else:
+                        dataset_args = {
+                            "data_dir": self.data_config["data_dir"],
+                            "vocab_file": self.data_config["vocab_filepath"],
+                            "aces_label_dir": self.data_config["aces_label_dir"],
+                            "lookup_dir": self.data_config["lookup_dir"],
+                            "task": 'pretrain',
+                            "max_sequence_length": None,
+                        }
+                        train_base = MIMICUnifiedDataset(split="train", **dataset_args)
+                        val_base = MIMICUnifiedDataset(split="tuning", **dataset_args)
+
+                    # Process Training Data
+                    print("  - Extracting and packing training text...")
+                    train_texts = extract_text(train_base, self.tokenizer)
+                    train_chunks = pack_and_chunk_texts(train_texts, self.tokenizer, self.model_config['max_length'])
+                    Dataset.from_dict({"input_ids": train_chunks}).save_to_disk(train_cache_path)
+                    del train_texts, train_chunks # Clear memory immediately
+
+                    # Process Validation Data
+                    print("  - Extracting and packing validation text...")
+                    val_texts = extract_text(val_base, self.tokenizer)
+                    val_chunks = pack_and_chunk_texts(val_texts, self.tokenizer, self.model_config['max_length'])
+                    Dataset.from_dict({"input_ids": val_chunks}).save_to_disk(val_cache_path)
+                    del val_texts, val_chunks
+                    
+                    print(f"  ✓ Data processed and cached to {cache_dir}")
+                else:
+                    print("\n--- Found existing cached dataset, skipping processing ---")
+            
+            except Exception as e:
+                print(f"Rank {self.local_rank} error: {e}")
+                raise
+
+        # if torch.distributed.is_initialized():
+        #     print(f"Rank {self.local_rank} waiting at barrier...")
+        #     torch.distributed.barrier()
         
+        max_idle = 600  # max seconds Rank 0 can be idle before giving up
+        heartbeat_file = os.path.join(train_cache_path, "heartbeat_rank0.txt")
+        dataset_file = os.path.join(train_cache_path, "dataset_info.json")
+
+        while not os.path.exists(dataset_file):
+            if os.path.exists(heartbeat_file):
+                # read last heartbeat
+                last_time = float(open(heartbeat_file).read())
+                idle_time = time.time() - last_time
+                if idle_time > max_idle:
+                    raise TimeoutError(f"Rank {self.local_rank} timed out: Rank 0 idle for {idle_time:.1f}s")
+            else:
+                # no heartbeat yet, could be just starting
+                idle_time = 0
+
+            print(f"Rank {self.local_rank} waiting... last heartbeat {idle_time:.1f}s ago")
+            time.sleep(5)
+
+        # 4. All ranks load from the disk cache
+        # .load_from_disk() uses memory mapping, so it's nearly instant and RAM-efficient
+        train_dataset = Dataset.load_from_disk(train_cache_path)
+        
+        val_dataset = None
+        if os.path.exists(val_cache_path):
+            val_dataset = Dataset.load_from_disk(val_cache_path)
+
         return train_dataset, val_dataset
     
     def create_trainer(
@@ -305,6 +350,8 @@ class EHRPretrainer:
             callbacks.append(BatchShapeCallback(print_every_n_steps=batch_shape_print_every))
         
         print("\nInitializing SFTTrainer...")
+
+        collator = DataCollatorForLanguageModeling(tokenizer=self.tokenizer, mlm=False)
         
         trainer_kwargs = {
             "model": self.model,
@@ -313,31 +360,61 @@ class EHRPretrainer:
             "eval_dataset": val_dataset,
             "args": training_args,
             "callbacks": callbacks,
+            "data_collator": collator,
         }
         
         self.trainer = SFTTrainer(**trainer_kwargs)
         
         print(f"  ✓ SFTTrainer initialized")
         
-        # Debugging check
-        print("\n" + "=" * 80)
-        print("DEBUGGING: Checking actual batch shapes from dataloader...")
-        print("=" * 80)
-        try:
-            train_dataloader = self.trainer.get_train_dataloader()
-            first_batch = next(iter(train_dataloader))
-            
-            if 'input_ids' in first_batch:
-                shape = first_batch['input_ids'].shape
-                print(f"  - input_ids shape: {shape}")
-                # We expect [batch_size, 8192]
-                if shape[1] == self.model_config['max_length']:
-                     print(f"  ✓ SUCCESS: Sequences are packed to length {shape[1]}")
-                else:
-                     print(f"  ⚠️  WARNING: Sequence length {shape[1]} does not match expected {self.model_config['max_length']}")
-        except Exception as e:
-            print(f"  ⚠️  Error accessing dataloader: {e}")
-        print("=" * 80 + "\n")
+        # ------------------------------------------------------------------
+        # Debug / logging: print batch size information for pretraining
+        # ------------------------------------------------------------------
+        world_size = 1
+        if torch.distributed.is_available() and torch.distributed.is_initialized():
+            try:
+                world_size = torch.distributed.get_world_size()
+            except Exception:
+                world_size = 1
+
+        per_device_bs = self.training_config['batch_size']
+        grad_acc = self.training_config.get('gradient_accumulation_steps', 1)
+        effective_global_bs = per_device_bs * grad_acc * world_size
+
+        if self.local_rank == 0:
+            print("\n" + "=" * 80)
+            print("Batch size configuration for pretraining")
+            print("=" * 80)
+            print(f"  - Per-device train batch size: {per_device_bs}")
+            print(f"  - Gradient accumulation steps: {grad_acc}")
+            print(f"  - World size (number of processes): {world_size}")
+            print(f"  - Effective global batch size: {effective_global_bs}")
+            print("=" * 80 + "\n")
+
+            # Optional one-time check of actual tensor batch shape
+            print("\n" + "=" * 80)
+            print("DEBUGGING: Checking actual batch shapes from dataloader...")
+            print("=" * 80)
+            try:
+                train_dataloader = self.trainer.get_train_dataloader()
+                first_batch = next(iter(train_dataloader))
+                
+                if 'input_ids' in first_batch:
+                    shape = first_batch['input_ids'].shape
+                    print(
+                        f"  - input_ids shape: {shape} "
+                        f"(batch_size={shape[0]}, seq_len={shape[1]})"
+                    )
+                    if shape[1] == self.model_config['max_length']:
+                        print(f"  ✓ SUCCESS: Sequences are packed to length {shape[1]}")
+                    else:
+                        print(
+                            f"  ⚠️  WARNING: Sequence length {shape[1]} "
+                            f"does not match expected {self.model_config['max_length']}"
+                        )
+            except Exception as e:
+                print(f"  ⚠️  Error accessing dataloader: {e}")
+            print("=" * 80 + "\n")
     
     def train(self):
         """Run the training loop."""

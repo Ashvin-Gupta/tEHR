@@ -21,14 +21,14 @@ lora:
   bias: "none"
 
 training:
-  output_dir: "/rds/general/user/ag619/ephemeral/MIMIC/experiments/Pretrain-Mistral-7B-Pretrain"
+  output_dir: "/data/private/ag619/experiments/Pretrain-Mistral-7B-Mimic"
   overwrite_output_dir: true
 
   
   # Training hyperparameters
-  epochs: 3
-  batch_size: 2
-  eval_batch_size: 2
+  epochs: 1
+  batch_size: 8
+  eval_batch_size: 8
   learning_rate: 1e-5
   weight_decay: 0.05
   warmup_steps: 500
@@ -43,14 +43,14 @@ training:
   
   # Logging and saving
   logging_steps: 50
-  eval_steps: 250
+  eval_steps: 500
   save_steps: 1000
   save_total_limit: 3  # Keep only 1 best checkpoint
 
 data:
   cutoff_months: 1  # Remove last 1 month before diagnosis for cancer patients
-  data_dir: "/rds/general/user/ag619/home/ashvin/MEDS/tokenised_data/MIMIC-IV tokensiation"
-  vocab_filepath: "/rds/general/user/ag619/home/ashvin/MEDS/tokenised_data/MIMIC-IV tokensiation/vocab.csv"
-  aces_label_dir: "/rds/general/user/ag619/home/ashvin/MIMIC-IV/MEDS-Output/labels/icu_mortality"
-  lookup_dir: "/rds/general/user/ag619/home/ashvin/MIMIC-IV/mimic-iv-3.1/hosp"
+  data_dir: "/data/private/ag619/MIMIC-IV tokensiation"
+  vocab_filepath: "/data/private/ag619/MIMIC-IV tokensiation/vocab.csv"
+  aces_label_dir: "/data/private/ag619/labels/icu_mortality"
+  lookup_dir: "/data/private/ag619/hosp"
   dataset: "MIMIC"
