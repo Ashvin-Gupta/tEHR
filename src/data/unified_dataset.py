@@ -36,6 +36,13 @@ class UnifiedEHRDataset(Dataset):
             # Chaning to 5 to see result and inference
             self.patient_records = self._load_data(data_dir, split)
 
+        # Build a lookup from subject_id to record index for downstream analysis
+        self.subject_to_record_idx = {}
+        for idx, record in enumerate(self.patient_records):
+            subject_id = record.get('subject_id')
+            if subject_id is not None and subject_id not in self.subject_to_record_idx:
+                self.subject_to_record_idx[subject_id] = idx
+
     def _load_mappings(self, vocab_file, labels_file, medical_lookup_file, lab_lookup_file, region_lookup_file, time_lookup_file):
         """Loads all vocabularies, translation lookups, and label information."""
         
@@ -228,7 +235,8 @@ class UnifiedEHRDataset(Dataset):
             # For tokens format, return token IDs directly (after filtering)
             return {
                 "tokens": token_ids,
-                "label": torch.tensor(label, dtype=torch.long)
+                "label": torch.tensor(label, dtype=torch.long),
+                "subject_id": subject_id,
             }
         
         # For text format, continue with translation
@@ -330,6 +338,7 @@ class UnifiedEHRDataset(Dataset):
             narrative = "".join(translated_phrases)
             return {
                 "text": narrative,
-                "label": torch.tensor(label, dtype=torch.long)
+                "label": torch.tensor(label, dtype=torch.long),
+                "subject_id": subject_id,
             }
        

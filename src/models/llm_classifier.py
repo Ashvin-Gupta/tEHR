@@ -151,7 +151,46 @@ class LLMClassifier(nn.Module):
     def get_input_embeddings(self):
         """Helper needed by Trainer to verify model compatibility."""
         return self.base_model.get_input_embeddings()
-    
+
+    def get_patient_representation(
+        self,
+        input_ids: torch.Tensor,
+        attention_mask: torch.Tensor,
+    ) -> torch.Tensor:
+        """
+        Compute the patient-level hidden representation used for classification.
+
+        This mirrors the forward pass up to (and including) the step where we
+        extract the last non-padding token's hidden state. It does NOT apply
+        the classification head.
+
+        Args:
+            input_ids: (batch_size, seq_len) token IDs.
+            attention_mask: (batch_size, seq_len) attention mask.
+
+        Returns:
+            Tensor of shape (batch_size, hidden_size) representing each patient.
+        """
+        backbone = getattr(self.base_model, "model", self.base_model)
+
+        outputs = backbone(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            output_hidden_states=True,
+            return_dict=True,
+        )
+
+        if hasattr(outputs, "last_hidden_state"):
+            hidden_states = outputs.last_hidden_state
+        else:
+            hidden_states = outputs.hidden_states[-1]
+
+        sequence_lengths = attention_mask.sum(dim=1) - 1
+        batch_size = hidden_states.size(0)
+        last_hidden_states = hidden_states[range(batch_size), sequence_lengths]
+
+        return last_hidden_states
+
     def _verify_eos_token(
         self, 
         input_ids: torch.Tensor, 
