@@ -257,7 +257,8 @@ def extract_patient_embeddings(
                 input_ids=input_ids,
                 attention_mask=attention_mask,
             )
-            reps_np = reps.detach().cpu().numpy()
+            # Ensure tensor is in a NumPy-compatible dtype (e.g. float32 instead of bfloat16).
+            reps_np = reps.detach().to(torch.float32).cpu().numpy()
 
             if max_patients is not None:
                 remaining = max_patients - processed
