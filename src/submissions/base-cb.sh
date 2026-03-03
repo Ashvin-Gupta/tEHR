@@ -1,12 +1,9 @@
-#!/bin/bash
-#$ -cwd                 
-#$ -pe smp 8
-#$ -l h_rt=48:0:0
-#$ -l h_vmem=32G
-#$ -l highmem
-#$ -j n
-#$ -o /data/home/qc25022/TextCancEHR2/HPC_Base/logo/
-#$ -e /data/home/qc25022/TextCancEHR2/HPC_Base/loge/
+#!/bin/bash         
+#SBATCH -n 8
+#SBATCH -t 48:0:0
+#SBATCH --mem-per-cpu=1G
+#SBATCH -o /data/home/qc25022/TextCancEHR2/HPC_Base/logo/%x.o%j
+#SBATCH -e /data/home/qc25022/TextCancEHR2/HPC_Base/loge/%x.e%j
 
 set -e 
 
