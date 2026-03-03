@@ -1,8 +1,8 @@
 name: "qwen3_embedding_baseline"
 
 model:
-  model_name: "Qwen/Qwen3-Embedding-8B"
-  hidden_size: 4096
+  model_name: "Qwen/Qwen3-Embedding-4B"
+  hidden_size: 2560
   num_labels: 2
   head_dropout: 0.1
 
