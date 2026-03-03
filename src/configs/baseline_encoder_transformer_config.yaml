@@ -29,7 +29,7 @@ pretrain:
 
 data:
   cutoff_months: 1
-  data_dir: "/gpfs/scratch/qc25022/pancreas/tokenised_data_pancreas_MEDS/cprd_upgi"
+  data_dir: "/gpfs/scratch/qc25022/pancreas/tokenised_data_pancreas_MEDS/cprd_upgi" # this might not work as used the old tokenisation
   vocab_filepath: "/gpfs/scratch/qc25022/pancreas/tokenised_data_pancreas_MEDS/cprd_upgi/vocab.csv"
   labels_filepath: "/data/home/qc25022/cancer-extraction-pipeline/output/pancreas_MEDS/subject_information.csv"
   medical_lookup_filepath: "/data/home/qc25022/TextCancEHR2/src/resources/MedicalDictTranslation2.csv"
