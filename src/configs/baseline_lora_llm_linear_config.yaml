@@ -26,7 +26,7 @@ wandb:
   run_name: "baseline-lora-llm-linear-mistral-7B-3month"
 
 training:
-  output_dir: "/data/scratch/qc25022/pancreas_MEDS/experiments/baselines/lora_llm_linear_mistral_7B_3month"
+  output_dir: "/gpfs/scratch/qc25022/pancreas/experiments/Results/baselines/lora_llm_linear_mistral_7B_3month"
   overwrite_output_dir: true
   epochs: 1
   batch_size: 2
@@ -48,8 +48,8 @@ training:
 
 data:
   cutoff_months: 3
-  data_dir: "/data/scratch/qc25022/pancreas/tokenised_data_pancreas_MEDS_new_time/cprd_upgi"
-  vocab_filepath: "/data/scratch/qc25022/pancreas/tokenised_data_pancreas_MEDS_new_time/cprd_upgi/vocab.csv"
+  data_dir: "/gpfs/scratch/qc25022/pancreas/tokenised_data_pancreas_MEDS_new_time/cprd_upgi"
+  vocab_filepath: "/gpfs/scratch/qc25022/pancreas/tokenised_data_pancreas_MEDS_new_time/cprd_upgi/vocab.csv"
   labels_filepath: "/data/home/qc25022/cancer-extraction-pipeline/output/pancreas_MEDS/subject_information.csv"
   medical_lookup_filepath: "/data/home/qc25022/TextCancEHR2/src/resources/MedicalDictTranslation2.csv"
   lab_lookup_filepath: "/data/home/qc25022/TextCancEHR2/src/resources/LabLookUP.csv"

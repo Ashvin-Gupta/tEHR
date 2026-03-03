@@ -1,14 +1,11 @@
 #!/bin/bash
-#$ -cwd                 
-#$ -pe smp 12
-#$ -l h_rt=1:0:0
-#$ -l h_vmem=7.5G
-#$ -l gpu=1
-#$ -l gpu_type=ampere
-#$ -l cluster=andrena
-#$ -j n
-#$ -o /data/home/qc25022/TextCancEHR2/HPC_Base/logo/
-#$ -e /data/home/qc25022/TextCancEHR2/HPC_Base/loge/
+#SBATCH -o /data/home/qc25022/TextCancEHR2/HPC_Base/logo/%x.o%j # STDOUT
+#SBATCH -e /data/home/qc25022/TextCancEHR2/HPC_Base/loge/%x.e%j # STDERR
+#SBATCH -p andrena,sae # GPU partitions in order of preference
+#SBATCH --gres=gpu:1 # Request 1 GPU of any type
+#SBATCH --cpus-per-task=12 # 12 CPU cores
+#SBATCH -t 1:0:0 # 1 hour runtime
+#SBATCH --mem-per-cpu=7500M # Total memory (approx 12 * 7.5G)
 
 set -e 
 
@@ -30,9 +27,9 @@ export PYTHONPATH="${BASE_DIR}:${PYTHONPATH}"
 
 python -m src.analysis.cluster_patients \
   --config_filepath src/configs/classification_config.yaml \
-  --model_checkpoint /data/scratch/qc25022/pancreas_MEDS/experiments/lora-1-month-logistic-refactored-new-time-mistral-7B/final_model \
+  --model_checkpoint /gpfs/scratch/qc25022/pancreas/experiments/Results/lora-1-month-logistic-refactored-new-time-mistral-7B/final_model \
   --split held_out \
-  --output_dir /data/scratch/qc25022/pancreas_MEDS/experiments/lora-1-month-logistic-refactored-new-time-mistral-7B/patient_clustering_heldout \
+  --output_dir /gpfs/scratch/qc25022/pancreas/experiments/Results/lora-1-month-logistic-refactored-new-time-mistral-7B/patient_clustering_heldout \
   --batch_size 4 \
   --dim_reducer umap \
   --cluster_space umap \
