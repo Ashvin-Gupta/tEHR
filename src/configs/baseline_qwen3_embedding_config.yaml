@@ -41,8 +41,8 @@ training:
   output_dir: "/gpfs/scratch/qc25022/pancreas/experiments/Results/baselines/qwen3_embedding_6_month-two-stage"
   overwrite_output_dir: true
   epochs: 1
-  batch_size: 2
-  eval_batch_size: 2
+  batch_size: 1
+  eval_batch_size: 1
   learning_rate: 1e-5
   weight_decay: 0.01
   warmup_steps: 100
