@@ -12,6 +12,7 @@ This script:
 import argparse
 import os
 import json
+import math
 from typing import List, Tuple
 
 import numpy as np
@@ -440,6 +441,8 @@ def summarize_clusters_with_ehr(
 
     Uses the dataset's underlying patient_records and lookup tables to map
     raw token codes to human-readable terms where possible.
+    In addition to within-cluster frequency, also computes how specific an
+    event is to a cluster compared to all other clusters.
     """
     from collections import Counter, defaultdict
     import pandas as pd
@@ -486,16 +489,53 @@ def summarize_clusters_with_ehr(
             if event_key is not None:
                 cluster_event_counts[int(cluster)][event_key] += 1
 
-    # Write per-cluster CSVs and overall summary
+    # Write per-cluster CSVs and overall summary, including cross-cluster enrichment stats
     summary_rows = []
 
+    # Global event statistics across all clusters
+    global_event_counts = Counter()
+    cluster_total_events: dict[int, int] = {}
     for cluster_id, counter in cluster_event_counts.items():
         total_events = sum(counter.values())
+        cluster_total_events[cluster_id] = total_events
+        global_event_counts.update(counter)
+
+    total_events_all = sum(global_event_counts.values())
+
+    for cluster_id, counter in cluster_event_counts.items():
+        total_events = cluster_total_events[cluster_id]
         most_common = counter.most_common(top_k_events)
 
         rows = []
         for event, count in most_common:
             frac = count / total_events if total_events > 0 else 0.0
+
+            # Global stats for this event across all clusters
+            global_count = global_event_counts[event]
+            global_frac = global_count / total_events_all if total_events_all > 0 else 0.0
+
+            # Enrichment of this event in this cluster vs all other clusters
+            count_in_cluster = count
+            events_in_cluster_total = total_events
+            count_outside = global_count - count_in_cluster
+            events_outside_total = total_events_all - events_in_cluster_total
+
+            if (
+                events_in_cluster_total > 0
+                and events_outside_total > 0
+                and count_in_cluster > 0
+                and count_outside > 0
+            ):
+                freq_in = count_in_cluster / events_in_cluster_total
+                freq_out = count_outside / events_outside_total
+                enrichment = freq_in / freq_out if freq_out > 0 else float("inf")
+                log2_enrichment = (
+                    math.log2(enrichment) if enrichment > 0 and np.isfinite(enrichment) else float("nan")
+                )
+            else:
+                enrichment = float("nan")
+                log2_enrichment = float("nan")
+
             rows.append(
                 {
                     "cluster": cluster_id,
@@ -503,6 +543,16 @@ def summarize_clusters_with_ehr(
                     "count": count,
                     "fraction": frac,
                     "total_events_in_cluster": total_events,
+                    "global_count": global_count,
+                    "global_fraction": global_frac,
+                    # Of all occurrences of this event, what fraction are in this cluster?
+                    "cluster_fraction_of_event": (
+                        count_in_cluster / global_count if global_count > 0 else 0.0
+                    ),
+                    # How much more frequent (per event) is this event in this cluster
+                    # vs all other clusters combined?
+                    "enrichment_ratio": enrichment,
+                    "log2_enrichment": log2_enrichment,
                 }
             )
             summary_rows.append(rows[-1])
