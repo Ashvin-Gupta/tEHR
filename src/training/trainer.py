@@ -338,6 +338,7 @@ class EHRPretrainer:
             remove_unused_columns=False,
             # Since we use a standard Dataset now, num_workers is safe to use
             dataloader_num_workers=self.training_config.get('dataloader_num_workers', 8),
+            dataloader_drop_last=True,
         )
 
         # Create callbacks
@@ -359,7 +360,7 @@ class EHRPretrainer:
             "train_dataset": train_dataset, # This is already packed!
             "eval_dataset": val_dataset,
             "args": training_args,
-            "callbacks": callbacks,
+            # "callbacks": callbacks,
             "data_collator": collator,
         }
         

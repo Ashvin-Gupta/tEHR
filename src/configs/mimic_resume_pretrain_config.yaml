@@ -1,17 +1,17 @@
-# Example config for resuming pretraining
-# This should match your original pretraining config
-# Just update the checkpoint path when running
+# src/configs/llm-pretrain.yaml
 
 name: "mistral_pretraining_resume"
 
 model:
+  # Model to pretrain (unsloth/mistral-7b-v0.3-bnb-4bit , "unsloth/Qwen3-8B-Base-unsloth-bnb-4bit", unsloth/Qwen3-1.7B-Base-unsloth-bnb-4bit)
   model_name: "unsloth/mistral-7b-v0.3-bnb-4bit"
-  max_length: 8192
+  max_length: 8192  # Context window for sequence packing
   hf_token: null
 
 wandb:
   enabled: true
-  project: "Pretrain-Mistral-7B"
+  project: "Pretrain-MIMIC"
+  run_name: "Pretrain-Mistral-7B"
 
 lora:
   r: 16
@@ -21,30 +21,37 @@ lora:
   bias: "none"
 
 training:
-  output_dir: "/rds/general/user/ag619/ephemeral/MIMIC/experiments/Pretrain-Mistral-7B-Pretrain-continued"
-  overwrite_output_dir: false  # Don't overwrite when resuming
+  output_dir: "/data/private/ag619/experiments/Pretrain-Mistral-7B-Mimic"
+  overwrite_output_dir: false
+
   
-  epochs: 2
-  batch_size: 4
-  eval_batch_size: 4
+  # Training hyperparameters
+  epochs: 1
+  batch_size: 8
+  eval_batch_size: 8
   learning_rate: 1e-5
   weight_decay: 0.05
   warmup_steps: 500
-  gradient_accumulation_steps: 1
-  gradient_checkpointing: false
-  fp16: false
-  bf16: true
+  
+  # Gradient settings
+  gradient_accumulation_steps: 1  # Effective batch size = gradient_accumulation_steps * batch_size
+  gradient_checkpointing: true  # Set to true for large models to save memory
+  
+  # Precision
+  fp16: false  # Use FP16 for faster training (if GPU supports it)
+  bf16: true  # Use BF16 for better numerical stability (if GPU supports it - only does for NVIDA Ampere GPUs)
+  
+  # Logging and saving
   logging_steps: 50
-  eval_steps: 250
-  save_steps: 1000
-  save_total_limit: 3
-  dataloader_num_workers: 4
+  eval_steps: 500
+  save_steps: 500
+  save_total_limit: 3  # Keep only 1 best checkpoint
 
 data:
-  cutoff_months: 1
-  data_dir: "/rds/general/user/ag619/home/ashvin/MEDS/tokenised_data/MIMIC-IV tokensiation"
-  vocab_filepath: "/rds/general/user/ag619/home/ashvin/MEDS/tokenised_data/MIMIC-IV tokensiation/vocab.csv"
-  aces_label_dir: "/rds/general/user/ag619/home/ashvin/MIMIC-IV/MEDS-Output/labels/icu_mortality"
-  lookup_dir: "/rds/general/user/ag619/home/ashvin/MIMIC-IV/mimic-iv-3.1/hosp"
+  cutoff_months: 1  # Remove last 1 month before diagnosis for cancer patients
+  data_dir: "/data/private/ag619/MIMIC-IV tokensiation"
+  vocab_filepath: "/data/private/ag619/MIMIC-IV tokensiation/vocab.csv"
+  aces_label_dir: "/data/private/ag619/labels/icu_mortality"
+  lookup_dir: "/data/private/ag619/hosp"
   dataset: "MIMIC"
 

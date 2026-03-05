@@ -6,6 +6,7 @@ logs/
 wandb/
 unsloth_compiled_cache/
 .DS_Store
+*.log
 __pycache__/
 .ipynb_checkpoints/
 Miniconda3-latest-Linux-x86_64.sh

@@ -6,23 +6,31 @@ import os
 import polars as pl
 
 class MIMICUnifiedDataset(Dataset):
-    def __init__(self, data_dir, vocab_file, aces_label_dir, lookup_dir,
-                 task='pretrain', split='train', max_sequence_length=512):
+    def __init__(
+        self,
+        data_dir,
+        vocab_file,
+        aces_label_dir,
+        lookup_dir,
+        task: str = "pretrain",
+        split: str = "train",
+        max_sequence_length: int = 512,
+        label_column: str = "label",
+    ):
         self.task = task
         self.split = split
         self.max_sequence_length = max_sequence_length
         self.aces_data = {}
+        self.label_column = label_column
 
         self._load_mappings(vocab_file, lookup_dir)
 
         if self.task == 'prediction':
             aces_path = os.path.join(aces_label_dir, f"{split}_labels.parquet")
-            if split == 'test' and not os.path.exists(aces_path):
-                aces_path = os.path.join(aces_label_dir, "held_out_labels.parquet")
             if os.path.exists(aces_path):
                 self.aces_data = self._load_aces(aces_path)
 
-        limit = 1 if split in ['tuning'] else None
+        limit = 1 if split in ['tuning', 'held_out', 'train'] else None
         self.patient_records = self._load_data(data_dir, split, limit=limit)
 
     def _load_mappings(self, vocab_file, lookup_dir):
@@ -107,11 +115,35 @@ class MIMICUnifiedDataset(Dataset):
         record = self.patient_records[idx]
         subject_id = record['subject_id']
         tokens, timestamps = record['tokens'], record['timestamps']
-        
+
+        label_value = 0
+
         if self.task == 'prediction':
             task_info = self.aces_data.get(subject_id)
             if task_info:
-                tokens = [t for i, t in enumerate(tokens) if timestamps[i] <= task_info['prediction_time']]
+                # Time-based truncation to prediction_time where types are compatible.
+                pred_time = task_info.get("prediction_time")
+                if pred_time is not None and len(timestamps) > 0:
+                    first_ts = timestamps[0]
+                    # Only apply comparison when both sides are numeric or both timestamps.
+                    if isinstance(first_ts, (int, float)) and isinstance(pred_time, (int, float)):
+                        tokens = [
+                            t for i, t in enumerate(tokens)
+                            if timestamps[i] <= pred_time
+                        ]
+                    elif isinstance(first_ts, pd.Timestamp) and isinstance(pred_time, pd.Timestamp):
+                        tokens = [
+                            t for i, t in enumerate(tokens)
+                            if timestamps[i] <= pred_time
+                        ]
+                    # Otherwise, skip time filtering to avoid type errors.
+                # Use configured label column if present in ACES row
+                if self.label_column in task_info:
+                    try:
+                        label_value = int(task_info[self.label_column])
+                    except Exception:
+                        # Fallback: treat any non-zero / truthy value as positive
+                        label_value = 1 if task_info[self.label_column] else 0
 
         string_codes = [self.id_to_token_map.get(tid, "") for tid in tokens]
         translated_phrases = []
@@ -150,7 +182,10 @@ class MIMICUnifiedDataset(Dataset):
             if phrase: translated_phrases.append(phrase)
             i += 1
 
-        return {"text": "".join(translated_phrases), "label": torch.tensor(0)} # Label handled via ACES separately
+        return {
+            "text": "".join(translated_phrases),
+            "label": torch.tensor(label_value, dtype=torch.long),
+        }
 
     def _load_data(self, data_dir, split, limit=None):
         path = os.path.join(data_dir, split)

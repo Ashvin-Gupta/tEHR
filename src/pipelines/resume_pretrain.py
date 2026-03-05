@@ -8,21 +8,13 @@ import yaml
 import pprint
 import os
 
-from src.training.utils import seed_all, print_sample_translations
+from src.training.utils import seed_all, print_sample_translations, print_sample_translations_mimic
 from src.training.trainer import EHRPretrainer
 
 
 # Default inference prompt for testing during training
 DEFAULT_INFERENCE_PROMPT = (
     'Given the following EHR medical events, continue generating the narrative in a natural language: '
-    'AGE; 65; Demographic Gender Male; Demographic Ethnicity Other; Region Region London; '
-    'Antenatal screening result pending; Ultrasonography of soft tissue mass; 4mt-6mt; '
-    'QAdmissions emergency admission risk calculator 3.5 %; 8mt-10mt; '
-    'Seasonal influenza vaccination; 4mt-6mt; '
-    'Bowel cancer screening programme: faecal occult blood result; '
-    'Bowel cancer screening programme faecal occult blood test normal; 1d; '
-    'Faecal occult blood: negative; 8mt-10mt; '
-    'QAdmissions emergency admission risk calculator 4.2 %; 24mt-60mt;'
 )
 
 
@@ -57,7 +49,10 @@ def main(config_path: str, checkpoint_path: str):
     print("=" * 80)
     
     # Print sample translations before training
-    print_sample_translations(config, num_samples=3)
+    if config['data']['dataset'] == 'CPRD':
+        print_sample_translations(config, num_samples=3)
+    else:
+        print_sample_translations_mimic(config, num_samples=3)
 
     # Create pretrainer
     pretrainer = EHRPretrainer(config)

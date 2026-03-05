@@ -8,6 +8,7 @@ from transformers import TrainingArguments, Trainer, EarlyStoppingCallback
 import wandb
 
 from src.data.unified_dataset import UnifiedEHRDataset
+from src.data.MIMIC_unified_dataset import MIMICUnifiedDataset
 from src.data.classification_collator import ClassificationCollator
 from src.data.dataset_utils import compute_and_sort_by_length
 from src.models.llm_classifier import LLMClassifier
@@ -124,24 +125,48 @@ class EHRClassificationTrainer:
         print("\n" + "=" * 80)
         print("Loading datasets...")
         print("=" * 80)
-        
-        dataset_args = {
-            "data_dir": self.data_config["data_dir"],
-            "vocab_file": self.data_config["vocab_filepath"],
-            "labels_file": self.data_config["labels_filepath"],
-            "medical_lookup_file": self.data_config["medical_lookup_filepath"],
-            "lab_lookup_file": self.data_config["lab_lookup_filepath"],
-            "region_lookup_file": self.data_config["region_lookup_filepath"],
-            "time_lookup_file": self.data_config["time_lookup_filepath"],
-            "format": 'text',
-            "cutoff_months": self.data_config.get("cutoff_months", 1),
-            "max_sequence_length": None,
-            "tokenizer": None,
-        }
 
-        train_dataset = UnifiedEHRDataset(split="train", **dataset_args)
-        val_dataset = UnifiedEHRDataset(split="tuning", **dataset_args)
-        test_dataset = UnifiedEHRDataset(split="held_out", **dataset_args)
+        dataset_name = self.data_config.get("dataset", "CPRD")
+
+        if dataset_name == "CPRD":
+            # Original CPRD-based unified dataset
+            dataset_args = {
+                "data_dir": self.data_config["data_dir"],
+                "vocab_file": self.data_config["vocab_filepath"],
+                "labels_file": self.data_config["labels_filepath"],
+                "medical_lookup_file": self.data_config["medical_lookup_filepath"],
+                "lab_lookup_file": self.data_config["lab_lookup_filepath"],
+                "region_lookup_file": self.data_config["region_lookup_filepath"],
+                "time_lookup_file": self.data_config["time_lookup_filepath"],
+                "format": "text",
+                "cutoff_months": self.data_config.get("cutoff_months", 1),
+                "max_sequence_length": None,
+                "tokenizer": None,
+            }
+
+            train_dataset = UnifiedEHRDataset(split="train", **dataset_args)
+            val_dataset = UnifiedEHRDataset(split="tuning", **dataset_args)
+            test_dataset = UnifiedEHRDataset(split="held_out", **dataset_args)
+
+        elif dataset_name == "MIMIC":
+            # MIMIC-IV based unified dataset using ACES labels
+            dataset_args = {
+                "data_dir": self.data_config["data_dir"],
+                "vocab_file": self.data_config["vocab_filepath"],
+                "aces_label_dir": self.data_config["aces_label_dir"],
+                "lookup_dir": self.data_config["lookup_dir"],
+                "task": "prediction",
+                "max_sequence_length": self.data_config.get("max_length", None),
+                "label_column": self.data_config.get("label_column", "label"),
+            }
+
+            train_dataset = MIMICUnifiedDataset(split="train", **dataset_args)
+            val_dataset = MIMICUnifiedDataset(split="tuning", **dataset_args)
+            # Use held-out split for test set if available
+            test_dataset = MIMICUnifiedDataset(split="held_out", **dataset_args)
+
+        else:
+            raise ValueError(f"Unsupported dataset type '{dataset_name}' for classification.")
 
         # Optional: Sort by length for efficient batching
         if self.data_config.get('sort_by_length', False):
