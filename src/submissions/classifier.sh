@@ -26,8 +26,20 @@ cd "${BASE_DIR}"
 echo "Starting experiment from directory: $(pwd)"
 export PYTHONPATH="${BASE_DIR}:${PYTHONPATH}"
 
-# python -m src.pipelines.finetune_llm_classifier --config_filepath src/configs/classification_config.yaml 
-torchrun --nproc_per_node=2 src/pipelines/finetune_llm_classifier.py --config_filepath src/configs/classification_config2.yaml
+# Avoid torch.distributed "EADDRINUSE" when multiple jobs share a node.
+# Pick a stable, job-unique port (and array-task-unique if using arrays).
+JOB_PORT_SEED="${SLURM_JOB_ID:-0}${SLURM_ARRAY_TASK_ID:-0}"
+export MASTER_ADDR="${MASTER_ADDR:-127.0.0.1}"
+export MASTER_PORT="${MASTER_PORT:-$((20000 + (10#${JOB_PORT_SEED} % 20000)))}"
+
+# python -m src.pipelines.finetune_llm_classifier --config_filepath src/configs/classification_config.yaml
+torchrun \
+  --nnodes=1 \
+  --nproc_per_node=2 \
+  --master_addr="${MASTER_ADDR}" \
+  --master_port="${MASTER_PORT}" \
+  src/pipelines/finetune_llm_classifier.py \
+  --config_filepath src/configs/classification_config2.yaml
 
 echo "Pipeline finished."
 deactivate
