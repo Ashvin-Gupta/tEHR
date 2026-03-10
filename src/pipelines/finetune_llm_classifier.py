@@ -46,7 +46,10 @@ def main(config_path: str):
     if base_output_dir:
         seed_output_dir = os.path.join(base_output_dir, f"seed_{seed}")
         config["training"]["output_dir"] = seed_output_dir
+        # Length-sorted data cache is shared across all seeds (same data/tokenizer)
+        config["training"]["data_cache_dir"] = base_output_dir
         print(f"Outputs (including plots) will be written to: {seed_output_dir}")
+        print(f"Data cache (length-sorted indices) shared at: {base_output_dir}")
 
     # Create classification trainer and run the full pipeline
     trainer = EHRClassificationTrainer(config)

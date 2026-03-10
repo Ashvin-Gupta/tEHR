@@ -96,7 +96,7 @@ class EHRPretrainer:
         # Build default run name from hyperparameters
         model_name = self.model_config['model_name'].split('/')[-1]
         default_run_name = (
-            f"{model_name}-pretrain-{self.data_config['cutoff_months']}month-cutoff"
+            # f"{model_name}-pretrain-{self.data_config['cutoff_months']}month-cutoff"
             f"_r{self.lora_config['r']}"
             f"_alpha{self.lora_config['lora_alpha']}"
             f"_dropout{self.lora_config['lora_dropout']}"

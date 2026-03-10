@@ -30,8 +30,24 @@ class MIMICUnifiedDataset(Dataset):
             if os.path.exists(aces_path):
                 self.aces_data = self._load_aces(aces_path)
 
-        limit = 1 if split in ['tuning', 'held_out', 'train'] else None
+        limit = 5 if split in ['tuning'] else None
         self.patient_records = self._load_data(data_dir, split, limit=limit)
+
+        # When doing prediction tasks, restrict to patients that appear in the ACES
+        # label file so we do not train on the entire raw cohort.
+        if self.task == 'prediction' and self.aces_data:
+            original_count = len(self.patient_records)
+            aces_subject_ids = set(self.aces_data.keys())
+            self.patient_records = [
+                rec for rec in self.patient_records
+                if rec.get("subject_id") in aces_subject_ids
+            ]
+            filtered_count = len(self.patient_records)
+            print(
+                f"[MIMICUnifiedDataset] Split '{split}': "
+                f"filtered patient_records from {original_count} to {filtered_count} "
+                f"using ACES labels (unique subjects: {len(aces_subject_ids)})"
+            )
 
     def _load_mappings(self, vocab_file, lookup_dir):
         vocab_df = pd.read_csv(vocab_file, dtype={'str': str})
@@ -71,7 +87,7 @@ class MIMICUnifiedDataset(Dataset):
                 return f"{self.proc_lookup.get(f'{parts[2]}_{parts[3]}', parts[3])}; "
 
             elif token.startswith('TIME '):
-                return f"{token_string[5:]}; "
+                return f"{token[5:]}; "
 
             # 2. Medications (e.g., start Ondansetron)
             elif token.startswith('MEDICATION//'):
@@ -125,18 +141,43 @@ class MIMICUnifiedDataset(Dataset):
                 pred_time = task_info.get("prediction_time")
                 if pred_time is not None and len(timestamps) > 0:
                     first_ts = timestamps[0]
-                    # Only apply comparison when both sides are numeric or both timestamps.
-                    if isinstance(first_ts, (int, float)) and isinstance(pred_time, (int, float)):
-                        tokens = [
-                            t for i, t in enumerate(tokens)
-                            if timestamps[i] <= pred_time
-                        ]
-                    elif isinstance(first_ts, pd.Timestamp) and isinstance(pred_time, pd.Timestamp):
-                        tokens = [
-                            t for i, t in enumerate(tokens)
-                            if timestamps[i] <= pred_time
-                        ]
-                    # Otherwise, skip time filtering to avoid type errors.
+
+                    # Case 1: timestamps stored as numeric (seconds since epoch, etc.)
+                    if isinstance(first_ts, (int, float)):
+                        # Normalize prediction_time to numeric as well
+                        numeric_pred_time = None
+                        if isinstance(pred_time, (int, float)):
+                            numeric_pred_time = float(pred_time)
+                        elif isinstance(pred_time, pd.Timestamp):
+                            try:
+                                numeric_pred_time = float(pred_time.timestamp())
+                            except Exception:
+                                numeric_pred_time = None
+
+                        if numeric_pred_time is not None:
+                            tokens = [
+                                t for i, t in enumerate(tokens)
+                                if timestamps[i] <= numeric_pred_time
+                            ]
+
+                    # Case 2: timestamps stored as pandas.Timestamp
+                    elif isinstance(first_ts, pd.Timestamp):
+                        # Normalize prediction_time to Timestamp
+                        ts_pred_time = None
+                        if isinstance(pred_time, pd.Timestamp):
+                            ts_pred_time = pred_time
+                        elif isinstance(pred_time, (int, float)):
+                            try:
+                                ts_pred_time = pd.to_datetime(pred_time, unit="s")
+                            except Exception:
+                                ts_pred_time = None
+
+                        if ts_pred_time is not None:
+                            tokens = [
+                                t for i, t in enumerate(tokens)
+                                if timestamps[i] <= ts_pred_time
+                            ]
+
                 # Use configured label column if present in ACES row
                 if self.label_column in task_info:
                     try:
