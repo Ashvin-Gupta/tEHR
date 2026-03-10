@@ -1,9 +1,9 @@
 #!/bin/bash                 
 #SBATCH -p andrena
 #SBATCH -A pilot_andrena
-#SBATCH --gres=gpu:2                   # Request 1 GPU of any type
+#SBATCH --gres=gpu:1                   # Request 1 GPU of any type
 #SBATCH --cpus-per-gpu=12                 # 12 CPU cores 
-#SBATCH -t 240:0:0                        # 1 hour runtime
+#SBATCH -t 24:0:0                        # 1 hour runtime
 #SBATCH --mem-per-cpu=7500M             # Total memory 90G (approx 12 * 7500M)
 #SBATCH -o /data/home/qc25022/TextCancEHR2/HPC_Pretrain/logo/%x.o%j
 #SBATCH -e /data/home/qc25022/TextCancEHR2/HPC_Pretrain/loge/%x.e%j
@@ -27,8 +27,8 @@ cd "${BASE_DIR}"
 echo "Starting experiment from directory: $(pwd)"
 export PYTHONPATH="${BASE_DIR}:${PYTHONPATH}"
 
-# python -m src.pipelines.llm_pretrain --config_filepath src/configs/llm_pretrain.yaml 
-torchrun --nproc_per_node=2 src/pipelines/llm_pretrain.py --config_filepath src/configs/llm_pretrain.yaml
+python -m src.pipelines.llm_pretrain --config_filepath src/configs/llm_pretrain.yaml 
+# torchrun --nproc_per_node=12 src/pipelines/llm_pretrain.py --config_filepath src/configs/llm_pretrain.yaml
 
 echo "Pipeline finished."
 deactivate
