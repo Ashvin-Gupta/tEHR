@@ -13,9 +13,9 @@ BASE_DIR="/data/home/qc25022/TextCancEHR2"
 export WANDB_API_KEY="REDACTED"
 
 # --- Environment Setup ---
-module load intel intel-mpi python
+module load python
 source /data/home/qc25022/CancEHR-Training/venv/bin/activate
-
+echo "Environment setup complete."
 # --- Execute from Project Root ---
 # Change to the base directory before running the python command
 cd "${BASE_DIR}"
