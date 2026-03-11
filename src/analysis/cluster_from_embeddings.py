@@ -155,6 +155,59 @@ def analyse_events_and_measurements(
     """
     os.makedirs(output_dir, exist_ok=True)
 
+    # Helper: apply the same time cutoff + cancer filtering used in UnifiedEHRDataset.__getitem__
+    def get_effective_token_ids(record):
+        import pandas as pd  # local import to avoid circulars
+
+        subject_id = record.get("subject_id")
+        token_ids = list(record.get("tokens", []))
+        timestamps = record.get("timestamps", [])
+
+        if subject_id is None:
+            return token_ids
+
+        # Determine label (for pretrain special-case; here mostly for completeness)
+        label = dataset.subject_to_label.get(subject_id)
+
+        # Figure out actual cutoff months
+        if dataset.format == "pretrain" and label is not None and not pd.isna(label) and label > 0:
+            actual_cutoff = 1
+        else:
+            actual_cutoff = getattr(dataset, "cutoff_months", None)
+
+        if actual_cutoff is not None:
+            cancer_date = dataset.subject_to_cancer_date.get(subject_id)
+
+            if pd.notna(cancer_date):
+                cutoff_date = cancer_date - pd.DateOffset(months=actual_cutoff)
+            else:
+                valid_ts = [ts for ts in timestamps if ts is not None and ts > 0]
+                if valid_ts:
+                    last_timestamp = max(valid_ts)
+                    last_date = pd.Timestamp.fromtimestamp(last_timestamp)
+                    cutoff_date = last_date - pd.DateOffset(months=actual_cutoff)
+                else:
+                    cutoff_date = None
+
+            if cutoff_date is not None:
+                cutoff_timestamp = cutoff_date.timestamp()
+                truncated_ids = []
+                for i, ts in enumerate(timestamps):
+                    token_str = dataset.id_to_token_map.get(token_ids[i], "")
+                    is_end_token = (token_str == "<end>")
+                    if ts == 0 or (ts is not None and ts < cutoff_timestamp) or is_end_token:
+                        truncated_ids.append(token_ids[i])
+                token_ids = truncated_ids
+
+        # Filter out tokens containing 'cancer' (same as dataset)
+        filtered = []
+        for tid in token_ids:
+            token_str = str(dataset.id_to_token_map.get(tid, ""))
+            if "cancer" not in token_str.lower():
+                filtered.append(tid)
+
+        return filtered
+
     # cluster -> event_key -> count
     cluster_event_counts = defaultdict(lambda: defaultdict(int))
     # cluster -> event_key -> list of numeric values
@@ -170,7 +223,7 @@ def analyse_events_and_measurements(
             continue
 
         record = dataset.patient_records[rec_idx]
-        token_ids = record.get("tokens", [])
+        token_ids = get_effective_token_ids(record)
         string_codes = [str(dataset.id_to_token_map.get(tid, "")) for tid in token_ids]
 
         i = 0
@@ -296,7 +349,58 @@ def analyse_differential_features(
         if rec_idx is None: continue
 
         record = dataset.patient_records[rec_idx]
-        tokens = [str(dataset.id_to_token_map.get(tid, "")) for tid in record.get("tokens", [])]
+
+        # Reuse the same cutoff + cancer filtering logic as above
+        from pandas import isna, notna, Timestamp, DateOffset  # type: ignore
+
+        def get_effective_token_ids_local(rec):
+            subject_id = rec.get("subject_id")
+            token_ids = list(rec.get("tokens", []))
+            timestamps = rec.get("timestamps", [])
+
+            if subject_id is None:
+                return token_ids
+
+            label = dataset.subject_to_label.get(subject_id)
+
+            if dataset.format == "pretrain" and label is not None and not isna(label) and label > 0:
+                actual_cutoff = 1
+            else:
+                actual_cutoff = getattr(dataset, "cutoff_months", None)
+
+            if actual_cutoff is not None:
+                cancer_date = dataset.subject_to_cancer_date.get(subject_id)
+
+                if notna(cancer_date):
+                    cutoff_date = cancer_date - DateOffset(months=actual_cutoff)
+                else:
+                    valid_ts = [ts for ts in timestamps if ts is not None and ts > 0]
+                    if valid_ts:
+                        last_timestamp = max(valid_ts)
+                        last_date = Timestamp.fromtimestamp(last_timestamp)
+                        cutoff_date = last_date - DateOffset(months=actual_cutoff)
+                    else:
+                        cutoff_date = None
+
+                if cutoff_date is not None:
+                    cutoff_timestamp = cutoff_date.timestamp()
+                    truncated_ids = []
+                    for i, ts in enumerate(timestamps):
+                        token_str = dataset.id_to_token_map.get(token_ids[i], "")
+                        is_end_token = (token_str == "<end>")
+                        if ts == 0 or (ts is not None and ts < cutoff_timestamp) or is_end_token:
+                            truncated_ids.append(token_ids[i])
+                    token_ids = truncated_ids
+
+            filtered = []
+            for tid in token_ids:
+                token_str = str(dataset.id_to_token_map.get(tid, ""))
+                if "cancer" not in token_str.lower():
+                    filtered.append(tid)
+
+            return filtered
+
+        tokens = [str(dataset.id_to_token_map.get(tid, "")) for tid in get_effective_token_ids_local(record)]
 
         for i, code in enumerate(tokens):
             is_measurement = any(code.startswith(prefix) for prefix in ["LAB//", "MEASUREMENT//", "MEDICAL//BMI", "MEDICAL//bp_"])
