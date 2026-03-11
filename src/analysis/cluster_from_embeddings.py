@@ -49,7 +49,7 @@ def run_umap(embeddings: np.ndarray):
         n_neighbors=15,
         min_dist=0.1,
         metric="euclidean",
-        random_state=42,
+        # random_state=42,
     )
     return reducer.fit_transform(embeddings)
 
