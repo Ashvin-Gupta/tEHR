@@ -262,6 +262,122 @@ def analyse_events_and_measurements(
             index=False,
         )
 
+def calculate_cluster_composition(df_clusters: pd.DataFrame, output_dir: str):
+    """Calculates the ratio of Cases vs Controls per cluster."""
+    composition = df_clusters.groupby('cluster')['case_label'].value_counts(normalize=False).unstack(fill_value=0)
+    composition['Total'] = composition.sum(axis=1)
+    composition['Case_%'] = (composition.get('Case', 0) / composition['Total'] * 100).round(2)
+    
+    print("\n--- Cluster Composition ---")
+    print(composition)
+    
+    composition.to_csv(os.path.join(output_dir, "cluster_case_control_composition.csv"))
+    return composition
+
+def analyse_differential_features(
+    dataset,
+    df_clusters: pd.DataFrame,
+    subject_to_record_idx: dict,
+    output_dir: str,
+):
+    """
+    Analyzes which events/measurements are unique or statistically different 
+    in each cluster compared to the rest of the population.
+    """
+    os.makedirs(output_dir, exist_ok=True)
+
+    # 1. Collect all data into a flat structure for global comparison
+    all_data = []
+    
+    for _, row in df_clusters.iterrows():
+        pid = str(row["patient_id"])
+        cluster = int(row["cluster"])
+        rec_idx = subject_to_record_idx.get(pid)
+        if rec_idx is None: continue
+
+        record = dataset.patient_records[rec_idx]
+        tokens = [str(dataset.id_to_token_map.get(tid, "")) for tid in record.get("tokens", [])]
+
+        for i, code in enumerate(tokens):
+            is_measurement = any(code.startswith(prefix) for prefix in ["LAB//", "MEASUREMENT//", "MEDICAL//BMI", "MEDICAL//bp_"])
+            is_medical = code.startswith("MEDICAL//")
+
+            if is_measurement or is_medical:
+                val = np.nan
+                if is_measurement and i + 1 < len(tokens):
+                    try: val = float(tokens[i+1])
+                    except ValueError: pass
+                
+                all_data.append({
+                    'cluster': cluster,
+                    'event_code': code,
+                    'value': val
+                })
+
+    df_raw = pd.DataFrame(all_data)
+    
+    # 2. Compute Global Stats (for comparison)
+    global_counts = df_raw['event_code'].value_counts()
+    global_means = df_raw.groupby('event_code')['value'].mean()
+    total_patients = df_clusters['patient_id'].nunique()
+
+    # 3. Compute Per-Cluster Stats and compare to Global
+    summary_rows = []
+    
+    for cluster_id in sorted(df_clusters['cluster'].unique()):
+        cluster_df = df_raw[df_raw['cluster'] == cluster_id]
+        cluster_size = df_clusters[df_clusters['cluster'] == cluster_id]['patient_id'].nunique()
+        
+        counts = cluster_df['event_code'].value_counts()
+        
+        for event_code, count in counts.items():
+            vals = cluster_df[cluster_df['event_code'] == event_code]['value'].dropna()
+            
+            # Frequency Analysis
+            # How much more common is this event here than in the general population?
+            global_freq = global_counts[event_code] / total_patients
+            cluster_freq = count / cluster_size
+            enrichment_factor = cluster_freq / global_freq if global_freq > 0 else 0
+
+            # Value Analysis
+            mean_v = vals.mean() if not vals.empty else np.nan
+            median_v = vals.median() if not vals.empty else np.nan
+            
+            # Delta from global mean
+            diff_from_global_mean = mean_v - global_means[event_code] if not np.isnan(mean_v) else 0
+
+            # Translation
+            try: human = dataset._translate_token(event_code).rstrip("; ")
+            except: human = event_code
+
+            summary_rows.append({
+                "cluster": cluster_id,
+                "event_code": event_code,
+                "event_human": human,
+                "count": count,
+                "enrichment_score": round(enrichment_factor, 3), # >1 means more common in this cluster
+                "mean_value": mean_v,
+                "median_value": median_v,
+                "diff_from_global_mean": diff_from_global_mean,
+                "q25_value": vals.quantile(0.25) if not vals.empty else np.nan,
+                "q75_value": vals.quantile(0.75) if not vals.empty else np.nan,
+            })
+
+    df_final = pd.DataFrame(summary_rows)
+    
+    # Sort by cluster and then by enrichment to see "Top characteristic features"
+    df_final = df_final.sort_values(['cluster', 'enrichment_score'], ascending=[True, False])
+    
+    # Save the full summary
+    df_final.to_csv(os.path.join(output_dir, "differential_cluster_analysis.csv"), index=False)
+    
+    # Save individual files for each cluster for easy reading
+    for cid in df_clusters['cluster'].unique():
+        cluster_subset = df_final[df_final['cluster'] == cid]
+        cluster_subset.to_csv(os.path.join(output_dir, f"cluster_{cid}_analysis.csv"), index=False)
+
+    print(f"Differential analysis complete. Files saved to {output_dir}")
+
 
 def main():
     # 1) Load embeddings and run clustering
@@ -299,16 +415,29 @@ def main():
         os.path.join(OUTPUT_DIR, "patient_clusters_from_embeddings.csv"), index=False
     )
 
-    # 4) Visualise clusters
-    visualize_clusters(df_clusters, OUTPUT_DIR)
+    # # 4) Visualise clusters
+    # visualize_clusters(df_clusters, OUTPUT_DIR)
 
-    # 5) Analyse events and measurements per cluster
-    analyse_events_and_measurements(
+    # # 5) Analyse events and measurements per cluster
+    # analyse_events_and_measurements(
+    #     dataset=dataset,
+    #     df_clusters=df_clusters,
+    #     subject_to_record_idx=subject_to_record_idx,
+    #     output_dir=OUTPUT_DIR,
+    # )
+    # 4) Calculate Case/Control mix
+    calculate_cluster_composition(df_clusters, OUTPUT_DIR)
+
+    # 5) Run the new differential analysis
+    analyse_differential_features(
         dataset=dataset,
         df_clusters=df_clusters,
         subject_to_record_idx=subject_to_record_idx,
-        output_dir=OUTPUT_DIR,
+        output_dir=OUTPUT_DIR
     )
+
+    # 6) Visualise (as before)
+    visualize_clusters(df_clusters, OUTPUT_DIR)
 
     print("Cluster analysis from embeddings complete.")
 
