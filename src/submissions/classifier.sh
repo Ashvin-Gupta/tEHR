@@ -16,7 +16,7 @@ BASE_DIR="/data/home/qc25022/TextCancEHR2"
 export WANDB_API_KEY="REDACTED"
 
 # --- Environment Setup ---
-module load intel intel-mpi python
+# module load intel intel-mpi python
 source /data/home/qc25022/CancEHR-Training/venv/bin/activate
 
 # --- Execute from Project Root ---
