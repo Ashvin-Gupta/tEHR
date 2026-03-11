@@ -69,7 +69,11 @@ def load_dataset(config_path: str, split: str):
     datasets = load_datasets(
         data_config=data_config,
         splits=[split],
-        format="tokens",
+        # Use 'text' so that UnifiedEHRDataset loads all translation lookups
+        # (medical_lookup, lab_lookup, region_lookup, time_lookup), which are
+        # required by _translate_token. We still access raw tokens from
+        # dataset.patient_records, so this does not affect the analysis.
+        format="text",
         tokenizer=None,
     )
     dataset = datasets[split]
