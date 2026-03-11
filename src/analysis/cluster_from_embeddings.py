@@ -422,7 +422,7 @@ def analyse_differential_features(
     
     # 2. Compute Global Stats (for comparison)
     global_counts = df_raw['event_code'].value_counts()
-    global_means = df_raw.groupby('event_code')['value'].mean()
+    global_medians = df_raw.groupby('event_code')['value'].median()
     total_patients = df_clusters['patient_id'].nunique()
 
     # 3. Compute Per-Cluster Stats and compare to Global
@@ -447,8 +447,8 @@ def analyse_differential_features(
             mean_v = vals.mean() if not vals.empty else np.nan
             median_v = vals.median() if not vals.empty else np.nan
             
-            # Delta from global mean
-            diff_from_global_mean = mean_v - global_means[event_code] if not np.isnan(mean_v) else 0
+            # Delta from global median (instead of mean)
+            diff_from_global_median = median_v - global_medians[event_code] if not np.isnan(median_v) else 0
 
             # Translation
             try: human = dataset._translate_token(event_code).rstrip("; ")
@@ -462,7 +462,7 @@ def analyse_differential_features(
                 "enrichment_score": round(enrichment_factor, 3), # >1 means more common in this cluster
                 "mean_value": mean_v,
                 "median_value": median_v,
-                "diff_from_global_mean": diff_from_global_mean,
+                "diff_from_global_median": diff_from_global_median,
                 "q25_value": vals.quantile(0.25) if not vals.empty else np.nan,
                 "q75_value": vals.quantile(0.75) if not vals.empty else np.nan,
             })
