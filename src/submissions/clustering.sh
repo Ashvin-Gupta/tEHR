@@ -33,7 +33,7 @@ python -m src.analysis.cluster_patients \
   --output_dir /gpfs/scratch/qc25022/pancreas/experiments/Results/lora-1-month-logistic-refactored-new-time-mistral-7B/patient_clustering_heldout \
   --batch_size 4 \
   --dim_reducer umap \
-  --cluster_space umap \
+  --cluster_space original \
   --k 5 \
   --plot
 echo "Pipeline finished."
