@@ -2,6 +2,7 @@
 EHR Classification Trainer - orchestrates classification fine-tuning workflow.
 """
 import os
+import time
 import torch
 from typing import Dict, Any
 from transformers import TrainingArguments, Trainer, EarlyStoppingCallback
@@ -119,6 +120,80 @@ class EHRClassificationTrainer:
             head_hidden_size=self.model_config.get('head_hidden_size', 512),
             head_dropout=self.model_config.get('head_dropout', 0.1)
         )
+
+    def _sort_with_cache(self, dataset, split: str, shuffle_buckets: bool, num_buckets: int = 20):
+        """
+        Sort a dataset by sequence length, caching the sorted indices so that
+        we do not need to recompute lengths every time we run a new model.
+        Uses a shared cache dir (data_cache_dir) when set, so all seeds/ranks
+        reuse the same cache. Uses a lock file so only one process computes when
+        multiple ranks start together.
+        """
+        if not self.data_config.get('sort_by_length', False):
+            return dataset
+
+        dataset_name = self.data_config.get("dataset", "CPRD")
+        tokenizer_id = getattr(self.tokenizer, "name_or_path", "tokenizer")
+        # Use shared cache root when set (base output dir), so all seeds share one cache
+        cache_base = self.training_config.get(
+            "data_cache_dir", self.training_config["output_dir"]
+        )
+        cache_root = os.path.join(cache_base, "data_cache", "length_sorted")
+        os.makedirs(cache_root, exist_ok=True)
+
+        cache_filename = f"{dataset_name}_{split}_sorted_{os.path.basename(str(tokenizer_id))}.pt"
+        cache_path = os.path.join(cache_root, cache_filename)
+        lock_path = cache_path + ".lock"
+
+        def _load_indices(path):
+            try:
+                return torch.load(path, map_location="cpu", weights_only=True)
+            except TypeError:
+                return torch.load(path, map_location="cpu")
+
+        # Fast path: cache already exists
+        if os.path.exists(cache_path):
+            print(f"  - Found cached length-sorted indices for split '{split}', loading from disk...")
+            indices = _load_indices(cache_path)
+            return torch.utils.data.Subset(dataset, indices)
+
+        # Try to acquire lock so only one process computes (multi-GPU / multi-seed)
+        acquired = False
+        try:
+            fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+            os.close(fd)
+            acquired = True
+        except FileExistsError:
+            pass
+
+        if acquired:
+            # We hold the lock: compute and write, then remove lock
+            print(f"  - No cached length-sorted indices for split '{split}', computing and caching...")
+            sorted_dataset = compute_and_sort_by_length(
+                dataset,
+                self.tokenizer,
+                shuffle_buckets=shuffle_buckets,
+                num_buckets=num_buckets,
+            )
+            if isinstance(sorted_dataset, torch.utils.data.Subset):
+                torch.save(sorted_dataset.indices, cache_path)
+                print(f"  ✓ Cached sorted indices for split '{split}' to: {cache_path}")
+            try:
+                os.remove(lock_path)
+            except OSError:
+                pass
+            return sorted_dataset
+
+        # Another process is computing; wait for cache to appear (with timeout)
+        for _ in range(600):
+            time.sleep(1)
+            if os.path.exists(cache_path):
+                print(f"  - Found cached length-sorted indices for split '{split}' (written by another process), loading...")
+                indices = _load_indices(cache_path)
+                return torch.utils.data.Subset(dataset, indices)
+        raise TimeoutError(
+            f"Timeout waiting for length-sorted cache for split '{split}' at {cache_path}"
+        )
     
     def prepare_datasets(self):
         """Prepare train, validation, and test datasets."""
@@ -168,19 +243,19 @@ class EHRClassificationTrainer:
         else:
             raise ValueError(f"Unsupported dataset type '{dataset_name}' for classification.")
 
-        # Optional: Sort by length for efficient batching
+        # Optional: Sort by length for efficient batching, with caching
         if self.data_config.get('sort_by_length', False):
-            print("\n  - Sorting datasets by sequence length...")
-            train_dataset = compute_and_sort_by_length(
-                train_dataset, self.tokenizer, shuffle_buckets=True, num_buckets=20
+            print("\n  - Sorting datasets by sequence length (with caching)...")
+            train_dataset = self._sort_with_cache(
+                train_dataset, split="train", shuffle_buckets=True, num_buckets=20
             )
-            val_dataset = compute_and_sort_by_length(
-                val_dataset, self.tokenizer, shuffle_buckets=False
+            val_dataset = self._sort_with_cache(
+                val_dataset, split="tuning", shuffle_buckets=False, num_buckets=20
             )
-            test_dataset = compute_and_sort_by_length(
-                test_dataset, self.tokenizer, shuffle_buckets=False
+            test_dataset = self._sort_with_cache(
+                test_dataset, split="held_out", shuffle_buckets=False, num_buckets=20
             )
-            print("  ✓ Datasets sorted by length")
+            print("  ✓ Datasets sorted by length (cached)")
         
         print(f"  - Train dataset: {len(train_dataset)} patients")
         print(f"  - Validation dataset: {len(val_dataset)} patients")

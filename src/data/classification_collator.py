@@ -57,8 +57,8 @@ class ClassificationCollator:
             # --- Label Handling ---
             if 'label' not in item:
                 print(f"Item without label: {item}")
-                continue # Skip items without labels
-                
+                continue  # Skip items without labels
+
             label = item['label']
             if self.binary_classification:
                 # Handle both scalar tensors and python numbers
@@ -67,7 +67,7 @@ class ClassificationCollator:
                 else:
                     is_pos = (label > 0)
                 label = 1 if is_pos else 0
-            
+
             # --- Input Handling ---
             ids = []
             if 'input_ids' in item:
@@ -78,14 +78,25 @@ class ClassificationCollator:
                 # Raw text
                 # Robust get: defaults to empty string if 'text' is missing
                 text = item.get('text', '')
-                
+
                 if 'text' not in item and not self._warned_missing_text:
                     warnings.warn(
                         f"Item missing 'text' key. Found keys: {list(item.keys())}. "
                         "Using empty string. (This warning shows once)"
                     )
                     self._warned_missing_text = True
-                
+
+                # Lightweight debug: show start/end of a few patient trajectories
+                if self._debug_samples_printed < self._max_debug_samples and text:
+                    print("\n=== Debug patient trajectory (post-truncation text) ===")
+                    print(f"  Label: {label}")
+                    # Show first and last ~300 characters to see header and tail
+                    start_snippet = text[:300]
+                    end_snippet = text[-300:] if len(text) > 300 else text
+                    print("  TEXT START:", repr(start_snippet))
+                    print("  TEXT END:  ", repr(end_snippet))
+                    self._debug_samples_printed += 1
+
                 # Cleanup
                 text = text.replace('<start>', '').replace('<end>', '').strip()
                 if SPLIT_TOKEN in text:

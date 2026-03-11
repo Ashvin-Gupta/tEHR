@@ -247,7 +247,7 @@ class LLMClassifier(nn.Module):
             seq_ids = input_ids[i, non_pad].tolist()
             decoded = self.tokenizer.decode(seq_ids, skip_special_tokens=False)
             print(f"  Seq {i}: length={len(seq_ids)} tokens")
-            print(f"    Text: {decoded[:500]}{'...' if len(decoded) > 500 else ''}")
+            print(f"    Text: {decoded[500:]}{'...' if len(decoded) > 500 else ''}")
         print()
         
         # Find one case (label=1) and one control (label=0) for detailed inspection

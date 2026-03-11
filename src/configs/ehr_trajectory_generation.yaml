@@ -1,0 +1,41 @@
+name: "ehr_trajectory_generation"
+
+model:
+  # Path to the final model directory produced by EHRPretrainer.save_model()
+  # e.g. /home/ag619/experiments/Results/Pretrain-Qwen3-8B-Pancreas-new-time/final_model
+  checkpoint_dir: "/path/to/pretrained_lora_checkpoint"
+  max_length: 8192
+  load_in_4bit: true
+  local_rank: 0
+
+prompt:
+  # Optional custom prompt template. "{ehr_text}" will be replaced with the
+  # patient's EHR record string.
+  template: |
+    You are an expert clinician and medical summarisation model.
+    Given this patient's longitudinal EHR record, continue the trajectory
+    by describing likely future events, tests, and outcomes in a coherent narrative.
+
+    Patient EHR record:
+    {ehr_text}
+
+    Continue the trajectory:
+
+generation:
+  max_new_tokens: 256
+  temperature: 0.2
+  top_p: 0.95
+  top_k: 30
+  repetition_penalty: 1.2
+
+data:
+  # MIMICUnifiedDataset-style config: mirror mimic_pretrain.yaml
+  cutoff_months: 1
+  data_dir: "/home/ag619/MIMIC-IV tokensiation"
+  vocab_filepath: "/home/ag619/MIMIC-IV tokensiation/vocab.csv"
+  aces_label_dir: "/home/ag619/MIMIC_data/labels/icu_mortality"
+  lookup_dir: "/home/ag619/MIMIC_data/hosp"
+  task: "prediction"        # or "pretrain" if you just want raw trajectories
+  default_split: "tuning"   # default dataset split to draw patients from
+
+
