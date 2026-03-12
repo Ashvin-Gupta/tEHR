@@ -2,9 +2,72 @@
 Model loading utilities for pretrained models with LoRA adapters.
 """
 import os
+import json
 import torch
 from unsloth import FastLanguageModel
 from typing import Tuple, Any, Optional
+
+
+def _load_base_plus_adapter_from_checkpoint(
+    checkpoint_dir: str,
+    max_seq_length: int,
+    load_in_4bit: bool,
+    local_rank: int,
+) -> Tuple[Any, Any]:
+    """
+    Load a base model and attach a LoRA adapter from an Unsloth/PEFT checkpoint.
+    
+    This is used when the checkpoint directory only contains LoRA weights
+    (e.g. `adapter_model.safetensors` + `adapter_config.json`) but no
+    `config.json` for a full HF model.
+    """
+    adapter_config_path = os.path.join(checkpoint_dir, "adapter_config.json")
+    if not os.path.exists(adapter_config_path):
+        raise RuntimeError(
+            f"Checkpoint at '{checkpoint_dir}' does not contain 'config.json' or "
+            f"'adapter_config.json'. Cannot infer base model to load."
+        )
+
+    with open(adapter_config_path, "r") as f:
+        adapter_cfg = json.load(f)
+
+    base_model_name = adapter_cfg.get("base_model_name_or_path") or adapter_cfg.get("base_model_name")
+    if not base_model_name:
+        raise RuntimeError(
+            f"'adapter_config.json' at '{adapter_config_path}' does not specify "
+            f"'base_model_name_or_path'. Available keys: {list(adapter_cfg.keys())}"
+        )
+
+    print(f"  - Detected base model from adapter config: {base_model_name}")
+
+    # 1) Load the base model with Unsloth
+    model, tokenizer = FastLanguageModel.from_pretrained(
+        model_name=base_model_name,
+        max_seq_length=max_seq_length,
+        dtype=None,
+        load_in_4bit=load_in_4bit,
+        device_map={"": local_rank},
+    )
+
+    # 2) Attach the LoRA adapter weights
+    if hasattr(model, "load_adapter"):
+        # Preferred Unsloth/PEFT API – this reads adapter_config.json and adapter_model.safetensors
+        print(f"  - Loading LoRA adapter from checkpoint: {checkpoint_dir}")
+        model.load_adapter(checkpoint_dir)
+    else:
+        # Fallback to PEFT directly if needed
+        try:
+            from peft import PeftModel  # type: ignore
+        except ImportError as e:
+            raise RuntimeError(
+                "PEFT is required to load LoRA adapters from checkpoint, but it is "
+                "not installed or importable."
+            ) from e
+
+        print(f"  - Wrapping base model with PEFT adapter from: {checkpoint_dir}")
+        model = PeftModel.from_pretrained(model, checkpoint_dir)
+
+    return model, tokenizer
 
 
 def load_pretrained_lora_model(
@@ -16,12 +79,14 @@ def load_pretrained_lora_model(
     """
     Load a pretrained model with LoRA adapters.
     
-    This function loads a model that was previously trained with LoRA
-    (e.g., from continued pretraining stage) and prepares it for further
-    fine-tuning or inference.
+    This function handles two cases:
+    1) `pretrained_checkpoint` is a full HF/Unsloth model directory containing
+       `config.json` + weights.
+    2) `pretrained_checkpoint` is a LoRA-only checkpoint directory containing
+       `adapter_model.safetensors` + `adapter_config.json`, but no `config.json`.
     
     Args:
-        pretrained_checkpoint: Path to pretrained model checkpoint directory.
+        pretrained_checkpoint: Path to pretrained model or LoRA checkpoint directory.
         max_seq_length: Maximum sequence length.
         load_in_4bit: Whether to load model in 4-bit quantization.
         local_rank: Local rank for distributed training.
@@ -30,6 +95,9 @@ def load_pretrained_lora_model(
         Tuple of (model, tokenizer)
     """
     print(f"\nLoading pretrained model from: {pretrained_checkpoint}")
+
+    if not os.path.exists(pretrained_checkpoint):
+        raise ValueError(f"Pretrained checkpoint not found: {pretrained_checkpoint}")
     
     # Check CUDA availability
     if torch.cuda.is_available():
@@ -37,15 +105,29 @@ def load_pretrained_lora_model(
         print(f"  - CUDA devices: {torch.cuda.device_count()}")
     else:
         print("  - CUDA not available, using CPU")
-    
-    # Load model and tokenizer with LoRA adapters
-    model, tokenizer = FastLanguageModel.from_pretrained(
-        model_name=pretrained_checkpoint,
-        max_seq_length=max_seq_length,
-        dtype=None,
-        load_in_4bit=load_in_4bit,
-        device_map={"": local_rank}
-    )
+
+    config_path = os.path.join(pretrained_checkpoint, "config.json")
+    adapter_config_path = os.path.join(pretrained_checkpoint, "adapter_config.json")
+
+    if os.path.exists(config_path):
+        # Standard HF/Unsloth model directory
+        print("  - Detected full model directory with 'config.json'")
+        model, tokenizer = FastLanguageModel.from_pretrained(
+            model_name=pretrained_checkpoint,
+            max_seq_length=max_seq_length,
+            dtype=None,
+            load_in_4bit=load_in_4bit,
+            device_map={"": local_rank},
+        )
+    else:
+        # Fall back to adapter-only checkpoint
+        print("  - No 'config.json' found; attempting to load as LoRA adapter checkpoint")
+        model, tokenizer = _load_base_plus_adapter_from_checkpoint(
+            checkpoint_dir=pretrained_checkpoint,
+            max_seq_length=max_seq_length,
+            load_in_4bit=load_in_4bit,
+            local_rank=local_rank,
+        )
     
     print(f"  - Loaded model and tokenizer (vocab size: {len(tokenizer)})")
     print(f"  - Model has LoRA adapters from pretraining")
