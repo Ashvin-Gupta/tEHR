@@ -185,7 +185,7 @@ class EHRClassificationTrainer:
             return sorted_dataset
 
         # Another process is computing; wait for cache to appear (with timeout)
-        for _ in range(600):
+        for _ in range(14400):
             time.sleep(1)
             if os.path.exists(cache_path):
                 print(f"  - Found cached length-sorted indices for split '{split}' (written by another process), loading...")

@@ -2,9 +2,9 @@ name: "llm_classifier"
 # /data/scratch/qc25022/pancreas/experiments/Pretrain-Qwen3-8B-Pancreas-new-time/checkpoint-11000
 # /data/scratch/qc25022/pancreas/experiments/Pretrain-Mistral-7B-Pancreas-new-time/checkpoint-6000
 model:
-  pretrained_checkpoint: "/gpfs/scratch/qc25022/pancreas/experiments/Pretrain-Mistral-7B-Pancreas-new-time/checkpoint-6000"
+  pretrained_checkpoint: "/gpfs/scratch/qc25022/pancreas/experiments/Pretrain-Qwen3-0.6B-Pancreas-new-time/checkpoint-11000"
   max_length: 12000
-  hidden_size: 4096
+  hidden_size: 1024
   num_labels: 2
   freeze_llm: true            # Keep base model frozen, only LoRA + classifier train
   train_lora: true            # Re-enable LoRA adapter parameters for training
@@ -17,10 +17,10 @@ model:
 wandb:
   enabled: true
   project: "Pretrain-Qwen3-8B-Pancreas-classification"
-  run_name: "lora-12-month-logistic-refactored-new-time-mistral-7B"
+  run_name: "lora-6-month-logistic-refactored-new-time-qwen3-0.6B"
 
 training:
-  output_dir: "/gpfs/scratch/qc25022/pancreas/experiments/Results/lora-12-month-logistic-refactored-new-time-mistral-7B"
+  output_dir: "/gpfs/scratch/qc25022/pancreas/experiments/Results/lora-6-month-logistic-refactored-new-time-qwen3-0.6B"
   overwrite_output_dir: true
   epochs: 1
   batch_size: 2
@@ -44,7 +44,7 @@ training:
 
 
 data:
-  cutoff_months: 12  # Remove last 5 month before diagnosis for cancer patients
+  cutoff_months: 6  # Remove last 5 month before diagnosis for cancer patients
   data_dir: "/gpfs/scratch/qc25022/pancreas/tokenised_data_pancreas_MEDS_new_time/cprd_upgi"
   vocab_filepath: "/gpfs/scratch/qc25022/pancreas/tokenised_data_pancreas_MEDS_new_time/cprd_upgi/vocab.csv"
   labels_filepath: "/data/home/qc25022/cancer-extraction-pipeline/output/pancreas_MEDS/subject_information.csv"
