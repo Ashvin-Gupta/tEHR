@@ -345,7 +345,7 @@ class EHRClassificationTrainer:
             remove_unused_columns=False,
         )
         if save_safetensors is not None:
-            training_args_kwargs["save_safetensors"] = save_safetensors
+            training_args_kwargs["save_safetensors"] = bool(self.training_config.get("save_safetensors", False))
 
         training_args = TrainingArguments(**training_args_kwargs)
         

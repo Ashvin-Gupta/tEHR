@@ -33,9 +33,6 @@ export MASTER_ADDR="${MASTER_ADDR:-127.0.0.1}"
 export MASTER_PORT="${MASTER_PORT:-$((20000 + (10#${JOB_PORT_SEED} % 20000)))}"
 
 python -m src.pipelines.finetune_llm_classifier \
-  --nproc_per_node=1 \
-  --master_addr="${MASTER_ADDR}" \
-  --master_port="${MASTER_PORT}" \
   --config_filepath src/configs/classification_config2.yaml
 # torchrun \
 #   --nnodes=1 \
