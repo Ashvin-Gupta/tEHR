@@ -20,33 +20,49 @@ class MIMICUnifiedDataset(Dataset):
         self.task = task
         self.split = split
         self.max_sequence_length = max_sequence_length
-        self.aces_data = {}
         self.label_column = label_column
+        # For prediction tasks with potentially multiple rows per subject_id
+        self.aces_df = None           # Full ACES dataframe for this split
+        self.examples = []            # One entry per ACES row (each is a datapoint)
+        self.subject_to_records = {}  # subject_id -> list of patient_records
 
         self._load_mappings(vocab_file, lookup_dir)
 
         if self.task == 'prediction':
             aces_path = os.path.join(aces_label_dir, f"{split}_labels.parquet")
             if os.path.exists(aces_path):
-                self.aces_data = self._load_aces(aces_path)
+                # Keep full ACES table; allow multiple rows per subject_id
+                self.aces_df = pl.read_parquet(aces_path).to_pandas()
 
         limit = 5 if split in ['tuning'] else None
         self.patient_records = self._load_data(data_dir, split, limit=limit)
 
-        # When doing prediction tasks, restrict to patients that appear in the ACES
-        # label file so we do not train on the entire raw cohort.
-        if self.task == 'prediction' and self.aces_data:
-            original_count = len(self.patient_records)
-            aces_subject_ids = set(self.aces_data.keys())
-            self.patient_records = [
-                rec for rec in self.patient_records
-                if rec.get("subject_id") in aces_subject_ids
-            ]
-            filtered_count = len(self.patient_records)
+        # For prediction tasks, build a list of examples where each ACES row is
+        # treated as a distinct datapoint (potentially multiple per subject_id).
+        if self.task == 'prediction' and self.aces_df is not None:
+            original_patient_count = len(self.patient_records)
+
+            # Map subject_id -> list of patient_records (in case there are multiple).
+            for rec in self.patient_records:
+                sid = rec.get("subject_id")
+                if sid is None:
+                    continue
+                self.subject_to_records.setdefault(sid, []).append(rec)
+
+            # Build examples from every ACES row that has at least one trajectory.
+            skipped = 0
+            for _, row in self.aces_df.iterrows():
+                sid = row.get("subject_id")
+                if sid not in self.subject_to_records:
+                    skipped += 1
+                    continue
+                self.examples.append(row.to_dict())
+
             print(
                 f"[MIMICUnifiedDataset] Split '{split}': "
-                f"filtered patient_records from {original_count} to {filtered_count} "
-                f"using ACES labels (unique subjects: {len(aces_subject_ids)})"
+                f"loaded {original_patient_count} patient trajectories, "
+                f"constructed {len(self.examples)} prediction examples "
+                f"from ACES (skipped {skipped} rows with missing trajectories)."
             )
 
     def _load_mappings(self, vocab_file, lookup_dir):
@@ -62,9 +78,6 @@ class MIMICUnifiedDataset(Dataset):
         proc_df = pd.read_csv(os.path.join(lookup_dir, "d_icd_procedures.csv.gz"))
         proc_df['key'] = proc_df['icd_version'].astype(str) + "_" + proc_df['icd_code'].astype(str)
         self.proc_lookup = proc_df.set_index('key')['long_title'].to_dict()
-
-    def _load_aces(self, path):
-        return pl.read_parquet(path).to_pandas().set_index('subject_id').to_dict('index')
 
     def _is_header_concept(self, token_code):
         token_code = str(token_code).upper()
@@ -125,66 +138,78 @@ class MIMICUnifiedDataset(Dataset):
             return f"{token}; "
 
     def __len__(self):
+        # For prediction tasks, each ACES row becomes one datapoint.
+        if self.task == 'prediction' and self.aces_df is not None and self.examples:
+            return len(self.examples)
         return len(self.patient_records)
 
     def __getitem__(self, idx):
-        record = self.patient_records[idx]
-        subject_id = record['subject_id']
-        tokens, timestamps = record['tokens'], record['timestamps']
+        # Prediction tasks: each example corresponds to one ACES row
+        if self.task == 'prediction' and self.aces_df is not None and self.examples:
+            example = self.examples[idx]
+            subject_id = example["subject_id"]
 
-        label_value = 0
+            # Choose the first trajectory for this subject_id (if multiple exist).
+            records_for_subject = self.subject_to_records.get(subject_id)
+            if not records_for_subject:
+                raise IndexError(f"No patient trajectory found for subject_id={subject_id}")
+            record = records_for_subject[0]
 
-        if self.task == 'prediction':
-            task_info = self.aces_data.get(subject_id)
-            if task_info:
-                # Time-based truncation to prediction_time where types are compatible.
-                pred_time = task_info.get("prediction_time")
-                if pred_time is not None and len(timestamps) > 0:
-                    first_ts = timestamps[0]
+            tokens, timestamps = record['tokens'], record['timestamps']
 
-                    # Case 1: timestamps stored as numeric (seconds since epoch, etc.)
-                    if isinstance(first_ts, (int, float)):
-                        # Normalize prediction_time to numeric as well
-                        numeric_pred_time = None
-                        if isinstance(pred_time, (int, float)):
-                            numeric_pred_time = float(pred_time)
-                        elif isinstance(pred_time, pd.Timestamp):
-                            try:
-                                numeric_pred_time = float(pred_time.timestamp())
-                            except Exception:
-                                numeric_pred_time = None
+            label_value = 0
+            pred_time = example.get("prediction_time")
 
-                        if numeric_pred_time is not None:
-                            tokens = [
-                                t for i, t in enumerate(tokens)
-                                if timestamps[i] <= numeric_pred_time
-                            ]
+            if pred_time is not None and len(timestamps) > 0:
+                first_ts = timestamps[0]
 
-                    # Case 2: timestamps stored as pandas.Timestamp
-                    elif isinstance(first_ts, pd.Timestamp):
-                        # Normalize prediction_time to Timestamp
-                        ts_pred_time = None
-                        if isinstance(pred_time, pd.Timestamp):
-                            ts_pred_time = pred_time
-                        elif isinstance(pred_time, (int, float)):
-                            try:
-                                ts_pred_time = pd.to_datetime(pred_time, unit="s")
-                            except Exception:
-                                ts_pred_time = None
+                # Case 1: timestamps stored as numeric (seconds since epoch, etc.)
+                if isinstance(first_ts, (int, float)):
+                    numeric_pred_time = None
+                    if isinstance(pred_time, (int, float)):
+                        numeric_pred_time = float(pred_time)
+                    elif isinstance(pred_time, pd.Timestamp):
+                        try:
+                            numeric_pred_time = float(pred_time.timestamp())
+                        except Exception:
+                            numeric_pred_time = None
 
-                        if ts_pred_time is not None:
-                            tokens = [
-                                t for i, t in enumerate(tokens)
-                                if timestamps[i] <= ts_pred_time
-                            ]
+                    if numeric_pred_time is not None:
+                        tokens = [
+                            t for i, t in enumerate(tokens)
+                            if timestamps[i] <= numeric_pred_time
+                        ]
 
-                # Use configured label column if present in ACES row
-                if self.label_column in task_info:
-                    try:
-                        label_value = int(task_info[self.label_column])
-                    except Exception:
-                        # Fallback: treat any non-zero / truthy value as positive
-                        label_value = 1 if task_info[self.label_column] else 0
+                # Case 2: timestamps stored as pandas.Timestamp
+                elif isinstance(first_ts, pd.Timestamp):
+                    ts_pred_time = None
+                    if isinstance(pred_time, pd.Timestamp):
+                        ts_pred_time = pred_time
+                    elif isinstance(pred_time, (int, float)):
+                        try:
+                            ts_pred_time = pd.to_datetime(pred_time, unit="s")
+                        except Exception:
+                            ts_pred_time = None
+
+                    if ts_pred_time is not None:
+                        tokens = [
+                            t for i, t in enumerate(tokens)
+                            if timestamps[i] <= ts_pred_time
+                        ]
+
+            # Use configured label column from this ACES row
+            if self.label_column in example:
+                try:
+                    label_value = int(example[self.label_column])
+                except Exception:
+                    label_value = 1 if example[self.label_column] else 0
+
+        else:
+            # Pretraining or other tasks: original behaviour (one record per patient)
+            record = self.patient_records[idx]
+            subject_id = record['subject_id']
+            tokens, timestamps = record['tokens'], record['timestamps']
+            label_value = 0
 
         string_codes = [self.id_to_token_map.get(tid, "") for tid in tokens]
         translated_phrases = []

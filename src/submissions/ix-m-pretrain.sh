@@ -5,7 +5,7 @@
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=64G
 #SBATCH --gres=gpu:2
-#SBATCH --output=logs/ix-m-pretrain.log
+#SBATCH --output=logs/ix-m-pretrain_resume.log
 #SBATCH --job-name=ix-m-pretrain
 
 set -e
@@ -36,7 +36,13 @@ export MASTER_PORT
 
 echo "Using MASTER_PORT=$MASTER_PORT for torchrun"
 
-torchrun --nproc_per_node=2 --master_port=$MASTER_PORT src/pipelines/llm_pretrain.py --config_filepath src/configs/mimic_pretrain.yaml
+# torchrun --nproc_per_node=2 --master_port=$MASTER_PORT src/pipelines/llm_pretrain.py --config_filepath src/configs/mimic_pretrain.yaml
+
+torchrun --nproc_per_node=2 src/pipelines/resume_pretrain.py \
+  --config_filepath src/configs/mimic_resume_pretrain_config.yaml \
+  --checkpoint_path /home/ag619/experiments/Results/Pretrain-Mistral-7B-Mimic/checkpoint-2000
+
+
 
 echo "Pipeline finished."
 conda deactivate

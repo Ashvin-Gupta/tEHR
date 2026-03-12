@@ -26,8 +26,21 @@ cd "${BASE_DIR}"
 echo "Starting experiment from directory: $(pwd)"
 export PYTHONPATH="${BASE_DIR}:${PYTHONPATH}"
 
-# python -m src.pipelines.finetune_llm_classifier --config_filepath src/configs/classification_config.yaml
-torchrun --nproc_per_node=2 src/pipelines/finetune_llm_classifier.py --config_filepath src/configs/mimic_classifier.yaml
+# get_free_port() {
+#     python -c "import socket; s=socket.socket(); s.bind(('',0)); print(s.getsockname()[1]); s.close()"
+# }
 
+# MASTER_PORT=$(get_free_port)
+# export MASTER_PORT
+export MASTER_PORT=47001
+
+echo "Using MASTER_PORT=$MASTER_PORT for torchrun"
+
+# python -m src.pipelines.finetune_llm_classifier --config_filepath src/configs/classification_config.yaml
+# torchrun --nproc_per_node=2 src/pipelines/finetune_llm_classifier.py --config_filepath src/configs/mimic_classifier.yaml
+torchrun --nproc_per_node=2 --master_port="$MASTER_PORT" src/pipelines/finetune_llm_classifier.py \
+  --config_filepath src/configs/mimic_classifier.yaml \
+  --seed 1725014503 \
+  --checkpoint_path /home/ag619/experiments/Results/mimic-ICU-mortality-classification/seed_3520567791/checkpoint-1000
 echo "Pipeline finished."
 conda deactivate

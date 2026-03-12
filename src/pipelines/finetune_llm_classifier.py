@@ -15,12 +15,14 @@ from src.training.utils import seed_all
 from src.training.classification_trainer import EHRClassificationTrainer
 
 
-def main(config_path: str):
+def main(config_path: str, seed: int | None = None, checkpoint_path: str | None = None):
     """
     Main function to run LLM classification fine-tuning.
     
     Args:
         config_path: Path to YAML configuration file.
+        seed: Optional fixed seed. If not provided, a random seed is sampled.
+        checkpoint_path: Optional path to a Trainer checkpoint directory to resume from.
     """
     # Load configuration
     print("=" * 80)
@@ -36,7 +38,8 @@ def main(config_path: str):
     print("=" * 80)
 
     # Draw a fresh random seed for this run and apply it everywhere
-    seed = random.SystemRandom().randint(0, 2**32 - 1)
+    if seed is None:
+        seed = random.SystemRandom().randint(0, 2**32 - 1)
     config.setdefault("training", {})["seed"] = seed
     print(f"\nUsing random seed for this run: {seed}")
     seed_all(seed)
@@ -53,7 +56,7 @@ def main(config_path: str):
 
     # Create classification trainer and run the full pipeline
     trainer = EHRClassificationTrainer(config)
-    eval_results, test_results = trainer.run_full_pipeline()
+    eval_results, test_results = trainer.run_full_pipeline(resume_from_checkpoint=checkpoint_path)
     
     print("\n" + "=" * 80)
     print("Training completed successfully!")
@@ -75,6 +78,18 @@ if __name__ == "__main__":
         required=True,
         help="Path to the experiment config YAML file"
     )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=None,
+        help="Optional fixed seed. If omitted, a random seed is sampled and used to create seed_<seed>/ output dir."
+    )
+    parser.add_argument(
+        "--checkpoint_path",
+        type=str,
+        default=None,
+        help="Optional path to a Trainer checkpoint directory (e.g., .../seed_<seed>/checkpoint-1000) to resume from."
+    )
     args = parser.parse_args()
     
-    main(args.config_filepath)
+    main(args.config_filepath, seed=args.seed, checkpoint_path=args.checkpoint_path)

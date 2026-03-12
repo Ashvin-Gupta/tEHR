@@ -304,6 +304,7 @@ class EHRClassificationTrainer:
 
         training_args_kwargs = dict(
             output_dir=self.training_config['output_dir'],
+            overwrite_output_dir=bool(self.training_config.get("overwrite_output_dir", False)),
             run_name=run_name,
             report_to="wandb" if self.wandb_config.get('enabled', False) else "none",
             
@@ -374,13 +375,19 @@ class EHRClassificationTrainer:
             callbacks=callbacks,
         )
     
-    def train(self):
+    def train(self, resume_from_checkpoint: str | None = None):
         """Run the training loop."""
         print("\n" + "=" * 80)
         print("Starting classification training...")
         print("=" * 80)
-        
-        self.trainer.train()
+
+        if resume_from_checkpoint:
+            if not os.path.exists(resume_from_checkpoint):
+                raise ValueError(f"Checkpoint not found: {resume_from_checkpoint}")
+            print(f"  - Resuming from checkpoint: {resume_from_checkpoint}")
+            self.trainer.train(resume_from_checkpoint=resume_from_checkpoint)
+        else:
+            self.trainer.train()
     
     def save_model(self):
         """Save the final trained model."""
@@ -452,7 +459,7 @@ class EHRClassificationTrainer:
         plot_classification_performance(labels, probs, plot_output_dir)
         print(f"  - Plots saved to: {plot_output_dir}")
     
-    def run_full_pipeline(self):
+    def run_full_pipeline(self, resume_from_checkpoint: str | None = None):
         """
         Run the complete classification training pipeline.
         
@@ -478,7 +485,7 @@ class EHRClassificationTrainer:
         self.create_trainer(train_dataset, val_dataset, collator, run_name)
         
         # Train
-        self.train()
+        self.train(resume_from_checkpoint=resume_from_checkpoint)
         
         # Save
         self.save_model()

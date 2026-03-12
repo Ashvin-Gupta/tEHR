@@ -21,7 +21,7 @@ wandb:
 
 training:
   output_dir: "/home/ag619/experiments/Results/mimic-ICU-mortality-classification"
-  overwrite_output_dir: true
+  overwrite_output_dir: false
   epochs: 1
   batch_size: 8
   eval_batch_size: 8
