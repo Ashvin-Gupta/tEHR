@@ -5,6 +5,7 @@ import os
 import yaml
 from typing import Dict, Any, List, Tuple
 from src.data.unified_dataset import UnifiedEHRDataset
+from src.data.MIMIC_unified_dataset import MIMICUnifiedDataset
 
 
 def load_baseline_config(config_path: str) -> Dict[str, Any]:
@@ -63,38 +64,60 @@ def load_datasets(
     splits: List[str] = ['train', 'tuning', 'held_out'],
     format: str = 'text',
     tokenizer: Any = None
-) -> Dict[str, UnifiedEHRDataset]:
+) -> Dict[str, Any]:
     """
     Load datasets for specified splits.
+    
+    Supports both CPRD (tokenised CPRD EHR) and MIMIC (MIMIC-IV + ACES labels),
+    selected via `data_config['dataset']`:
+      - "CPRD"  (default): uses UnifiedEHRDataset
+      - "MIMIC": uses MIMICUnifiedDataset
     
     Args:
         data_config: Data configuration dictionary
         splits: List of splits to load
-        format: Dataset format ('tokens', 'text', etc.)
-        tokenizer: Optional tokenizer (for certain formats)
+        format: Dataset format for CPRD ('tokens', 'text', 'pretrain', etc.)
+        tokenizer: Optional tokenizer (for certain CPRD formats)
     
     Returns:
         Dictionary mapping split names to datasets
     """
     datasets = {}
+    dataset_name = data_config.get("dataset", "CPRD")
     
     for split in splits:
-        print(f"\nLoading {split} dataset...")
-        dataset = UnifiedEHRDataset(
-            data_dir=data_config['data_dir'],
-            vocab_file=data_config['vocab_filepath'],
-            labels_file=data_config['labels_filepath'],
-            medical_lookup_file=data_config['medical_lookup_filepath'],
-            lab_lookup_file=data_config['lab_lookup_filepath'],
-            region_lookup_file=data_config['region_lookup_filepath'],
-            time_lookup_file=data_config['time_lookup_filepath'],
-            cutoff_months=data_config.get('cutoff_months', None),
-            max_sequence_length=data_config.get('max_length', 512),
-            format=format,
-            split=split,
-            tokenizer=tokenizer,
-            data_type=data_config.get('data_type', 'binned')
-        )
+        print(f"\nLoading {split} dataset ({dataset_name})...")
+        
+        if dataset_name == "CPRD":
+            dataset = UnifiedEHRDataset(
+                data_dir=data_config['data_dir'],
+                vocab_file=data_config['vocab_filepath'],
+                labels_file=data_config['labels_filepath'],
+                medical_lookup_file=data_config['medical_lookup_filepath'],
+                lab_lookup_file=data_config['lab_lookup_filepath'],
+                region_lookup_file=data_config['region_lookup_filepath'],
+                time_lookup_file=data_config['time_lookup_filepath'],
+                cutoff_months=data_config.get('cutoff_months', None),
+                max_sequence_length=data_config.get('max_length', 512),
+                format=format,
+                split=split,
+                tokenizer=tokenizer,
+                data_type=data_config.get('data_type', 'binned')
+            )
+        elif dataset_name == "MIMIC":
+            dataset = MIMICUnifiedDataset(
+                data_dir=data_config["data_dir"],
+                vocab_file=data_config["vocab_filepath"],
+                aces_label_dir=data_config["aces_label_dir"],
+                lookup_dir=data_config["lookup_dir"],
+                task="prediction",
+                split=split,
+                max_sequence_length=data_config.get("max_length", 512),
+                label_column=data_config.get("label_column", "label"),
+            )
+        else:
+            raise ValueError(f"Unsupported dataset type '{dataset_name}' in data_config.")
+
         datasets[split] = dataset
         print(f"  - Loaded {len(dataset)} samples")
     
