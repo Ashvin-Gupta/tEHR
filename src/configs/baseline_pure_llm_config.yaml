@@ -17,17 +17,22 @@ model:
 inference:
   batch_size: 4
 
-output_dir: "/data/scratch/qc25022/pancreas_MEDS/experiments/baselines/pure_llm"
-overwrite_output_dir: false
+output_dir: "/gpfs/scratch/qc25022/pancreas/experiments/Results/baselines/pure_llm"
+overwrite_output_dir: true`
+
+prompt:
+  filepath: "src/resources/pancreatic_cancer_prompt.txt"
 
 data:
   cutoff_months: 6
-  data_dir: "/data/scratch/qc25022/pancreas/tokenised_data_pancreas_MEDS/cprd_upgi"
-  vocab_filepath: "/data/scratch/qc25022/pancreas/tokenised_data_pancreas_MEDS/cprd_upgi/vocab.csv"
+  data_dir: "/gpfs/scratch/qc25022/pancreas/tokenised_data_pancreas_MEDS_new_time/cprd_upgi"
+  vocab_filepath: "/gpfs/scratch/qc25022/pancreas/tokenised_data_pancreas_MEDS_new_time/cprd_upgi/vocab.csv"
   labels_filepath: "/data/home/qc25022/cancer-extraction-pipeline/output/pancreas_MEDS/subject_information.csv"
   medical_lookup_filepath: "/data/home/qc25022/TextCancEHR2/src/resources/MedicalDictTranslation2.csv"
   lab_lookup_filepath: "/data/home/qc25022/TextCancEHR2/src/resources/LabLookUP.csv"
   region_lookup_filepath: "/data/home/qc25022/TextCancEHR2/src/resources/RegionLookUp.csv"
   time_lookup_filepath: "/data/home/qc25022/TextCancEHR2/src/resources/TimeLookUp.csv"
   max_length: 16000
+  dataset: "CPRD"
+
 
