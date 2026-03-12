@@ -313,7 +313,9 @@ class PureLLMBaseline:
         # Generate predictions
         batch_size = self.config.get('inference', {}).get('batch_size', 4)
         probs = self.predict_batch(texts, batch_size=batch_size)
-        
+
+        binary_labels = (labels != 0).astype(int)
+
         # Compute metrics
         metrics = compute_baseline_metrics(labels, probs)
         
