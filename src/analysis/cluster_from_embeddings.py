@@ -19,6 +19,7 @@ import seaborn as sns
 from sklearn.cluster import KMeans
 from sklearn.metrics import silhouette_score
 import umap
+import hdbscan
 
 from src.baselines.utils import load_baseline_config, load_datasets
 
@@ -482,57 +483,133 @@ def analyse_differential_features(
 
     print(f"Differential analysis complete. Files saved to {output_dir}")
 
+def run_hdbscan(embeddings: np.ndarray, min_cluster_size: int = 15, min_samples: int = 5):
+    """
+    Runs HDBSCAN on the high-dimensional embedding space.
+    
+    Args:
+        min_cluster_size: The smallest size a group can be to be considered a cluster.
+        min_samples: How 'conservative' the clustering is. Higher = more points labeled as noise.
+    """
+    clusterer = hdbscan.HDBSCAN(
+        min_cluster_size=min_cluster_size,
+        min_samples=min_samples,
+        metric='euclidean', # or 'cosine' if your embeddings are normalized
+        prediction_data=True
+    )
+    
+    labels = clusterer.fit_predict(embeddings)
+    
+    # Calculate some stats
+    n_clusters = len(set(labels)) - (1 if -1 in labels else 0)
+    n_noise = list(labels).count(-1)
+    
+    print(f"HDBSCAN found {n_clusters} clusters and {n_noise} noise points out of {len(labels)} patients.")
+    
+    return labels, clusterer
+
+# def main():
+#     # 1) Load embeddings and run clustering
+#     embeddings, patient_ids = load_embeddings(OUTPUT_DIR)
+#     Z = run_umap(embeddings)
+#     cluster_labels = run_kmeans(embeddings, K)
+
+#     # 2) Build cluster DataFrame
+#     df_clusters = pd.DataFrame(
+#         {
+#             "patient_id": patient_ids,
+#             "cluster": cluster_labels,
+#             "dim1": Z[:, 0],
+#             "dim2": Z[:, 1],
+#         }
+#     )
+
+#     # 3) Load dataset to attach labels and access raw tokens
+#     dataset, subject_to_label, label_to_name, subject_to_record_idx = load_dataset(
+#         CONFIG_PATH, SPLIT
+#     )
+
+#     # Map labels
+#     df_clusters["patient_id_str"] = df_clusters["patient_id"].astype(str)
+#     df_clusters["label_id"] = df_clusters["patient_id_str"].map(subject_to_label)
+#     df_clusters["label_name"] = df_clusters["label_id"].map(label_to_name)
+
+#     # Binary case vs control
+#     df_clusters["is_case"] = df_clusters["label_id"].fillna(0).astype(int) > 0
+#     df_clusters["case_label"] = np.where(df_clusters["is_case"], "Case", "Control")
+
+#     # Save clusters table
+#     os.makedirs(OUTPUT_DIR, exist_ok=True)
+#     df_clusters.to_csv(
+#         os.path.join(OUTPUT_DIR, "patient_clusters_from_embeddings.csv"), index=False
+#     )
+
+#     # # 4) Visualise clusters
+#     # visualize_clusters(df_clusters, OUTPUT_DIR)
+
+#     # # 5) Analyse events and measurements per cluster
+#     # analyse_events_and_measurements(
+#     #     dataset=dataset,
+#     #     df_clusters=df_clusters,
+#     #     subject_to_record_idx=subject_to_record_idx,
+#     #     output_dir=OUTPUT_DIR,
+#     # )
+#     # 4) Calculate Case/Control mix
+#     calculate_cluster_composition(df_clusters, OUTPUT_DIR)
+
+#     # 5) Run the new differential analysis
+#     analyse_differential_features(
+#         dataset=dataset,
+#         df_clusters=df_clusters,
+#         subject_to_record_idx=subject_to_record_idx,
+#         output_dir=OUTPUT_DIR
+#     )
+
+#     # 6) Visualise (as before)
+#     visualize_clusters(df_clusters, OUTPUT_DIR)
+
+#     print("Cluster analysis from embeddings complete.")
 
 def main():
-    # 1) Load embeddings and run clustering
-    embeddings, patient_ids = load_embeddings(OUTPUT_DIR)
-    Z = run_umap(embeddings)
-    cluster_labels = run_kmeans(embeddings, K)
-
-    # 2) Build cluster DataFrame
-    df_clusters = pd.DataFrame(
-        {
-            "patient_id": patient_ids,
-            "cluster": cluster_labels,
-            "dim1": Z[:, 0],
-            "dim2": Z[:, 1],
-        }
-    )
-
-    # 3) Load dataset to attach labels and access raw tokens
+    # 1) Load dataset FIRST (required for mapping labels later)
     dataset, subject_to_label, label_to_name, subject_to_record_idx = load_dataset(
         CONFIG_PATH, SPLIT
     )
 
-    # Map labels
+    # 2) Load embeddings
+    embeddings, patient_ids = load_embeddings(OUTPUT_DIR)
+    
+    # 3) Run HDBSCAN
+    # cluster_labels contains -1 for outliers (noise)
+    cluster_labels, clusterer = run_hdbscan(embeddings, min_cluster_size=20)
+    
+    # 4) Build cluster DataFrame
+    Z = run_umap(embeddings) # Dimensionality reduction for viz
+    df_clusters = pd.DataFrame({
+        "patient_id": patient_ids,
+        "cluster": cluster_labels,
+        "dim1": Z[:, 0],
+        "dim2": Z[:, 1],
+    })
+
+    # 5) Map labels (Now variables like subject_to_label exist)
     df_clusters["patient_id_str"] = df_clusters["patient_id"].astype(str)
     df_clusters["label_id"] = df_clusters["patient_id_str"].map(subject_to_label)
     df_clusters["label_name"] = df_clusters["label_id"].map(label_to_name)
 
-    # Binary case vs control
+    # Binary case vs control logic
     df_clusters["is_case"] = df_clusters["label_id"].fillna(0).astype(int) > 0
     df_clusters["case_label"] = np.where(df_clusters["is_case"], "Case", "Control")
 
-    # Save clusters table
+    # 6) Save clusters table
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     df_clusters.to_csv(
         os.path.join(OUTPUT_DIR, "patient_clusters_from_embeddings.csv"), index=False
     )
 
-    # # 4) Visualise clusters
-    # visualize_clusters(df_clusters, OUTPUT_DIR)
-
-    # # 5) Analyse events and measurements per cluster
-    # analyse_events_and_measurements(
-    #     dataset=dataset,
-    #     df_clusters=df_clusters,
-    #     subject_to_record_idx=subject_to_record_idx,
-    #     output_dir=OUTPUT_DIR,
-    # )
-    # 4) Calculate Case/Control mix
+    # 7) Analysis & Visualization
     calculate_cluster_composition(df_clusters, OUTPUT_DIR)
 
-    # 5) Run the new differential analysis
     analyse_differential_features(
         dataset=dataset,
         df_clusters=df_clusters,
@@ -540,11 +617,9 @@ def main():
         output_dir=OUTPUT_DIR
     )
 
-    # 6) Visualise (as before)
     visualize_clusters(df_clusters, OUTPUT_DIR)
 
     print("Cluster analysis from embeddings complete.")
-
 
 if __name__ == "__main__":
     main()
