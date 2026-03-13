@@ -292,15 +292,10 @@ class EHRClassificationTrainer:
         print("Setting up trainer...")
         print("=" * 80)
 
-        # If model name contains 'mistral', add save_safetensors=False to training_args
-        model_name = (
-            self.model_config.get("model_name", "") 
-            if hasattr(self, "model_config") 
-            else self.training_config.get("model_name", "")
-        )
-        save_safetensors = None
-        if "mistral" in model_name.lower():
-            save_safetensors = False
+        # Control whether checkpoints are written with safetensors.
+        # Default to False because some backbone models (e.g. Mistral with tied
+        # embed/lm_head weights) are incompatible with safetensors.save_file.
+        save_safetensors = bool(self.training_config.get("save_safetensors", False))
 
         training_args_kwargs = dict(
             output_dir=self.training_config['output_dir'],
@@ -344,8 +339,7 @@ class EHRClassificationTrainer:
             # Other
             remove_unused_columns=False,
         )
-        if save_safetensors is not None:
-            training_args_kwargs["save_safetensors"] = bool(self.training_config.get("save_safetensors", False))
+        training_args_kwargs["save_safetensors"] = save_safetensors
 
         training_args = TrainingArguments(**training_args_kwargs)
         
