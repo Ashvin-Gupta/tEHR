@@ -1,8 +1,8 @@
 name: "qwen3_embedding_baseline"
 
 model:
-  model_name: "Qwen/Qwen3-Embedding-0.6B"
-  hidden_size: 1024
+  model_name: "Qwen/Qwen3-Embedding-4B"
+  hidden_size: 2560
   num_labels: 2
   head_dropout: 0.1
 
@@ -65,6 +65,6 @@ data:
   lab_lookup_filepath: "/data/home/qc25022/TextCancEHR2/src/resources/LabLookUP.csv"
   region_lookup_filepath: "/data/home/qc25022/TextCancEHR2/src/resources/RegionLookUp.csv"
   time_lookup_filepath: "/data/home/qc25022/TextCancEHR2/src/resources/TimeLookUp.csv"
-  max_length: 4096
+  max_length: 1024
   handle_long_sequences: "warn"
   sort_by_length: true
