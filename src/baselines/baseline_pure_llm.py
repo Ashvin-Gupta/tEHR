@@ -313,16 +313,23 @@ class PureLLMBaseline:
         # Generate predictions
         batch_size = self.config.get('inference', {}).get('batch_size', 4)
         probs = self.predict_batch(texts, batch_size=batch_size)
+
+        # Convert multi-class labels to binary (0 = negative, non-zero = positive)
+        binary_labels = (labels != 0).astype(int)
         
-        # Compute metrics
-        metrics = compute_baseline_metrics(labels, probs)
+        # Ensure arrays are 1D and properly shaped
+        binary_labels = np.asarray(binary_labels).flatten()
+        probs = np.asarray(probs).flatten()
+
+        # Compute metrics using binary labels
+        metrics = compute_baseline_metrics(binary_labels, probs)
         
         # Print results
         print_results(metrics, split_name)
         
-        # Save all plots (ROC, PR, and Calibration)
+        # Save all plots (ROC, PR, and Calibration) using binary labels
         plot_dir = os.path.join(self.output_dir, 'plots', split_name)
-        plot_all_curves(labels, probs, plot_dir)
+        plot_all_curves(binary_labels, probs, plot_dir)
         
         # Save predictions
         results = {
