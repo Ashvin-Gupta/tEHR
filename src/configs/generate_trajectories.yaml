@@ -1,0 +1,32 @@
+model:
+  checkpoint_dir: /data/private/ag619/experiments/Pretrain-Mistral-7B-Mimic/checkpoint-4000
+  max_length: 16000
+  load_in_4bit: true
+  # local_rank: optional device index
+generation:
+  max_new_tokens: 2048
+  temperature: 1
+  # top_p: 0.95
+  # top_k: 30
+  repetition_penalty: 1.2
+# - prompt (optional):
+#   - template: custom prompt template with "{ehr_text}"
+
+trajectory_generation:
+  num_examples: 200      # how many datapoints to sample
+  repetitions: 5 
+
+output_dir: "/data/private/ag619/experiments/Results/trajectory_generation"
+overwrite_output_dir: true
+
+
+data:
+  cutoff_months: 6
+  data_dir: "/data/private/ag619/MIMIC-IV tokensiation"
+  vocab_filepath: "/data/private/ag619/MIMIC-IV tokensiation/vocab.csv"
+  aces_label_dir: "/data/private/ag619/labels/icu_mortality"
+  lookup_dir: "/data/private/ag619/hosp"
+  max_length: 16000
+  dataset: "MIMIC"
+  task: "prediction"
+

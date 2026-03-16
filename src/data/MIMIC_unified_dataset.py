@@ -34,7 +34,7 @@ class MIMICUnifiedDataset(Dataset):
                 # Keep full ACES table; allow multiple rows per subject_id
                 self.aces_df = pl.read_parquet(aces_path).to_pandas()
 
-        limit = 5 if split in ['tuning'] else None
+        limit = 1 if split in ['tuning'] else None
         self.patient_records = self._load_data(data_dir, split, limit=limit)
 
         # For prediction tasks, build a list of examples where each ACES row is
