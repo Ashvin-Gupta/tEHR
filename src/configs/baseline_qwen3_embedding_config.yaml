@@ -27,7 +27,7 @@ model:
 pretrain:
   enabled: true
   # Keep this small for memory; 12k–16k contexts will OOM even with LoRA.
-  max_length: 4096
+  max_length: 1024
   mlm_probability: 0.15
   # Adds a real [MASK] token if missing (removes warning and enables standard 80/10/10 masking)
   add_mask_token: true
