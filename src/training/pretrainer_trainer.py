@@ -7,53 +7,16 @@ from typing import Dict, Any, Optional
 import torch
 import time
 from datasets import Dataset
-from transformers import TrainingArguments, DataCollatorForLanguageModeling
+from transformers import DataCollatorForLanguageModeling
 from unsloth import FastLanguageModel
 from trl import SFTTrainer, SFTConfig
 import wandb
 
-from src.data.unified_dataset import UnifiedEHRDataset
-from src.data.MIMIC_unified_dataset import MIMICUnifiedDataset
-from src.data.preprocessing import extract_text
-from src.training.callbacks import InferenceCallback, PackingVerificationCallback, BatchShapeCallback
+from src.training.training_utils import extract_and_pack
+from src.data.dataset_factory import get_dataset
 
-
-def pack_and_chunk_texts(texts, tokenizer, chunk_size):
-    """
-    Optimized packing and chunking to prevent CPU RAM OOM.
-    """
-    print(f"  - Tokenizing and packing {len(texts)} texts into {chunk_size}-token chunks...")
-    
-    # 1. Use the tokenizer's batch capability (much faster and more memory efficient)
-    # We do NOT return tensors here to keep memory low
-    tokenized = tokenizer(
-        texts, 
-        add_special_tokens=False, 
-        truncation=False, 
-        padding=False
-    )["input_ids"]
-
-    # 2. Flatten efficiently
-    all_token_ids = []
-    eos_id = tokenizer.eos_token_id
-    for ids in tokenized:
-        all_token_ids.extend(ids)
-        if not ids or ids[-1] != eos_id:
-            all_token_ids.append(eos_id)
-            
-    # Free up the intermediate list immediately
-    del tokenized 
-    
-    # 3. Slice into fixed chunks
-    chunked_input_ids = [
-        all_token_ids[i : i + chunk_size] 
-        for i in range(0, len(all_token_ids), chunk_size)
-        if (i + chunk_size) <= len(all_token_ids) # Drop partial final chunk for stability
-    ]
-                
-    print(f"  - Created {len(chunked_input_ids)} packed sequences.")
-    return chunked_input_ids
-
+import logging
+logger = logging.getLogger(__name__)
     
 class EHRPretrainer:
     """
@@ -129,15 +92,15 @@ class EHRPretrainer:
     
     def load_model(self):
         """Load model and tokenizer with Unsloth."""
-        print("\n" + "=" * 80)
-        print(f"Loading model: {self.model_config['model_name']}")
-        print("=" * 80)
+        logger.info("\n" + "=" * 80)
+        logger.info(f"Loading model: {self.model_config['model_name']}")
+        logger.info("=" * 80)
 
         if torch.cuda.is_available():
-            print(f"  - CUDA available: {torch.cuda.get_device_name(0)}")
-            print(f"  - CUDA devices: {torch.cuda.device_count()}")
+            logger.info(f"  - CUDA available: {torch.cuda.get_device_name(0)}")
+            logger.info(f"  - CUDA devices: {torch.cuda.device_count()}")
         else:
-            print(f"  - CUDA not available, using CPU")
+            logger.info(f"  - CUDA not available, using CPU")
         
         self.model, self.tokenizer = FastLanguageModel.from_pretrained(
             model_name=self.model_config['model_name'],
@@ -166,7 +129,7 @@ class EHRPretrainer:
             use_rslora=self.lora_config.get('use_rslora', True),
             loftq_config=self.lora_config.get('loftq_config', None),
         )
-        print("  - Applied LoRA adapters (PEFT) to the model.")
+        logger.info("  - Applied LoRA adapters (PEFT) to the model.")
     
     def prepare_datasets(self) -> tuple[Dataset, Optional[Dataset]]:
         """
@@ -187,62 +150,25 @@ class EHRPretrainer:
             try:
                 if not os.path.exists(os.path.join(train_cache_path, "dataset_info.json")):
                     os.makedirs(cache_dir, exist_ok=True)
-                    print("\n--- Data Preparation (Rank 0 Only) ---")
+                    logger.info("\n--- Data Preparation (Rank 0 Only) ---")
 
-                    # Set up the dataset arguments based on config
-                    if self.data_config['dataset'] == 'CPRD':
-                        dataset_args = {
-                            "data_dir": self.data_config["data_dir"],
-                            "vocab_file": self.data_config["vocab_filepath"],
-                            "labels_file": self.data_config["labels_filepath"],
-                            "medical_lookup_file": self.data_config["medical_lookup_filepath"],
-                            "lab_lookup_file": self.data_config["lab_lookup_filepath"],
-                            "region_lookup_file": self.data_config["region_lookup_filepath"],
-                            "time_lookup_file": self.data_config["time_lookup_filepath"],
-                            "format": 'text',
-                            "cutoff_months": self.data_config.get("cutoff_months", 1),
-                            "max_sequence_length": None,
-                            "data_type": self.training_config.get('input_data', 'binned'),
-                        }
-                        train_base = UnifiedEHRDataset(split="train", **dataset_args)
-                        val_base = UnifiedEHRDataset(split="tuning", **dataset_args)
-                    else:
-                        dataset_args = {
-                            "data_dir": self.data_config["data_dir"],
-                            "vocab_file": self.data_config["vocab_filepath"],
-                            "aces_label_dir": self.data_config["aces_label_dir"],
-                            "lookup_dir": self.data_config["lookup_dir"],
-                            "task": 'pretrain',
-                            "max_sequence_length": None,
-                        }
-                        train_base = MIMICUnifiedDataset(split="train", **dataset_args)
-                        val_base = MIMICUnifiedDataset(split="tuning", **dataset_args)
+                    # Get datasets that returns dict of text,label and subject id
+                    train_base = get_dataset(self.data_config['dataset'], self.data_config, "train")
+                    val_base = get_dataset(self.data_config['dataset'], self.data_config, "tuning")
 
                     # Process Training Data
-                    print("  - Extracting and packing training text...")
-                    train_texts = extract_text(train_base, self.tokenizer)
-                    train_chunks = pack_and_chunk_texts(train_texts, self.tokenizer, self.model_config['max_length'])
-                    Dataset.from_dict({"input_ids": train_chunks}).save_to_disk(train_cache_path)
-                    del train_texts, train_chunks # Clear memory immediately
+                    extract_and_pack(train_base, self.tokenizer, self.model_config['max_length'], train_cache_path)
 
                     # Process Validation Data
-                    print("  - Extracting and packing validation text...")
-                    val_texts = extract_text(val_base, self.tokenizer)
-                    val_chunks = pack_and_chunk_texts(val_texts, self.tokenizer, self.model_config['max_length'])
-                    Dataset.from_dict({"input_ids": val_chunks}).save_to_disk(val_cache_path)
-                    del val_texts, val_chunks
+                    extract_and_pack(val_base, self.tokenizer, self.model_config['max_length'], val_cache_path)
                     
-                    print(f"  ✓ Data processed and cached to {cache_dir}")
                 else:
-                    print("\n--- Found existing cached dataset, skipping processing ---")
+                    logger.info("\n--- Found existing cached dataset, skipping processing ---")
             
             except Exception as e:
-                print(f"Rank {self.local_rank} error: {e}")
+                logger.error(f"Rank {self.local_rank} error: {e}")
                 raise
 
-        # if torch.distributed.is_initialized():
-        #     print(f"Rank {self.local_rank} waiting at barrier...")
-        #     torch.distributed.barrier()
         
         max_idle = 600  # max seconds Rank 0 can be idle before giving up
         heartbeat_file = os.path.join(train_cache_path, "heartbeat_rank0.txt")
@@ -259,7 +185,7 @@ class EHRPretrainer:
                 # no heartbeat yet, could be just starting
                 idle_time = 0
 
-            print(f"Rank {self.local_rank} waiting... last heartbeat {idle_time:.1f}s ago")
+            logger.info(f"Rank {self.local_rank} waiting... last heartbeat {idle_time:.1f}s ago")
             time.sleep(5)
 
         # 4. All ranks load from the disk cache
@@ -277,30 +203,23 @@ class EHRPretrainer:
         train_dataset: Dataset, 
         val_dataset: Optional[Dataset],
         run_name: str,
-        report_to: str,
-        inference_prompt: Optional[str] = None
+        report_to: str
     ):
         """
         Create the SFTTrainer using the manually packed datasets.
         """
-        print("\n" + "=" * 80)
-        print("Setting up training...")
-        print("=" * 80)
+        logger.info("\n" + "=" * 80)
+        logger.info("Setting up training...")
+        logger.info("=" * 80)
         
         # Define the SFT configuration with all your detailed parameters
         training_args = SFTConfig(
             output_dir=self.training_config['output_dir'],
             overwrite_output_dir=self.training_config.get('overwrite_output_dir', True),
             
-            # --- CRITICAL CONFIGURATION ---
-            # packing=False: Because we ALREADY packed the data manually in prepare_datasets
-            packing=False, 
-            # max_seq_length: Still needed so the trainer knows the limit for truncation
+            packing=False, # Have manually packed the data ourselves
             max_seq_length=self.model_config['max_length'],
-            # dataset_text_field: Tells trainer which column contains our packed strings
-            # dataset_text_field="text",
-            dataset_num_proc=4, # Process 4 datasets in parallel, hard coded for memory efficiency
-            # ------------------------------
+            dataset_num_proc=4,
 
             # Training Hyperparameters
             num_train_epochs=self.training_config['epochs'],
@@ -341,16 +260,8 @@ class EHRPretrainer:
             dataloader_drop_last=True,
         )
 
-        # Create callbacks
-        callbacks = []
-        if inference_prompt:
-            callbacks.append(InferenceCallback(self.model, self.tokenizer, inference_prompt))
-
-        batch_shape_print_every = 50
-        if batch_shape_print_every is not None and batch_shape_print_every >= 0:
-            callbacks.append(BatchShapeCallback(print_every_n_steps=batch_shape_print_every))
         
-        print("\nInitializing SFTTrainer...")
+        logger.info("\nInitializing SFTTrainer...")
 
         collator = DataCollatorForLanguageModeling(tokenizer=self.tokenizer, mlm=False)
         
@@ -360,17 +271,12 @@ class EHRPretrainer:
             "train_dataset": train_dataset, # This is already packed!
             "eval_dataset": val_dataset,
             "args": training_args,
-            # "callbacks": callbacks,
             "data_collator": collator,
         }
         
         self.trainer = SFTTrainer(**trainer_kwargs)
         
-        print(f"  ✓ SFTTrainer initialized")
-        
-        # ------------------------------------------------------------------
-        # Debug / logging: print batch size information for pretraining
-        # ------------------------------------------------------------------
+        logger.info(f"  ✓ SFTTrainer initialized")
         world_size = 1
         if torch.distributed.is_available() and torch.distributed.is_initialized():
             try:
@@ -382,54 +288,20 @@ class EHRPretrainer:
         grad_acc = self.training_config.get('gradient_accumulation_steps', 1)
         effective_global_bs = per_device_bs * grad_acc * world_size
 
-        if self.local_rank == 0:
-            print("\n" + "=" * 80)
-            print("Batch size configuration for pretraining")
-            print("=" * 80)
-            print(f"  - Per-device train batch size: {per_device_bs}")
-            print(f"  - Gradient accumulation steps: {grad_acc}")
-            print(f"  - World size (number of processes): {world_size}")
-            print(f"  - Effective global batch size: {effective_global_bs}")
-            print("=" * 80 + "\n")
-
-            # Optional one-time check of actual tensor batch shape
-            print("\n" + "=" * 80)
-            print("DEBUGGING: Checking actual batch shapes from dataloader...")
-            print("=" * 80)
-            try:
-                train_dataloader = self.trainer.get_train_dataloader()
-                first_batch = next(iter(train_dataloader))
-                
-                if 'input_ids' in first_batch:
-                    shape = first_batch['input_ids'].shape
-                    print(
-                        f"  - input_ids shape: {shape} "
-                        f"(batch_size={shape[0]}, seq_len={shape[1]})"
-                    )
-                    if shape[1] == self.model_config['max_length']:
-                        print(f"  ✓ SUCCESS: Sequences are packed to length {shape[1]}")
-                    else:
-                        print(
-                            f"  ⚠️  WARNING: Sequence length {shape[1]} "
-                            f"does not match expected {self.model_config['max_length']}"
-                        )
-            except Exception as e:
-                print(f"  ⚠️  Error accessing dataloader: {e}")
-            print("=" * 80 + "\n")
     
     def train(self):
         """Run the training loop."""
-        print("\n" + "=" * 80)
-        print("Starting training...")
-        print("=" * 80 + "\n")
+        logger.info("\n" + "=" * 80)
+        logger.info("Starting training...")
+        logger.info("=" * 80 + "\n")
         
         self.trainer.train()
     
     def save_model(self):
         """Save the final trained model."""
-        print("\n" + "=" * 80)
-        print("Saving final model...")
-        print("=" * 80)
+        logger.info("\n" + "=" * 80)
+        logger.info("Saving final model...")
+        logger.info("=" * 80)
         
         final_subdir = self.training_config.get('final_subdir', "final_model")
         final_model_path = os.path.join(self.training_config['output_dir'], final_subdir)
@@ -437,14 +309,12 @@ class EHRPretrainer:
         self.trainer.save_model(final_model_path)
         self.tokenizer.save_pretrained(final_model_path)
         
-        print(f"  - Model + tokenizer saved to: {final_model_path}")
+        logger.info(f"  - Model + tokenizer saved to: {final_model_path}")
     
-    def run_full_pipeline(self, inference_prompt: Optional[str] = None):
+    def run_full_pipeline(self):
         """
         Run the complete pretraining pipeline.
         
-        Args:
-            inference_prompt: Optional prompt for inference testing during training.
         """
         # Setup WandB
         run_name, report_to = self.setup_wandb()
@@ -459,7 +329,7 @@ class EHRPretrainer:
         train_dataset, val_dataset = self.prepare_datasets()
         
         # Create trainer
-        self.create_trainer(train_dataset, val_dataset, run_name, report_to, inference_prompt)
+        self.create_trainer(train_dataset, val_dataset, run_name, report_to)
         
         # Train
         self.train()

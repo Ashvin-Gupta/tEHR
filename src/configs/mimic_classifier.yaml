@@ -44,10 +44,10 @@ training:
 
 
 data:
-  data_dir: "/home/ag619/MIMIC-IV tokensiation"
-  vocab_filepath: "/home/ag619/MIMIC-IV tokensiation/vocab.csv"
-  aces_label_dir: "/home/ag619/MIMIC_data/labels/icu_mortality"
-  lookup_dir: "/home/ag619/MIMIC_data/hosp"
+  data_dir: "/data/private/ag619/MIMIC-IV tokensiation"
+  vocab_filepath: "/data/private/ag619/MIMIC-IV tokensiation/vocab.csv"
+  aces_label_dir: "/data/private/ag619/labels/icu_mortality"
+  lookup_dir: "/data/private/ag619/hosp"
   dataset: "MIMIC"
   max_length: 12000
   handle_long_sequences: "warn"

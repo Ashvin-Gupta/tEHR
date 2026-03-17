@@ -10,24 +10,25 @@ debug:
 # IMPORTANT: Use an *Instruct* model (e.g. Qwen3-8B-Instruct) for zero-shot prompting.
 # Base models are not instruction-tuned and often produce garbled output.
 model:
-  model_name: "unsloth/Qwen3-8B-Base-unsloth-bnb-4bit"
+  model_name: "unsloth/Qwen3-0.6B-Base-unsloth-bnb-4bit"
   max_length: 16000
   load_in_4bit: true
 
 inference:
   batch_size: 4
 
-output_dir: "/data/scratch/qc25022/pancreas_MEDS/experiments/baselines/pure_llm"
-overwrite_output_dir: false
+output_dir: "/data/private/ag619/experiments/Results/MIMIC/pure_llm"
+overwrite_output_dir: true
+
+prompt:
+  filepath: "src/resources/icu_mortality_prompt.txt"
 
 data:
   cutoff_months: 6
-  data_dir: "/data/scratch/qc25022/pancreas/tokenised_data_pancreas_MEDS/cprd_upgi"
-  vocab_filepath: "/data/scratch/qc25022/pancreas/tokenised_data_pancreas_MEDS/cprd_upgi/vocab.csv"
-  labels_filepath: "/data/home/qc25022/cancer-extraction-pipeline/output/pancreas_MEDS/subject_information.csv"
-  medical_lookup_filepath: "/data/home/qc25022/TextCancEHR2/src/resources/MedicalDictTranslation2.csv"
-  lab_lookup_filepath: "/data/home/qc25022/TextCancEHR2/src/resources/LabLookUP.csv"
-  region_lookup_filepath: "/data/home/qc25022/TextCancEHR2/src/resources/RegionLookUp.csv"
-  time_lookup_filepath: "/data/home/qc25022/TextCancEHR2/src/resources/TimeLookUp.csv"
-  max_length: 16000
+  data_dir: "/data/private/ag619/MIMIC-IV tokensiation"
+  vocab_filepath: "/data/private/ag619/MIMIC-IV tokensiation/vocab.csv"
+  aces_label_dir: "/data/private/ag619/labels/icu_mortality"
+  lookup_dir: "/data/private/ag619/hosp"
+  dataset: "MIMIC"
+  task: "prediction"
 

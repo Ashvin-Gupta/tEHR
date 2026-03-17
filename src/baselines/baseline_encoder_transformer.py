@@ -14,8 +14,8 @@ from torch.utils.data import Dataset, DataLoader
 from tqdm import tqdm
 from collections import Counter
 
-from src.baselines.utils import load_baseline_config, setup_output_dir, load_datasets, get_labels_from_dataset
-from src.evaluations.baseline_metrics import compute_baseline_metrics, plot_all_curves, save_results, print_results
+from src.baselines.baseline_utils import load_baseline_config, setup_output_dir
+from src.evaluations.evaluations import compute_baseline_metrics, plot_all_curves, save_results, print_results
 from src.baselines.baseline_xgboost_bow import should_include_token
 
 

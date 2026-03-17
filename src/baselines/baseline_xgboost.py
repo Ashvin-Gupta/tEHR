@@ -6,13 +6,13 @@ Uses token type counts as features for XGBoost classification.
 import os
 import numpy as np
 import pandas as pd
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Tuple
 from tqdm import tqdm
 import xgboost as xgb
-from sklearn.model_selection import GridSearchCV
 
-from src.baselines.utils import load_baseline_config, setup_output_dir, load_datasets, get_labels_from_dataset
-from src.evaluations.baseline_metrics import compute_baseline_metrics, plot_all_curves, save_results, print_results
+from src.baselines.base_baselines import BaseBaseline
+from src.baselines.baseline_utils import setup_output_dir
+from src.evaluations.evaluations import compute_baseline_metrics, plot_all_curves, save_results, print_results
 
 
 def extract_token_features(patient_record: Dict) -> Dict[str, int]:
@@ -64,28 +64,31 @@ def extract_token_features(patient_record: Dict) -> Dict[str, int]:
     return features
 
 
-class XGBoostBaseline:
+class XGBoostBaseline(BaseBaseline):
     """
     XGBoost baseline using token type count features.
     """
     
     def __init__(self, config: Dict[str, Any]):
-        """
-        Initialize the XGBoost baseline.
-        
-        Args:
-            config: Configuration dictionary
-        """
-        self.config = config
-        self.model_config = config.get('model', {})
-        self.data_config = config['data']
-        self.training_config = config.get('training', {})
-        self.output_dir = self.training_config.get('output_dir', './outputs/xgboost')
+        super().__init__(config)
+        self.training_config = config.get("training", {})
+        # Maintain backwards compatibility with configs that store output_dir under training.*
+        self.output_dir = self.training_config.get("output_dir", self.output_dir)
         
         self.model = None
         self.feature_names = None
     
-    def extract_features_from_dataset(self, dataset) -> tuple:
+    def _load_binary_labels(self) -> Dict[int, int]:
+        """
+        Load binary labels (is_case) keyed by subject_id.
+
+        XGBoost baselines operate on a binary task. We do not use the dataset's
+        internal multi-class mapping.
+        """
+        labels_df = pd.read_csv(self.data_config["labels_filepath"])
+        return pd.Series(labels_df["is_case"].values, index=labels_df["subject_id"]).to_dict()
+
+    def extract_features_from_dataset(self, dataset, subject_to_is_case: Dict[int, int]) -> Tuple[pd.DataFrame, np.ndarray]:
         """
         Extract features and labels from dataset.
         
@@ -104,14 +107,6 @@ class XGBoostBaseline:
         print("Extracting features from dataset...")
         print("  - Accessing raw tokens directly (no translation needed for XGBoost)")
         
-        # Load labels file directly to get binary is_case labels
-        # (subject_to_label uses multi-class mapping, but we need binary is_case)
-        labels_df = pd.read_csv(self.data_config['labels_filepath'])
-        subject_to_is_case = pd.Series(
-            labels_df['is_case'].values,
-            index=labels_df['subject_id']
-        ).to_dict()
-        
         # Access patient records directly to get raw tokens without translation
         for i in tqdm(range(len(dataset.patient_records)), desc="Processing samples"):
             patient_record = dataset.patient_records[i]
@@ -125,26 +120,13 @@ class XGBoostBaseline:
             # Get raw token IDs and convert to strings using vocab
             token_ids = patient_record['tokens']
             timestamps = patient_record['timestamps']
-            
-            # Apply time cutoff if needed (same logic as dataset)
+
+            # Apply the dataset's cutoff logic (handles both cases and controls)
             if dataset.cutoff_months is not None:
-                actual_cutoff = dataset.cutoff_months
-                cancer_date = dataset.subject_to_cancer_date.get(subject_id)
-                
-                if pd.notna(cancer_date) if hasattr(pd, 'notna') else (cancer_date is not None):
-                    cutoff_date = cancer_date - pd.DateOffset(months=actual_cutoff)
-                    cutoff_timestamp = cutoff_date.timestamp()
-                    
-                    truncated_ids = []
-                    for j, ts in enumerate(timestamps):
-                        token_str = dataset.id_to_token_map.get(token_ids[j], "")
-                        is_end_token = (token_str == '<end>')
-                        if ts == 0 or (ts is not None and ts < cutoff_timestamp) or is_end_token:
-                            truncated_ids.append(token_ids[j])
-                    token_ids = truncated_ids
-            
+                token_ids = dataset._apply_time_cutoff(token_ids, timestamps, subject_id, int(label))
+
             # Convert token IDs to strings
-            token_strings = [dataset.id_to_token_map.get(tid, "") for tid in token_ids]
+            token_strings = [dataset.id_to_token.get(tid, "") for tid in token_ids]
             
             # Filter out tokens containing "cancer" (case-insensitive)
             token_strings = [token for token in token_strings if 'cancer' not in str(token).lower()]
@@ -174,37 +156,25 @@ class XGBoostBaseline:
         
         return features_df, labels_array
     
-    def create_model(self):
-        """Create XGBoost classifier."""
-        print("\n" + "=" * 80)
-        print("Creating XGBoost classifier...")
-        print("=" * 80)
-        
-        # Get hyperparameters from config
+    def load_model(self):
+        """Create XGBoost classifier (no neural model loading)."""
         params = {
-            'objective': 'binary:logistic',
-            'eval_metric': 'auc',
-            'max_depth': self.model_config.get('max_depth', 6),
-            'learning_rate': self.model_config.get('learning_rate', 0.1),
-            'n_estimators': self.model_config.get('n_estimators', 100),
-            'subsample': self.model_config.get('subsample', 0.8),
-            'colsample_bytree': self.model_config.get('colsample_bytree', 0.8),
-            'min_child_weight': self.model_config.get('min_child_weight', 1),
-            'gamma': self.model_config.get('gamma', 0),
-            'reg_alpha': self.model_config.get('reg_alpha', 0),
-            'reg_lambda': self.model_config.get('reg_lambda', 1),
-            'random_state': 42,
-            'n_jobs': self.training_config.get('n_jobs', -1),
-            'early_stopping_rounds': self.training_config.get('early_stopping_rounds', 10)
+            "objective": "binary:logistic",
+            "eval_metric": "auc",
+            "max_depth": self.model_config.get("max_depth", 6),
+            "learning_rate": self.model_config.get("learning_rate", 0.1),
+            "n_estimators": self.model_config.get("n_estimators", 100),
+            "subsample": self.model_config.get("subsample", 0.8),
+            "colsample_bytree": self.model_config.get("colsample_bytree", 0.8),
+            "min_child_weight": self.model_config.get("min_child_weight", 1),
+            "gamma": self.model_config.get("gamma", 0),
+            "reg_alpha": self.model_config.get("reg_alpha", 0),
+            "reg_lambda": self.model_config.get("reg_lambda", 1),
+            "random_state": 42,
+            "n_jobs": self.training_config.get("n_jobs", -1),
+            "early_stopping_rounds": self.training_config.get("early_stopping_rounds", 10),
         }
-        
         self.model = xgb.XGBClassifier(**params)
-        
-        print(f"  - XGBoost model created with parameters:")
-        for key, value in params.items():
-            if key not in ['n_jobs', 'early_stopping_rounds']:
-                print(f"    {key}: {value}")
-        print(f"    early_stopping_rounds: {params['early_stopping_rounds']}")
     
     def train(self, X_train, y_train, X_val, y_val):
         """Train XGBoost model."""
@@ -222,6 +192,23 @@ class XGBoostBaseline:
         )
         
         print("\nTraining completed!")
+
+    def predict(self, dataset) -> np.ndarray:
+        """
+        Predict probabilities for the positive class on a dataset.
+
+        Note: XGBoost baselines use binary `is_case` labels from the labels file,
+        not the dataset's multi-class label mapping. This method exists primarily
+        to satisfy the `BaseBaseline` interface; evaluation in this baseline is
+        driven by the explicit (X, y) extraction in `run()`.
+        """
+        if self.model is None:
+            raise RuntimeError("Model not initialized. Call load_model() and train() first.")
+
+        subject_to_is_case = self._load_binary_labels()
+        X, _y = self.extract_features_from_dataset(dataset, subject_to_is_case)
+        probs = self.model.predict_proba(X)[:, 1]
+        return probs.astype(np.float32)
     
     def predict_proba(self, X):
         """
@@ -296,24 +283,21 @@ class XGBoostBaseline:
     
     def run(self):
         """Run the complete baseline training and evaluation pipeline."""
-        # Setup
-        setup_output_dir(self.output_dir, overwrite=self.training_config.get('overwrite_output_dir', False))
-        
-        # Load datasets
-        datasets = load_datasets(
-            self.data_config,
-            splits=['train', 'tuning', 'held_out'],
-            format='tokens'
-        )
+        setup_output_dir(self.output_dir)
+
+        # Ensure we load token-form datasets for XGBoost.
+        self.data_config["format"] = "tokens"
+        datasets = self.load_datasets(splits=["train", "tuning", "held_out"])
+        subject_to_is_case = self._load_binary_labels()
         
         # Extract features
         print("\n" + "=" * 80)
         print("Extracting features from datasets...")
         print("=" * 80)
         
-        X_train, y_train = self.extract_features_from_dataset(datasets['train'])
-        X_val, y_val = self.extract_features_from_dataset(datasets['tuning'])
-        X_test, y_test = self.extract_features_from_dataset(datasets['held_out'])
+        X_train, y_train = self.extract_features_from_dataset(datasets["train"], subject_to_is_case)
+        X_val, y_val = self.extract_features_from_dataset(datasets["tuning"], subject_to_is_case)
+        X_test, y_test = self.extract_features_from_dataset(datasets["held_out"], subject_to_is_case)
         
         print(f"\nFeature extraction complete:")
         print(f"  - Train: {len(X_train)} samples, {len(X_train.columns)} features")
@@ -322,7 +306,7 @@ class XGBoostBaseline:
         print(f"\nFeature names: {list(X_train.columns)}")
         
         # Create model
-        self.create_model()
+        self.load_model()
         
         # Train
         self.train(X_train, y_train, X_val, y_val)
@@ -331,8 +315,8 @@ class XGBoostBaseline:
         self.save_model()
         
         # Evaluate
-        val_metrics = self.evaluate(X_val, y_val, 'validation')
-        test_metrics = self.evaluate(X_test, y_test, 'test')
+        val_metrics = self.evaluate(X_val, y_val, "tuning")
+        test_metrics = self.evaluate(X_test, y_test, "held_out")
         
         # Save summary (convert numpy types to native Python types for JSON serialization)
         summary = {

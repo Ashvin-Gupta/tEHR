@@ -1,8 +1,8 @@
 name: "qwen3_embedding_baseline"
 
 model:
-  model_name: "Qwen/Qwen3-Embedding-4B"
-  hidden_size: 2560
+  model_name: "Qwen/Qwen3-Embedding-0.6B"
+  hidden_size: 1024
   num_labels: 2
   head_dropout: 0.1
 
@@ -27,7 +27,7 @@ model:
 pretrain:
   enabled: true
   # Keep this small for memory; 12k–16k contexts will OOM even with LoRA.
-  max_length: 8192
+  max_length: 1024
   mlm_probability: 0.15
   # Adds a real [MASK] token if missing (removes warning and enables standard 80/10/10 masking)
   add_mask_token: true
@@ -35,10 +35,10 @@ pretrain:
 wandb:
   enabled: true
   project: "Pretrain-Qwen3-8B-Pancreas-classification"
-  run_name: "baseline-qwen3-embedding-6-month-two-stage"
+  run_name: "baseline-qwen3-embedding-0.6B-two-stage-debug"
 
 training:
-  output_dir: "/gpfs/scratch/qc25022/pancreas/experiments/Results/baselines/qwen3_embedding_6_month-two-stage"
+  output_dir: "/data/private/ag619/experiments/Results/CPRD/qwen3_embedding_0.6B_two_stage_debug"
   overwrite_output_dir: true
   epochs: 1
   batch_size: 1
@@ -58,13 +58,11 @@ training:
 
 data:
   cutoff_months: 6
-  data_dir: "/gpfs/scratch/qc25022/pancreas/tokenised_data_pancreas_MEDS_new_time/cprd_upgi"
-  vocab_filepath: "/gpfs/scratch/qc25022/pancreas/tokenised_data_pancreas_MEDS_new_time/cprd_upgi/vocab.csv"
-  labels_filepath: "/data/home/qc25022/cancer-extraction-pipeline/output/pancreas_MEDS/subject_information.csv"
-  medical_lookup_filepath: "/data/home/qc25022/TextCancEHR2/src/resources/MedicalDictTranslation2.csv"
-  lab_lookup_filepath: "/data/home/qc25022/TextCancEHR2/src/resources/LabLookUP.csv"
-  region_lookup_filepath: "/data/home/qc25022/TextCancEHR2/src/resources/RegionLookUp.csv"
-  time_lookup_filepath: "/data/home/qc25022/TextCancEHR2/src/resources/TimeLookUp.csv"
-  max_length: 12000
-  handle_long_sequences: "warn"
-  sort_by_length: true
+  data_dir: "/data/private/ag619/CPRD_tokenisation"
+  vocab_filepath: "/data/private/ag619/CPRD_tokenisation/vocab.csv"
+  labels_filepath: "/home/ag619/TextCancEHR2/src/resources/subject_information.csv"
+  medical_lookup_filepath: "/home/ag619/TextCancEHR2/src/resources/MedicalDictTranslation2.csv"
+  lab_lookup_filepath: "/home/ag619/TextCancEHR2/src/resources/LabLookUP.csv"
+  region_lookup_filepath: "/home/ag619/TextCancEHR2/src/resources/RegionLookUp.csv"
+  time_lookup_filepath: "/home/ag619/TextCancEHR2/src/resources/TimeLookUp.csv"
+  max_length: 1024

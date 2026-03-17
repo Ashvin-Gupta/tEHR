@@ -26,8 +26,9 @@ from tqdm import tqdm
 import xgboost as xgb
 from collections import Counter
 
-from src.baselines.utils import load_baseline_config, setup_output_dir, load_datasets
-from src.evaluations.baseline_metrics import compute_baseline_metrics, plot_all_curves, save_results, print_results
+from src.baselines.base_baselines import BaseBaseline
+from src.baselines.baseline_utils import setup_output_dir
+from src.evaluations.evaluations import compute_baseline_metrics, plot_all_curves, save_results, print_results
 
 
 def should_include_token(token_str: str) -> bool:
@@ -95,19 +96,19 @@ def should_include_token(token_str: str) -> bool:
     
     # Include lab test names (but not their values - values are numeric and already excluded above)
     if token_upper.startswith('LAB//'):
-        return False
+        return True
     
     # Include measurement codes
     if token_upper.startswith('MEASUREMENT//'):
-        return False
+        return True
     
     # Include demographics
     if token_upper.startswith(('AGE:', 'AGE', 'GENDER//', 'ETHNICITY//', 'REGION//')):
-        return False
+        return True
     
     # Include lifestyle
     if token_upper.startswith('LIFESTYLE//'):
-        return False
+        return True
     
     # Include special tokens
     if token_str in ['<start>', '<end>', '<unknown>', 'MEDS_BIRTH']:
@@ -168,7 +169,7 @@ def extract_bow_features(patient_record: Dict, token_to_idx: Dict[str, int]) -> 
     return feature_vector
 
 
-class XGBoostBOWBaseline:
+class XGBoostBOWBaseline(BaseBaseline):
     """
     XGBoost baseline using bag-of-words token features.
     
@@ -183,16 +184,19 @@ class XGBoostBOWBaseline:
         Args:
             config: Configuration dictionary
         """
-        self.config = config
-        self.model_config = config.get('model', {})
-        self.data_config = config['data']
-        self.training_config = config.get('training', {})
-        self.output_dir = self.training_config.get('output_dir', './outputs/xgboost_bow')
+        super().__init__(config)
+        self.training_config = config.get("training", {})
+        # Maintain backwards compatibility with configs that store output_dir under training.*
+        self.output_dir = self.training_config.get("output_dir", self.output_dir)
         
         self.model = None
         self.token_to_idx = None
         self.idx_to_token = None
         self.vocab_size = None
+
+    def _load_binary_labels(self) -> Dict[int, int]:
+        labels_df = pd.read_csv(self.data_config["labels_filepath"])
+        return pd.Series(labels_df["is_case"].values, index=labels_df["subject_id"]).to_dict()
     
     def build_vocabulary(self, datasets: Dict[str, Any]) -> Dict[str, int]:
         """
@@ -219,7 +223,7 @@ class XGBoostBOWBaseline:
                 
                 # Convert token IDs to strings and filter
                 for token_id in token_ids:
-                    token_str = str(dataset.id_to_token_map.get(token_id, ""))
+                    token_str = str(dataset.id_to_token.get(token_id, ""))
                     # Filter out tokens containing "cancer" and apply other filters
                     if token_str and 'cancer' not in token_str.lower() and should_include_token(token_str):
                         all_tokens.add(token_str)
@@ -249,7 +253,7 @@ class XGBoostBOWBaseline:
         
         return self.token_to_idx
     
-    def extract_features_from_dataset(self, dataset, token_to_idx: Dict[str, int]) -> tuple:
+    def extract_features_from_dataset(self, dataset, token_to_idx: Dict[str, int], subject_to_is_case: Dict[int, int]) -> tuple:
         """
         Extract bag-of-words features and labels from dataset.
         
@@ -265,13 +269,6 @@ class XGBoostBOWBaseline:
         
         print("Extracting bag-of-words features from dataset...")
         
-        # Load labels file directly to get binary is_case labels
-        labels_df = pd.read_csv(self.data_config['labels_filepath'])
-        subject_to_is_case = pd.Series(
-            labels_df['is_case'].values,
-            index=labels_df['subject_id']
-        ).to_dict()
-        
         # Access patient records directly to get raw tokens without translation
         for i in tqdm(range(len(dataset.patient_records)), desc="Processing samples"):
             patient_record = dataset.patient_records[i]
@@ -285,43 +282,15 @@ class XGBoostBOWBaseline:
             # Get raw token IDs and timestamps
             token_ids = patient_record['tokens']
             timestamps = patient_record['timestamps']
-            
-            # Apply time cutoff if needed (same logic as dataset)
-            cutoff_date = None
+
+            # Apply the dataset's cutoff logic (handles both cases and controls)
             if dataset.cutoff_months is not None:
-                actual_cutoff = dataset.cutoff_months
-                cancer_date = dataset.subject_to_cancer_date.get(subject_id)
-                
-                # Match UnifiedEHRDataset.__getitem__ logic
-                if pd.notna(cancer_date) if hasattr(pd, 'notna') else (cancer_date is not None):
-                    # Cases (or any subject with a cancer date): anchor on cancer_date
-                    cutoff_date = cancer_date - pd.DateOffset(months=actual_cutoff)
-                else:
-                    # Controls or subjects without cancer date: anchor on last valid timestamp
-                    valid_timestamps = [ts for ts in timestamps if ts is not None and ts > 0]
-                    if valid_timestamps:
-                        last_timestamp = max(valid_timestamps)
-                        last_date = pd.Timestamp.fromtimestamp(last_timestamp)
-                        cutoff_date = last_date - pd.DateOffset(months=actual_cutoff)
-                    else:
-                        cutoff_date = None
-                
-                if cutoff_date is not None:
-                    cutoff_timestamp = cutoff_date.timestamp()
-                    
-                    truncated_ids = []
-                    for j, ts in enumerate(timestamps):
-                        token_str = dataset.id_to_token_map.get(token_ids[j], "")
-                        # Keep: special tokens (ts == 0), tokens strictly before cutoff, OR the <end> token
-                        is_end_token = (token_str == '<end>')
-                        if ts == 0 or (ts is not None and ts < cutoff_timestamp) or is_end_token:
-                            truncated_ids.append(token_ids[j])
-                    token_ids = truncated_ids
+                token_ids = dataset._apply_time_cutoff(token_ids, timestamps, subject_id, int(label))
             
             # Convert token IDs to strings and filter out cancer tokens
             token_strings = []
             for tid in token_ids:
-                tok = dataset.id_to_token_map.get(tid, "")
+                tok = dataset.id_to_token.get(tid, "")
                 if 'cancer' in str(tok).lower():
                     continue
                 token_strings.append(tok)
@@ -351,7 +320,7 @@ class XGBoostBOWBaseline:
         
         return features_array, labels_array
     
-    def create_model(self):
+    def load_model(self):
         """Create XGBoost classifier."""
         print("\n" + "=" * 80)
         print("Creating XGBoost classifier (Bag-of-Words)...")
@@ -401,6 +370,23 @@ class XGBoostBOWBaseline:
         )
         
         print("\nTraining completed!")
+
+    def predict(self, dataset) -> np.ndarray:
+        """
+        Predict probabilities for the positive class on a dataset.
+
+        Note: XGBoost baselines use binary `is_case` labels from the labels file,
+        not the dataset's multi-class label mapping. This method exists primarily
+        to satisfy the `BaseBaseline` interface; evaluation in this baseline is
+        driven by the explicit (X, y) extraction in `run()`.
+        """
+        if self.model is None:
+            raise RuntimeError("Model not initialized. Call load_model() and train() first.")
+
+        subject_to_is_case = self._load_binary_labels()
+        X, _y = self.extract_features_from_dataset(dataset, self.token_to_idx, subject_to_is_case)
+        probs = self.model.predict_proba(X)[:, 1]
+        return probs.astype(np.float32)
     
     def predict_proba(self, X):
         """
@@ -488,15 +474,12 @@ class XGBoostBOWBaseline:
     
     def run(self):
         """Run the complete baseline training and evaluation pipeline."""
-        # Setup
-        setup_output_dir(self.output_dir, overwrite=self.training_config.get('overwrite_output_dir', False))
-        
-        # Load datasets
-        datasets = load_datasets(
-            self.data_config,
-            splits=['train', 'tuning', 'held_out'],
-            format='tokens'
-        )
+        setup_output_dir(self.output_dir)
+
+        # Ensure we load token-form datasets for XGBoost.
+        self.data_config["format"] = "tokens"
+        datasets = self.load_datasets(splits=["train", "tuning", "held_out"])
+        subject_to_is_case = self._load_binary_labels()
         
         # Build vocabulary from all splits
         self.build_vocabulary(datasets)
@@ -506,9 +489,9 @@ class XGBoostBOWBaseline:
         print("Extracting bag-of-words features from datasets...")
         print("=" * 80)
         
-        X_train, y_train = self.extract_features_from_dataset(datasets['train'], self.token_to_idx)
-        X_val, y_val = self.extract_features_from_dataset(datasets['tuning'], self.token_to_idx)
-        X_test, y_test = self.extract_features_from_dataset(datasets['held_out'], self.token_to_idx)
+        X_train, y_train = self.extract_features_from_dataset(datasets["train"], self.token_to_idx, subject_to_is_case)
+        X_val, y_val = self.extract_features_from_dataset(datasets["tuning"], self.token_to_idx, subject_to_is_case)
+        X_test, y_test = self.extract_features_from_dataset(datasets["held_out"], self.token_to_idx, subject_to_is_case)
         
         print(f"\nFeature extraction complete:")
         print(f"  - Train: {len(X_train)} samples, {X_train.shape[1]:,} features")
@@ -516,7 +499,7 @@ class XGBoostBOWBaseline:
         print(f"  - Test: {len(X_test)} samples")
         
         # Create model
-        self.create_model()
+        self.load_model()
         
         # Train
         self.train(X_train, y_train, X_val, y_val)
@@ -525,8 +508,8 @@ class XGBoostBOWBaseline:
         self.save_model()
         
         # Evaluate
-        val_metrics = self.evaluate(X_val, y_val, 'validation')
-        test_metrics = self.evaluate(X_test, y_test, 'test')
+        val_metrics = self.evaluate(X_val, y_val, "tuning")
+        test_metrics = self.evaluate(X_test, y_test, "held_out")
         
         # Save summary
         summary = {

@@ -11,11 +11,10 @@ from typing import Dict, Any, List
 from tqdm import tqdm
 from unsloth import FastLanguageModel
 
-from src.baselines.utils import load_baseline_config, setup_output_dir, load_datasets, get_labels_from_dataset
-from src.evaluations.baseline_metrics import compute_baseline_metrics, plot_all_curves, save_results, print_results
+from src.baselines.base_baselines import BaseBaseline
 
 
-class PureLLMBaseline:
+class PureLLMBaseline(BaseBaseline):
     """
     Zero-shot LLM baseline for cancer prediction.
     
@@ -29,25 +28,30 @@ class PureLLMBaseline:
         Args:
             config: Configuration dictionary
         """
-        self.config = config
-        self.model_config = config.get('model', {})
-        self.data_config = config['data']
-        self.output_dir = config.get('output_dir', './outputs/pure_llm')
+        super().__init__(config)
+        self.inference_config = config.get("inference", {})
         
         self.model = None
         self.tokenizer = None
-        # Strongly constrain the LLM to output ONLY a single 0 or 1 on its own line.
-        self.prompt_template = (
-            "You are a strict binary classifier for pancreatic cancer risk.\n"
-            "Given this patient's medical history:\n"
-            "Question: Does this patient have a high risk of pancreatic cancer within the prediction window?\n"
-            "Answer with EXACTLY one digit on a single line:\n"
-            "  - Output 1 if the patient is at high risk.\n"
-            "  - Output 0 if the patient is not at high risk.\n"
-            "Do NOT output any words, explanations, probabilities, or symbols. "
-            "Only output 0 or 1."
-            "Patient's medical history: {ehr_text}"
+
+        # Load prompt template from external file so we can easily experiment
+        # with different prompts without changing code.
+        prompt_cfg = config.get("prompt", {})
+        prompt_path = prompt_cfg.get(
+            "filepath",
+            "src/resources/pure_llm_prompt.txt",
         )
+        if not os.path.isabs(prompt_path):
+            # Resolve relative to project root (assume CWD is repo root)
+            prompt_path = os.path.join(os.getcwd(), prompt_path)
+        if not os.path.exists(prompt_path):
+            raise FileNotFoundError(f"Prompt template file not found at: {prompt_path}")
+        with open(prompt_path, "r", encoding="utf-8") as f:
+            self.prompt_template = f.read()
+
+        # Counters for probability extraction diagnostics
+        self.total_predictions = 0
+        self.failed_extractions = 0
     
     def load_model(self):
         """Load base Qwen model (no pretraining, no LoRA)."""
@@ -100,13 +104,25 @@ class PureLLMBaseline:
         Returns:
             Extracted probability (0.0 to 1.0), or 0.5 if parsing fails
         """
-        # Strategy 0: Strict binary output (0 or 1 on first non-empty line)
-        # We strongly instructed the model to output exactly "0" or "1".
+        # Strategy 0: Prefer a leading 0/1 on the first non-empty line
+        # We strongly instructed the model to output exactly "0" or "1", but
+        # in practice models often produce e.g. "0. The patient is not ..."
+        # or "Answer: 0 (not high risk)". We treat the first leading digit
+        # on the first non-empty line as the decision when it is 0 or 1.
         text_stripped = output_text.strip()
         if text_stripped:
             first_line = text_stripped.splitlines()[0].strip()
+            # Exact match "0" or "1"
             if first_line in {"0", "1"}:
                 return float(first_line)
+            # Line starts with 0/1 followed by punctuation / space / text
+            first_line_lstripped = first_line.lstrip()
+            if first_line_lstripped and first_line_lstripped[0] in {"0", "1"}:
+                return float(first_line_lstripped[0])
+            # Patterns like "Answer: 0" or "Answer 1"
+            answer_match = re.search(r'answer[:\s]+([01])\b', first_line.lower())
+            if answer_match:
+                return float(answer_match.group(1))
         
         # Strategy 1: Look for explicit probability value
         # Pattern: "0.XX" or "0.XXX" or "0.X"
@@ -153,6 +169,7 @@ class PureLLMBaseline:
                 pass
         
         # Default: return 0.5 (neutral)
+        self.failed_extractions += 1
         self._log_extraction_failure(output_text, sample_idx=sample_idx, prompt=prompt)
         return 0.5
 
@@ -204,6 +221,10 @@ class PureLLMBaseline:
         """
         self.model.eval()
         probs = []
+
+        # Reset diagnostics for this prediction run
+        self.total_predictions = 0
+        self.failed_extractions = 0
         if hasattr(self, '_debug_fail_count'):
             delattr(self, '_debug_fail_count')
         
@@ -225,7 +246,7 @@ class PureLLMBaseline:
                 with torch.cuda.amp.autocast():
                     outputs = self.model.generate(
                         **inputs,
-                        max_new_tokens=50,
+                        max_new_tokens=2,
                         temperature=0.1,
                         do_sample=False,
                         pad_token_id=self.tokenizer.eos_token_id
@@ -237,6 +258,7 @@ class PureLLMBaseline:
                     generated_ids = output_ids[len(inputs['input_ids'][j]):]
                     output_text = self.tokenizer.decode(generated_ids, skip_special_tokens=True)
                     sample_idx = i + j
+                    self.total_predictions += 1
                     prob = self.extract_probability(
                         output_text,
                         sample_idx=sample_idx if self.config.get('debug', {}).get('enabled') else None,
@@ -244,91 +266,42 @@ class PureLLMBaseline:
                     )
                     probs.append(prob)
         
+        # Print simple diagnostics for this call
+        if self.total_predictions > 0:
+            fail_rate = 100.0 * self.failed_extractions / self.total_predictions
+            print(
+                f"\nExtraction diagnostics: "
+                f"{self.failed_extractions}/{self.total_predictions} "
+                f"({fail_rate:.2f}%) outputs fell back to default probability."
+            )
+        
         return np.array(probs)
-    
-    def evaluate(self, dataset, split_name: str = "validation") -> Dict[str, float]:
-        """
-        Evaluate model on a dataset.
-        
-        Args:
-            dataset: UnifiedEHRDataset instance
-            split_name: Name of the split
-        
-        Returns:
-            Dictionary of metrics
-        """
-        print(f"\n" + "=" * 80)
-        print(f"Evaluating on {split_name} set...")
-        print("=" * 80)
-        
-        # Extract texts and labels
-        texts = []
-        labels = []
-        
-        print("Loading data...")
-        for i in tqdm(range(len(dataset)), desc="Loading samples"):
-            sample = dataset[i]
-            if sample is not None:
-                texts.append(sample['text'])
-                label = sample['label'].item() if hasattr(sample['label'], 'item') else sample['label']
-                labels.append(label)
-        
-        labels = np.array(labels)
-        print(f"  - Loaded {len(texts)} samples")
-        
-        # Generate predictions
-        batch_size = self.config.get('inference', {}).get('batch_size', 4)
-        probs = self.predict_batch(texts, batch_size=batch_size)
-        
-        # Compute metrics
-        metrics = compute_baseline_metrics(labels, probs)
-        
-        # Print results
-        print_results(metrics, split_name)
-        
-        # Save all plots (ROC, PR, and Calibration)
-        plot_dir = os.path.join(self.output_dir, 'plots', split_name)
-        plot_all_curves(labels, probs, plot_dir)
-        
-        # Save predictions
-        results = {
-            'metrics': metrics,
-            'labels': labels.tolist(),
-            'probs': probs.tolist()
-        }
-        save_results(results, os.path.join(self.output_dir, 'results'), f'{split_name}_results.json')
-        
-        return metrics
-    
-    def run(self):
-        """Run the complete baseline evaluation pipeline."""
-        # Setup
-        setup_output_dir(self.output_dir, overwrite=self.config.get('overwrite_output_dir', False))
-        
-        # Load model
-        self.load_model()
-        
-        # Load datasets
-        datasets = load_datasets(
-            self.data_config,
-            splits=['tuning', 'held_out'],
-            format='text'
-        )
-        
-        # Evaluate on validation and test sets
-        val_metrics = self.evaluate(datasets['tuning'], 'validation')
-        test_metrics = self.evaluate(datasets['held_out'], 'test')
-        
-        # Save summary
-        summary = {
-            'validation': val_metrics,
-            'test': test_metrics
-        }
-        save_results(summary, self.output_dir, 'summary.json')
-        
-        print("\n" + "=" * 80)
-        print("Pure LLM Baseline Complete!")
-        print("=" * 80)
-        
-        return val_metrics, test_metrics
 
+    def predict(self, dataset) -> np.ndarray:
+        """
+        Run zero-shot prompting over the dataset and return probabilities
+        for the positive class.
+
+        Note: `BaseBaseline.evaluate_split()` builds labels by iterating the
+        dataset and skipping `None` items. We mirror that ordering here so
+        labels and probabilities align.
+        """
+        if self.model is None or self.tokenizer is None:
+            raise RuntimeError("Model not loaded. Did you call load_model()?")
+
+        texts: List[str] = []
+        for i in range(len(dataset)):
+            item = dataset[i]
+            if item is None:
+                continue
+            text = item.get("text")
+            if text is None:
+                continue
+            texts.append(text)
+
+        if not texts:
+            return np.array([], dtype=np.float32)
+
+        batch_size = int(self.inference_config.get("batch_size", 4))
+        probs = self.predict_batch(texts, batch_size=batch_size)
+        return probs.astype(np.float32)

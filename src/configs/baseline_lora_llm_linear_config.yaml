@@ -1,12 +1,12 @@
 name: "lora_llm_linear_baseline"
 
 model:
-  model_name: "unsloth/mistral-7b-v0.3-bnb-4bit"
+  model_name: "unsloth/Qwen3-0.6B-Base-unsloth-bnb-4bit"
   # For evaluation: load base from this path. Use model_name so we get base+LoRA structure
   # (base loads from HF, then LoRA is applied). Classifier weights loaded from model_checkpoint.
-  pretrained_checkpoint: "unsloth/mistral-7b-v0.3-bnb-4bit"
-  max_length: 12000
-  hidden_size: 4096
+  pretrained_checkpoint: "/data/private/ag619/experiments/Results/Pretrain-Qwen3-0.6B-Pancreas-debug/final_model"
+  max_length: 1024
+  hidden_size: 1024
   num_labels: 2
   head_type: "linear"
   head_hidden_size: 512
@@ -23,10 +23,10 @@ lora:
 wandb:
   enabled: true
   project: "Pretrain-Qwen3-8B-Pancreas-classification"
-  run_name: "baseline-lora-llm-linear-mistral-7B-1month"
+  run_name: "baseline-lora-llm-linear-mistral-7B-1month-debug"
 
 training:
-  output_dir: "/gpfs/scratch/qc25022/pancreas/experiments/Results/baselines/lora_llm_linear_mistral_7B_1month"
+  output_dir: "/data/private/ag619/experiments/Results/CPRD/lora_llm_linear"
   overwrite_output_dir: true
   epochs: 1
   batch_size: 2
@@ -48,14 +48,12 @@ training:
 
 data:
   cutoff_months: 1
-  data_dir: "/gpfs/scratch/qc25022/pancreas/tokenised_data_pancreas_MEDS_new_time/cprd_upgi"
-  vocab_filepath: "/gpfs/scratch/qc25022/pancreas/tokenised_data_pancreas_MEDS_new_time/cprd_upgi/vocab.csv"
-  labels_filepath: "/data/home/qc25022/cancer-extraction-pipeline/output/pancreas_MEDS/subject_information.csv"
-  medical_lookup_filepath: "/data/home/qc25022/TextCancEHR2/src/resources/MedicalDictTranslation2.csv"
-  lab_lookup_filepath: "/data/home/qc25022/TextCancEHR2/src/resources/LabLookUP.csv"
-  region_lookup_filepath: "/data/home/qc25022/TextCancEHR2/src/resources/RegionLookUp.csv"
-  time_lookup_filepath: "/data/home/qc25022/TextCancEHR2/src/resources/TimeLookUp.csv"
-  max_length: 12000
-  handle_long_sequences: "warn"
-  sort_by_length: true
+  data_dir: "/data/private/ag619/CPRD_tokenisation"
+  vocab_filepath: "/data/private/ag619/CPRD_tokenisation/vocab.csv"
+  labels_filepath: "/home/ag619/TextCancEHR2/src/resources/subject_information.csv"
+  medical_lookup_filepath: "/home/ag619/TextCancEHR2/src/resources/MedicalDictTranslation2.csv"
+  lab_lookup_filepath: "/home/ag619/TextCancEHR2/src/resources/LabLookUP.csv"
+  region_lookup_filepath: "/home/ag619/TextCancEHR2/src/resources/RegionLookUp.csv"
+  time_lookup_filepath: "/home/ag619/TextCancEHR2/src/resources/TimeLookUp.csv"  
+  dataset: "CPRD" 
 

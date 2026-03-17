@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH -p andrena
 #SBATCH -A pilot_andrena
-#SBATCH --gres=gpu:2                   # Request 1 GPU of any type
+#SBATCH --gres=gpu:1                   # Request 1 GPU of any type
 #SBATCH --cpus-per-gpu=12               # 12 CPU cores 
 #SBATCH -t 240:0:0                        # 1 hour runtime
 #SBATCH --mem-per-cpu=7500M             # Total memory 90G (approx 12 * 7500M)
@@ -32,14 +32,15 @@ JOB_PORT_SEED="${SLURM_JOB_ID:-0}${SLURM_ARRAY_TASK_ID:-0}"
 export MASTER_ADDR="${MASTER_ADDR:-127.0.0.1}"
 export MASTER_PORT="${MASTER_PORT:-$((20000 + (10#${JOB_PORT_SEED} % 20000)))}"
 
-# python -m src.pipelines.finetune_llm_classifier --config_filepath src/configs/classification_config.yaml
-torchrun \
-  --nnodes=1 \
-  --nproc_per_node=2 \
-  --master_addr="${MASTER_ADDR}" \
-  --master_port="${MASTER_PORT}" \
-  src/pipelines/finetune_llm_classifier.py \
+python -m src.pipelines.finetune_llm_classifier \
   --config_filepath src/configs/classification_config2.yaml
+# torchrun \
+#   --nnodes=1 \
+#   --nproc_per_node=2 \
+#   --master_addr="${MASTER_ADDR}" \
+#   --master_port="${MASTER_PORT}" \
+#   src/pipelines/finetune_llm_classifier.py \
+#   --config_filepath src/configs/classification_config2.yaml
 
 echo "Pipeline finished."
 deactivate
