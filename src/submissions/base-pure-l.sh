@@ -26,7 +26,7 @@ cd "${BASE_DIR}"
 echo "Starting experiment from directory: $(pwd)"
 export PYTHONPATH="${BASE_DIR}:${PYTHONPATH}"
 
-python -m src.pipelines.run_baseline --baseline pure_llm --config_filepath /home/ag619/TextCancEHR2/src/configs/baseline_pure_llm_config.yaml
+python -m src.pipelines.run_baseline --baseline pure_llm --config_filepath /data/home/src/qc25022/TextCancEHR2/src/configs/baseline_pure_llm_config.yaml
 
 echo "Pipeline finished."
 deactivate
