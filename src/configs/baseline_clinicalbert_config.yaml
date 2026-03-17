@@ -7,14 +7,14 @@ model:
 wandb:
   enabled: true
   project: "Pretrain-Qwen3-8B-Pancreas-classification"
-  run_name: "baseline-clinicalbert-1months"
+  run_name: "baseline-clinicalbert-1months-debug"
 
 training:
-  output_dir: "/gpfs/scratch/qc25022/pancreas/experiments/Results/baselines/clinicalbert-1months"
+  output_dir: "/data/private/ag619/experiments/Results/CPRD/clinicalbert"
   overwrite_output_dir: true
-  epochs: 3
-  batch_size: 16
-  eval_batch_size: 16
+  epochs: 1
+  batch_size: 1
+  eval_batch_size: 1
   learning_rate: 2e-5
   weight_decay: 0.01
   warmup_steps: 100
@@ -29,15 +29,13 @@ training:
 
 data:
   cutoff_months: 1
-  data_dir: "/gpfs/scratch/qc25022/pancreas/tokenised_data_pancreas_MEDS_new_time/cprd_upgi"
-  vocab_filepath: "/gpfs/scratch/qc25022/pancreas/tokenised_data_pancreas_MEDS_new_time/cprd_upgi/vocab.csv"
-  labels_filepath: "/data/home/qc25022/cancer-extraction-pipeline/output/pancreas_MEDS/subject_information.csv"
-  medical_lookup_filepath: "/data/home/qc25022/TextCancEHR2/src/resources/MedicalDictTranslation2.csv"
-  lab_lookup_filepath: "/data/home/qc25022/TextCancEHR2/src/resources/LabLookUP.csv"
-  region_lookup_filepath: "/data/home/qc25022/TextCancEHR2/src/resources/RegionLookUp.csv"
-  time_lookup_filepath: "/data/home/qc25022/TextCancEHR2/src/resources/TimeLookUp.csv"
+  data_dir: "/data/private/ag619/CPRD_tokenisation"
+  vocab_filepath: "/data/private/ag619/CPRD_tokenisation/vocab.csv"
+  labels_filepath: "/home/ag619/TextCancEHR2/src/resources/subject_information.csv"
+  medical_lookup_filepath: "/home/ag619/TextCancEHR2/src/resources/MedicalDictTranslation2.csv"
+  lab_lookup_filepath: "/home/ag619/TextCancEHR2/src/resources/LabLookUP.csv"
+  region_lookup_filepath: "/home/ag619/TextCancEHR2/src/resources/RegionLookUp.csv"
+  time_lookup_filepath: "/home/ag619/TextCancEHR2/src/resources/TimeLookUp.csv"  
   max_length: 512
-  handle_long_sequences: "truncate"
-  sort_by_length: true
-  data_type: "binned"
+  dataset: "CPRD"
 

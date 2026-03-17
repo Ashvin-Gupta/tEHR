@@ -2,8 +2,8 @@ name: "llm_classifier"
 # /data/scratch/qc25022/pancreas/experiments/Pretrain-Qwen3-8B-Pancreas-new-time/checkpoint-11000
 # /data/scratch/qc25022/pancreas/experiments/Pretrain-Mistral-7B-Pancreas-new-time/checkpoint-6000
 model:
-  pretrained_checkpoint: "/gpfs/scratch/qc25022/pancreas/experiments/Pretrain-Qwen3-0.6B-Pancreas-new-time/final_model"
-  max_length: 12000
+  pretrained_checkpoint: "/data/private/ag619/experiments/Results/Pretrain-Qwen3-0.6B-Pancreas-debug/final_model"
+  max_length: 1024
   hidden_size: 1024
   num_labels: 2
   freeze_llm: true            # Keep base model frozen, only LoRA + classifier train
@@ -17,18 +17,19 @@ model:
 wandb:
   enabled: true
   project: "Pretrain-Qwen3-8B-Pancreas-classification"
-  run_name: "lora-6-month-logistic-refactored-new-time-qwen3-0.6B"
+  run_name: "lora-6-month-logistic-refactored-new-time-qwen3-0.6B-debug"
 
 training:
-  output_dir: "/gpfs/scratch/qc25022/pancreas/experiments/Results/lora-6-month-logistic-refactored-new-time-qwen3-0.6B"
+  output_dir: "/data/private/ag619/experiments/Results/CPRD/classifer"
+  overwrite_output_dir: true
   overwrite_output_dir: true
   epochs: 1
-  batch_size: 8
-  eval_batch_size: 8
+  batch_size: 1
+  eval_batch_size: 1
   learning_rate: 1e-6
   weight_decay: 0.01
   warmup_steps: 100
-  gradient_accumulation_steps: 2
+  gradient_accumulation_steps: 1
   fp16: false
   bf16: true
   logging_steps: 50
@@ -45,13 +46,12 @@ training:
 
 data:
   cutoff_months: 6  # Remove last 5 month before diagnosis for cancer patients
-  data_dir: "/gpfs/scratch/qc25022/pancreas/tokenised_data_pancreas_MEDS_new_time/cprd_upgi"
-  vocab_filepath: "/gpfs/scratch/qc25022/pancreas/tokenised_data_pancreas_MEDS_new_time/cprd_upgi/vocab.csv"
-  labels_filepath: "/data/home/qc25022/cancer-extraction-pipeline/output/pancreas_MEDS/subject_information.csv"
-  medical_lookup_filepath: "/data/home/qc25022/TextCancEHR2/src/resources/MedicalDictTranslation2.csv"
-  lab_lookup_filepath: "/data/home/qc25022/TextCancEHR2/src/resources/LabLookUP.csv"
-  region_lookup_filepath: "/data/home/qc25022/TextCancEHR2/src/resources/RegionLookUp.csv"
-  time_lookup_filepath: "/data/home/qc25022/TextCancEHR2/src/resources/TimeLookUp.csv"
-  max_length: 12000           # Used by collator for truncation
-  handle_long_sequences: "warn"
+  data_dir: "/data/private/ag619/CPRD_tokenisation"
+  vocab_filepath: "/data/private/ag619/CPRD_tokenisation/vocab.csv"
+  labels_filepath: "/home/ag619/TextCancEHR2/src/resources/subject_information.csv"
+  medical_lookup_filepath: "/home/ag619/TextCancEHR2/src/resources/MedicalDictTranslation2.csv"
+  lab_lookup_filepath: "/home/ag619/TextCancEHR2/src/resources/LabLookUP.csv"
+  region_lookup_filepath: "/home/ag619/TextCancEHR2/src/resources/RegionLookUp.csv"
+  time_lookup_filepath: "/home/ag619/TextCancEHR2/src/resources/TimeLookUp.csv"  
   sort_by_length: true
+  dataset: "CPRD"

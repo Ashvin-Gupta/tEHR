@@ -10,7 +10,7 @@ model:
   num_labels: 2
 
 training:
-  output_dir: "/gpfs/scratch/qc25022/pancreas/experiments/Results/baselines/encoder_transformer-1months"
+  output_dir: "/data/private/ag619/experiments/Results/CPRD/encoder_transformer"
   overwrite_output_dir: true
   epochs: 10
   batch_size: 32
@@ -29,12 +29,12 @@ pretrain:
 
 data:
   cutoff_months: 1
-  data_dir: "/gpfs/scratch/qc25022/pancreas/tokenised_data_pancreas_MEDS/cprd_upgi" # this might not work as used the old tokenisation
-  vocab_filepath: "/gpfs/scratch/qc25022/pancreas/tokenised_data_pancreas_MEDS/cprd_upgi/vocab.csv"
-  labels_filepath: "/data/home/qc25022/cancer-extraction-pipeline/output/pancreas_MEDS/subject_information.csv"
-  medical_lookup_filepath: "/data/home/qc25022/TextCancEHR2/src/resources/MedicalDictTranslation2.csv"
-  lab_lookup_filepath: "/data/home/qc25022/TextCancEHR2/src/resources/LabLookUP.csv"
-  region_lookup_filepath: "/data/home/qc25022/TextCancEHR2/src/resources/RegionLookUp.csv"
-  time_lookup_filepath: "/data/home/qc25022/TextCancEHR2/src/resources/TimeLookUp.csv"
-  max_length: 512
+  data_dir: "/data/private/ag619/CPRD_tokenisation"
+  vocab_filepath: "/data/private/ag619/CPRD_tokenisation/vocab.csv"
+  labels_filepath: "/home/ag619/TextCancEHR2/src/resources/subject_information.csv"
+  medical_lookup_filepath: "/home/ag619/TextCancEHR2/src/resources/MedicalDictTranslation2.csv"
+  lab_lookup_filepath: "/home/ag619/TextCancEHR2/src/resources/LabLookUP.csv"
+  region_lookup_filepath: "/home/ag619/TextCancEHR2/src/resources/RegionLookUp.csv"
+  time_lookup_filepath: "/home/ag619/TextCancEHR2/src/resources/TimeLookUp.csv"  
+  dataset: "CPRD"
 
