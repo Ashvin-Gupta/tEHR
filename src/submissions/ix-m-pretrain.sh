@@ -40,7 +40,7 @@ echo "Using MASTER_PORT=$MASTER_PORT for torchrun"
 
 torchrun --nproc_per_node=2 src/pipelines/resume_pretrain.py \
   --config_filepath src/configs/mimic_resume_pretrain_config.yaml \
-  --checkpoint_path /home/ag619/experiments/Results/Pretrain-Mistral-7B-Mimic/checkpoint-2000
+  --checkpoint_path /home/ag619/experiments/Results/Pretrain-Mistral-7B-Mimic/checkpoint-14000
 
 
 

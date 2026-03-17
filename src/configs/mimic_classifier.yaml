@@ -2,7 +2,7 @@ name: "llm_classifier"
 # /data/scratch/qc25022/pancreas/experiments/Pretrain-Qwen3-8B-Pancreas-new-time/checkpoint-11000
 # /data/scratch/qc25022/pancreas/experiments/Pretrain-Mistral-7B-Pancreas-new-time/checkpoint-6000
 model:
-  pretrained_checkpoint: "/home/ag619/Pretrain-Mistral-7B-Mimic/checkpoint-4000"
+  pretrained_checkpoint: "/home/ag619/experiments/Results/Pretrain-Mistral-4000/checkpoint-4000"
   max_length: 12000
   hidden_size: 4096
   num_labels: 2
@@ -17,10 +17,10 @@ model:
 wandb:
   enabled: true
   project: "MIMIC-IV-classification"
-  run_name: "mimic-ICU-mortality-classification-mistral"
+  run_name: "mimic-ICU-mortality-classification-mistral-4000"
 
 training:
-  output_dir: "/home/ag619/experiments/Results/mimic-ICU-mortality-classification"
+  output_dir: "/home/ag619/experiments/Results/mimic-ICU-mortality-classification-mistral-4000"
   overwrite_output_dir: false
   epochs: 1
   batch_size: 8
