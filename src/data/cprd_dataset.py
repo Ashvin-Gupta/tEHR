@@ -60,7 +60,7 @@ class CPRDDataset(BaseDataset):
         )
 
         # Patient records
-        limit = 1 if split in ['tuning', 'held_out', 'train'] else None
+        limit = 1 if split in ['tuning'] else None
         self.patient_records = self._load_data(data_dir, split, limit=limit)
 
     def _load_labels(self, labels_file:str):
