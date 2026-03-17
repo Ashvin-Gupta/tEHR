@@ -6,9 +6,12 @@ This script orchestrates the entire pretraining workflow using the refactored mo
 import argparse
 import yaml
 import pprint
+from typing import Optional, Dict, Any, List
+from src.training.training_utils import seed_all
+from src.training.pretrainer_trainer import EHRPretrainer
 
-from src.training.utils import seed_all, print_sample_translations_mimic, print_sample_translations
-from src.training.trainer import EHRPretrainer
+import logging
+logger = logging.getLogger(__name__)
 
 
 # Default inference prompt for testing during training
@@ -47,16 +50,10 @@ def main(config_path: str):
     print('Loaded configuration:')
     pprint.pprint(config)
     print("=" * 80)
-    
-    # Print sample translations before training
-    if config['data']['dataset'] == 'CPRD':
-        print_sample_translations(config, num_samples=3)
-    else:
-        print_sample_translations_mimic(config, num_samples=3)
 
     # Create pretrainer and run the full pipeline
     pretrainer = EHRPretrainer(config)
-    pretrainer.run_full_pipeline(inference_prompt=DEFAULT_INFERENCE_PROMPT)
+    pretrainer.run_full_pipeline()
     
     print("\n" + "=" * 80)
     print("Training completed successfully!")

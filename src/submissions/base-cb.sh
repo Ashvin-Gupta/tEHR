@@ -23,7 +23,7 @@ cd "${BASE_DIR}"
 echo "Starting experiment from directory: $(pwd)"
 export PYTHONPATH="${BASE_DIR}:${PYTHONPATH}"
 
-python -m src.pipelines.run_baseline_clinicalbert --config_filepath src/configs/baseline_clinicalbert_config.yaml 
+python -m src.pipelines.run_baseline --baseline clinicalbert --config_filepath src/configs/baseline_clinicalbert_config.yaml
 
 echo "Pipeline finished."
 deactivate

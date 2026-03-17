@@ -11,11 +11,10 @@ from typing import Dict, Any, List
 from tqdm import tqdm
 from unsloth import FastLanguageModel
 
-from src.baselines.utils import load_baseline_config, setup_output_dir, load_datasets, get_labels_from_dataset
-from src.evaluations.baseline_metrics import compute_baseline_metrics, plot_all_curves, save_results, print_results
+from src.baselines.base_baselines import BaseBaseline
 
 
-class PureLLMBaseline:
+class PureLLMBaseline(BaseBaseline):
     """
     Zero-shot LLM baseline for cancer prediction.
     
@@ -29,10 +28,8 @@ class PureLLMBaseline:
         Args:
             config: Configuration dictionary
         """
-        self.config = config
-        self.model_config = config.get('model', {})
-        self.data_config = config['data']
-        self.output_dir = config.get('output_dir', './outputs/pure_llm')
+        super().__init__(config)
+        self.inference_config = config.get("inference", {})
         
         self.model = None
         self.tokenizer = None
@@ -279,97 +276,32 @@ class PureLLMBaseline:
             )
         
         return np.array(probs)
-    
-    def evaluate(self, dataset, split_name: str = "validation") -> Dict[str, float]:
+
+    def predict(self, dataset) -> np.ndarray:
         """
-        Evaluate model on a dataset.
-        
-        Args:
-            dataset: UnifiedEHRDataset instance
-            split_name: Name of the split
-        
-        Returns:
-            Dictionary of metrics
+        Run zero-shot prompting over the dataset and return probabilities
+        for the positive class.
+
+        Note: `BaseBaseline.evaluate_split()` builds labels by iterating the
+        dataset and skipping `None` items. We mirror that ordering here so
+        labels and probabilities align.
         """
-        print(f"\n" + "=" * 80)
-        print(f"Evaluating on {split_name} set...")
-        print("=" * 80)
-        
-        # Extract texts and labels
-        texts = []
-        labels = []
-        
-        print("Loading data...")
-        for i in tqdm(range(len(dataset)), desc="Loading samples"):
-            sample = dataset[i]
-            if sample is not None:
-                texts.append(sample['text'])
-                label = sample['label'].item() if hasattr(sample['label'], 'item') else sample['label']
-                labels.append(label)
-        
-        labels = np.array(labels)
-        print(f"  - Loaded {len(texts)} samples")
-        
-        # Generate predictions
-        batch_size = self.config.get('inference', {}).get('batch_size', 4)
+        if self.model is None or self.tokenizer is None:
+            raise RuntimeError("Model not loaded. Did you call load_model()?")
+
+        texts: List[str] = []
+        for i in range(len(dataset)):
+            item = dataset[i]
+            if item is None:
+                continue
+            text = item.get("text")
+            if text is None:
+                continue
+            texts.append(text)
+
+        if not texts:
+            return np.array([], dtype=np.float32)
+
+        batch_size = int(self.inference_config.get("batch_size", 4))
         probs = self.predict_batch(texts, batch_size=batch_size)
-
-        # Convert multi-class labels to binary (0 = negative, non-zero = positive)
-        binary_labels = (labels != 0).astype(int)
-        
-        # Ensure arrays are 1D and properly shaped
-        binary_labels = np.asarray(binary_labels).flatten()
-        probs = np.asarray(probs).flatten()
-
-        # Compute metrics using binary labels
-        metrics = compute_baseline_metrics(binary_labels, probs)
-        
-        # Print results
-        print_results(metrics, split_name)
-        
-        # Save all plots (ROC, PR, and Calibration) using binary labels
-        plot_dir = os.path.join(self.output_dir, 'plots', split_name)
-        plot_all_curves(binary_labels, probs, plot_dir)
-        
-        # Save predictions
-        results = {
-            'metrics': metrics,
-            'labels': labels.tolist(),
-            'probs': probs.tolist()
-        }
-        save_results(results, os.path.join(self.output_dir, 'results'), f'{split_name}_results.json')
-        
-        return metrics
-    
-    def run(self):
-        """Run the complete baseline evaluation pipeline."""
-        # Setup
-        setup_output_dir(self.output_dir, overwrite=self.config.get('overwrite_output_dir', False))
-        
-        # Load model
-        self.load_model()
-        
-        # Load datasets
-        datasets = load_datasets(
-            self.data_config,
-            splits=['tuning', 'held_out'],
-            format='text'
-        )
-        
-        # Evaluate on validation and test sets
-        val_metrics = self.evaluate(datasets['tuning'], 'validation')
-        test_metrics = self.evaluate(datasets['held_out'], 'test')
-        
-        # Save summary
-        summary = {
-            'validation': val_metrics,
-            'test': test_metrics
-        }
-        save_results(summary, self.output_dir, 'summary.json')
-        
-        print("\n" + "=" * 80)
-        print("Pure LLM Baseline Complete!")
-        print("=" * 80)
-        
-        return val_metrics, test_metrics
-
+        return probs.astype(np.float32)

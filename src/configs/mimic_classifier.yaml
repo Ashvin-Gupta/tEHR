@@ -2,7 +2,7 @@ name: "llm_classifier"
 # /data/scratch/qc25022/pancreas/experiments/Pretrain-Qwen3-8B-Pancreas-new-time/checkpoint-11000
 # /data/scratch/qc25022/pancreas/experiments/Pretrain-Mistral-7B-Pancreas-new-time/checkpoint-6000
 model:
-  pretrained_checkpoint: "/home/ag619/Pretrain-Mistral-7B-Mimic/checkpoint-4000"
+  pretrained_checkpoint: "/data/private/ag619/experiments/Pretrain-Mistral-7B-Mimic/checkpoint-4000"
   max_length: 12000
   hidden_size: 4096
   num_labels: 2
@@ -20,7 +20,7 @@ wandb:
   run_name: "mimic-ICU-mortality-classification-mistral"
 
 training:
-  output_dir: "/home/ag619/experiments/Results/mimic-ICU-mortality-classification"
+  output_dir: "/data/private/ag619/experiments/Results/mimic-ICU-mortality-classification-debug"
   overwrite_output_dir: false
   epochs: 1
   batch_size: 8
@@ -44,10 +44,10 @@ training:
 
 
 data:
-  data_dir: "/home/ag619/MIMIC-IV tokensiation"
-  vocab_filepath: "/home/ag619/MIMIC-IV tokensiation/vocab.csv"
-  aces_label_dir: "/home/ag619/MIMIC_data/labels/icu_mortality"
-  lookup_dir: "/home/ag619/MIMIC_data/hosp"
+  data_dir: "/data/private/ag619/MIMIC-IV tokensiation"
+  vocab_filepath: "/data/private/ag619/MIMIC-IV tokensiation/vocab.csv"
+  aces_label_dir: "/data/private/ag619/labels/icu_mortality"
+  lookup_dir: "/data/private/ag619/hosp"
   dataset: "MIMIC"
   max_length: 12000
   handle_long_sequences: "warn"

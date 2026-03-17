@@ -11,8 +11,10 @@ import pprint
 import random
 import yaml
 
-from src.training.utils import seed_all
+from src.training.training_utils import seed_all
 from src.training.classification_trainer import EHRClassificationTrainer
+import logging
+logger = logging.getLogger(__name__)
 
 
 def main(config_path: str, seed: int | None = None, checkpoint_path: str | None = None):
@@ -25,23 +27,23 @@ def main(config_path: str, seed: int | None = None, checkpoint_path: str | None 
         checkpoint_path: Optional path to a Trainer checkpoint directory to resume from.
     """
     # Load configuration
-    print("=" * 80)
-    print("LLM Binary Classification Fine-tuning")
-    print("=" * 80)
-    print(f"\nLoading configuration from: {config_path}")
+    logger.info("=" * 80)
+    logger.info("LLM Binary Classification Fine-tuning")
+    logger.info("=" * 80)
+    logger.info(f"\nLoading configuration from: {config_path}")
     
     with open(config_path, "r") as f:
         config = yaml.safe_load(f)
     
-    print('Loaded configuration:')
+    logger.info('Loaded configuration:')
     pprint.pprint(config)
-    print("=" * 80)
+    logger.info("=" * 80)
 
     # Draw a fresh random seed for this run and apply it everywhere
     if seed is None:
         seed = random.SystemRandom().randint(0, 2**32 - 1)
     config.setdefault("training", {})["seed"] = seed
-    print(f"\nUsing random seed for this run: {seed}")
+    logger.info(f"\nUsing random seed for this run: {seed}")
     seed_all(seed)
 
     # Make seed-specific output directory so plots (and any artifacts) are separated
@@ -51,19 +53,19 @@ def main(config_path: str, seed: int | None = None, checkpoint_path: str | None 
         config["training"]["output_dir"] = seed_output_dir
         # Length-sorted data cache is shared across all seeds (same data/tokenizer)
         config["training"]["data_cache_dir"] = base_output_dir
-        print(f"Outputs (including plots) will be written to: {seed_output_dir}")
-        print(f"Data cache (length-sorted indices) shared at: {base_output_dir}")
+        logger.info(f"Outputs (including plots) will be written to: {seed_output_dir}")
+        logger.info(f"Data cache (length-sorted indices) shared at: {base_output_dir}")
 
     # Create classification trainer and run the full pipeline
     trainer = EHRClassificationTrainer(config)
     eval_results, test_results = trainer.run_full_pipeline(resume_from_checkpoint=checkpoint_path)
     
-    print("\n" + "=" * 80)
-    print("Training completed successfully!")
-    print("=" * 80)
+    logger.info("\n" + "=" * 80)
+    logger.info("Training completed successfully!")
+    logger.info("=" * 80)
 
     if config["training"].get("save_model", True):
-        print(f"\nFinal model saved to: {config['training']['output_dir']}/final_model")
+        logger.info(f"\nFinal model saved to: {config['training']['output_dir']}/final_model")
     
     return eval_results, test_results
 

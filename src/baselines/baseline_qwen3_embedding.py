@@ -21,18 +21,18 @@ from peft import LoraConfig, get_peft_model, TaskType
 import wandb
 from datasets import Dataset
 
-from src.baselines.utils import load_baseline_config, setup_output_dir, load_datasets
+from src.baselines.base_baselines import BaseBaseline
+from src.baselines.baseline_utils import setup_output_dir
 from src.models.qwen3_embedding_classifier import Qwen3EmbeddingClassifier
 from src.models.qwen3_embedding_mlm import Qwen3EmbeddingMLMHead
 from src.data.classification_collator import ClassificationCollator
 from src.data.qwen3_mlm_collator import Qwen3MLMCollator
 from src.training.metrics import compute_classification_metrics
-from src.evaluations.baseline_metrics import compute_baseline_metrics, plot_all_curves, save_results, print_results
-from src.data.preprocessing import extract_text
-from src.training.trainer import pack_and_chunk_texts
+from src.evaluations.evaluations import save_results
+from src.training.training_utils import extract_text, pack_and_chunk_texts
 
 
-class Qwen3EmbeddingBaseline:
+class Qwen3EmbeddingBaseline(BaseBaseline):
     """
     Qwen3-Embedding baseline for EHR classification.
     
@@ -40,13 +40,12 @@ class Qwen3EmbeddingBaseline:
     """
 
     def __init__(self, config: Dict[str, Any]):
-        self.config = config
-        self.model_config = config.get('model', {})
-        self.data_config = config['data']
+        super().__init__(config)
         self.training_config = config.get('training', {})
         self.wandb_config = config.get('wandb', {})
         self.pretrain_config = config.get('pretrain', {})  # optional stage-1 config
-        self.output_dir = self.training_config.get('output_dir', './outputs/qwen3_embedding')
+        # Backwards compatible: some configs store output_dir under training.*
+        self.output_dir = self.training_config.get('output_dir', self.output_dir)
 
         # Shared components
         self.base_model = None
@@ -71,6 +70,16 @@ class Qwen3EmbeddingBaseline:
             return run_name
         return "qwen3-embedding-run"
 
+    def load_model(self):
+        """
+        Required by BaseBaseline.
+
+        For this baseline, "load_model" means preparing the base embedding model
+        (and tokenizer). The classification head is built later in `run()` after
+        optional stage-1 MLM pretraining.
+        """
+        self.load_base_model()
+
     def load_base_model(self):
         """
         Load Qwen3-Embedding base model and tokenizer, optionally with LoRA.
@@ -88,7 +97,7 @@ class Qwen3EmbeddingBaseline:
         hidden_size = self.model_config.get('hidden_size', 4096)
         num_labels = self.model_config.get('num_labels', 2)
         head_dropout = self.model_config.get('head_dropout', 0.1)
-        max_length = self.data_config.get('max_length', 8192)
+        max_length = self.model_config.get('max_length', 8192)
 
         print(f"  - Model: {model_name}")
         print(f"  - Max length: {max_length}")
@@ -480,18 +489,14 @@ class Qwen3EmbeddingBaseline:
 
     def run(self):
         """Run the complete baseline pipeline (optional two-stage training)."""
-        setup_output_dir(self.output_dir, overwrite=self.training_config.get('overwrite_output_dir', False))
+        setup_output_dir(self.output_dir)
 
         run_name = self.setup_wandb()
-        self.load_base_model()
+        self.load_model()
 
         # Load datasets once (text format for classification & for MLM packing)
-        datasets = load_datasets(
-            self.data_config,
-            splits=['train', 'tuning', 'held_out'],
-            format='text',
-            tokenizer=self.tokenizer
-        )
+        self.data_config["format"] = "text"
+        datasets = self.load_datasets(splits=["train", "tuning", "held_out"])
 
         # Optional Stage 1: MLM pretraining with LoRA adapters only
         if self.pretrain_config.get("enabled", False):
@@ -511,7 +516,7 @@ class Qwen3EmbeddingBaseline:
 
         collator = ClassificationCollator(
             tokenizer=self.tokenizer,
-            max_length=self.data_config.get('max_length', 8192),
+            max_length=self.model_config.get('max_length', self.data_config.get('max_length', 8192)),
             truncation=True,
         )
 
@@ -519,8 +524,8 @@ class Qwen3EmbeddingBaseline:
         self.train()
         self.save_model()
 
-        val_metrics = self.evaluate(datasets['tuning'], 'validation')
-        test_metrics = self.evaluate(datasets['held_out'], 'test')
+        val_metrics = self.evaluate(datasets['tuning'], 'tuning')
+        test_metrics = self.evaluate(datasets['held_out'], 'held_out')
 
         summary = {
             'validation': val_metrics,
@@ -533,3 +538,21 @@ class Qwen3EmbeddingBaseline:
         print("=" * 80)
 
         return val_metrics, test_metrics
+
+    def predict(self, dataset) -> np.ndarray:
+        """
+        Required by BaseBaseline.
+
+        Uses the classification Trainer to return probabilities for the positive
+        class (index 1). Assumes a binary setup.
+        """
+        if self.trainer is None:
+            raise RuntimeError(
+                "Trainer not initialized. Run `run()` (or create the trainer) before calling predict()."
+            )
+        pred_output = self.trainer.predict(dataset)
+        logits = pred_output.predictions
+        if isinstance(logits, tuple):
+            logits = logits[0]
+        probs = torch.softmax(torch.tensor(logits), dim=1).numpy()[:, 1]
+        return probs.astype(np.float32)

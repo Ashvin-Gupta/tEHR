@@ -3,6 +3,9 @@
 import torch
 from typing import List, Dict, Any
 import warnings
+import logging
+
+logger = logging.getLogger(__name__)
 
 class ClassificationCollator:
     """
@@ -16,12 +19,12 @@ class ClassificationCollator:
     """
     
     def __init__(self, tokenizer, max_length: int = 512, binary_classification: bool = True, 
-                 truncation: bool = True, handle_long_sequences: str = 'warn'):
+                 truncation: bool = True):
         self.tokenizer = tokenizer
         self.max_length = max_length
         self.binary_classification = binary_classification
         self.truncation = truncation
-        self.handle_long_sequences = handle_long_sequences
+        
         
         # Statistics & State
         self._warned_once = False
@@ -30,7 +33,7 @@ class ClassificationCollator:
         self._total_sequences = 0
         # Debugging: how many sample trajectories to print
         self._debug_samples_printed = 0
-        self._max_debug_samples = 5
+        self._max_debug_samples = 1
     
     def __call__(self, batch: List[Dict[str, Any]]) -> Dict[str, torch.Tensor]:
         """
@@ -56,7 +59,7 @@ class ClassificationCollator:
             
             # --- Label Handling ---
             if 'label' not in item:
-                print(f"Item without label: {item}")
+                logger.warning(f"Item without label: {item}")
                 continue  # Skip items without labels
 
             label = item['label']
@@ -88,13 +91,13 @@ class ClassificationCollator:
 
                 # Lightweight debug: show start/end of a few patient trajectories
                 if self._debug_samples_printed < self._max_debug_samples and text:
-                    print("\n=== Debug patient trajectory (post-truncation text) ===")
-                    print(f"  Label: {label}")
+                    logger.debug("\n=== Debug patient trajectory (post-truncation text) ===")
+                    logger.debug(f"  Label: {label}")
                     # Show first and last ~300 characters to see header and tail
                     start_snippet = text[:300]
                     end_snippet = text[-300:] if len(text) > 300 else text
-                    print("  TEXT START:", repr(start_snippet))
-                    print("  TEXT END:  ", repr(end_snippet))
+                    logger.debug("  TEXT START: %r", start_snippet)
+                    logger.debug("  TEXT END:   %r", end_snippet)
                     self._debug_samples_printed += 1
 
                 # Cleanup
