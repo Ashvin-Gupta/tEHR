@@ -501,32 +501,66 @@ def get_filtered_token_ids(dataset, record: dict) -> list:
     ]
 
 
-def run_clustering_pipeline(embeddings: np.ndarray, min_cluster_size=20):
-    """Reduces dimensions to 10D for clustering, then runs HDBSCAN."""
-    print(f"Reducing {embeddings.shape[1]}D to 10D for clustering...")
-    # Higher n_neighbors preserves more global structure for clustering
-    reducer_clustering = umap.UMAP(
-        n_components=10, 
-        n_neighbors=30, 
-        min_dist=0.0, 
-        metric='euclidean'
-    )
-    embeddings_low_d = reducer_clustering.fit_transform(embeddings)
+def run_clustering_pipeline(embeddings: np.ndarray, min_cluster_size=15):
+    """Reduces to 10D for clustering, then HDBSCAN with strict parameters."""
+    print(f"Step 1: Reducing {embeddings.shape[1]}D to 10D for clustering...")
+    # Use higher n_neighbors for 10D to keep global structure
+    reducer_10d = umap.UMAP(n_components=10, n_neighbors=50, min_dist=0.0, metric='euclidean', random_state=42)
+    embeddings_10d = reducer_10d.fit_transform(embeddings)
 
-    print("Running HDBSCAN on 10D space...")
+    print("Step 2: Running HDBSCAN (Stricter params for more specific groups)...")
+    # min_samples=1 makes the algorithm less likely to label things as 'noise'
     clusterer = hdbscan.HDBSCAN(
         min_cluster_size=min_cluster_size,
-        min_samples=3,
+        min_samples=1, 
+        cluster_selection_method='leaf', # 'leaf' finds smaller, more specific clusters
         prediction_data=True
     )
-    labels = clusterer.fit_predict(embeddings_low_d)
+    labels = clusterer.fit_predict(embeddings_10d)
     
-    # Also get 2D for the scatter plot
-    print("Generating 2D coordinates for visualization...")
-    reducer_viz = umap.UMAP(n_components=2, n_neighbors=15, min_dist=0.1)
-    z_2d = reducer_viz.fit_transform(embeddings)
+    print(f"Step 3: Generating 2D UMAP for visualization...")
+    reducer_2d = umap.UMAP(n_components=2, n_neighbors=15, min_dist=0.1, random_state=42)
+    z_2d = reducer_2d.fit_transform(embeddings)
     
+    n_clusters = len(set(labels)) - (1 if -1 in labels else 0)
+    print(f"Found {n_clusters} clusters (and {list(labels).count(-1)} noise points).")
     return labels, z_2d
+
+def generate_fingerprint_and_signatures(df_summary, terms_list, output_dir):
+    """Generates the Heatmap and the Top-10 Global Signature report."""
+    # 1. Top 10 Global Signatures per cluster
+    global_top_10 = []
+    for cid in sorted(df_summary['cluster'].unique()):
+        # Filter for codes that appear enough to be relevant
+        top = df_summary[df_summary['cluster'] == cid].sort_values('enrichment_score', ascending=False).head(10)
+        global_top_10.append(top)
+    
+    pd.concat(global_top_10).to_csv(os.path.join(output_dir, "top_10_global_signatures.csv"), index=False)
+
+    # 2. Terms of Interest Heatmap
+    rows = []
+    for term in list(dict.fromkeys(terms_list)):
+        match = df_summary[df_summary['event_human'] == term].copy()
+        if match.empty: continue
+        # Take most frequent code if duplicates exist
+        match = match.sort_values('count', ascending=False).drop_duplicates(subset=['cluster'])
+        rows.append(match)
+
+    if rows:
+        df_filtered = pd.concat(rows)
+        # Numeric matrix for heatmap
+        heatmap_data = df_filtered.pivot(index='event_human', columns='cluster', values='enrichment_score').fillna(0)
+        
+        # String matrix for the CSV pivot
+        df_filtered['display'] = df_filtered.apply(
+            lambda r: f"{r['median_value']:.1f}" if pd.notnull(r['median_value']) and r['median_value'] != 0 
+            else f"x{r['enrichment_score']:.1f}", axis=1
+        )
+        pivot = df_filtered.pivot(index='event_human', columns='cluster', values='display').fillna("-")
+        pivot.to_csv(os.path.join(output_dir, "clinical_fingerprint_pivot.csv"))
+        
+        return heatmap_data
+    return None
 
 def generate_clinical_reports(df_summary, terms_list, output_dir):
     """
@@ -571,24 +605,18 @@ def generate_clinical_reports(df_summary, terms_list, output_dir):
         return pivot, heatmap_data
     return None, None
 
-def plot_clinical_heatmap(heatmap_data, output_dir, title="Clinical Enrichment by Cluster"):
-    """Restored Heatmap code for viewing clinical fingerprints."""
-    if heatmap_data is None or heatmap_data.empty:
-        return
-
-    # Sort to group clusters together
-    plot_df = heatmap_data.copy()
-    plot_df['max_cluster'] = plot_df.idxmax(axis=1)
-    plot_df = plot_df.sort_values('max_cluster').drop(columns=['max_cluster'])
-
-    # Dynamic height: 0.2 inches per row
-    plt.figure(figsize=(12, max(8, len(plot_df) * 0.2)))
-    sns.heatmap(plot_df, annot=True, fmt=".1f", cmap="YlOrRd", linewidths=.5)
+def plot_clinical_heatmap(heatmap_data, output_dir):
+    if heatmap_data is None or heatmap_data.empty: return
     
-    plt.title(title)
+    # Remove the 'Noise' cluster from the heatmap for better contrast
+    if -1 in heatmap_data.columns:
+        heatmap_data = heatmap_data.drop(columns=[-1])
+
+    plt.figure(figsize=(14, max(10, len(heatmap_data) * 0.25)))
+    sns.heatmap(heatmap_data, annot=True, fmt=".1f", cmap="YlOrRd", cbar_kws={'label': 'Enrichment Score'})
+    plt.title("Clinical Fingerprint: Enrichment by Cluster")
     plt.tight_layout()
     plt.savefig(os.path.join(output_dir, "clinical_fingerprint_heatmap.png"), dpi=300)
-    plt.show()
 # def main():
 #     # 1) Load embeddings and run clustering
 #     embeddings, patient_ids = load_embeddings(OUTPUT_DIR)
@@ -652,12 +680,12 @@ def plot_clinical_heatmap(heatmap_data, output_dir, title="Clinical Enrichment b
 #     print("Cluster analysis from embeddings complete.")
 
 def main():
-    # 1) Load data
+    # 1) Load data & dataset
     dataset, subject_to_label, label_to_name, subject_to_record_idx = load_dataset(CONFIG_PATH, SPLIT)
     embeddings, patient_ids = load_embeddings(OUTPUT_DIR)
     
-    # 2) UMAP -> HDBSCAN Pipeline (Crucial for 1024D speed)
-    cluster_labels, Z = run_clustering_pipeline(embeddings, min_cluster_size=20)
+    # 2) Stricter clustering (min_cluster_size=15 usually gives more granularity)
+    cluster_labels, Z = run_clustering_pipeline(embeddings, min_cluster_size=15)
     
     # 3) Build DataFrame
     df_clusters = pd.DataFrame({
@@ -666,38 +694,22 @@ def main():
         "dim1": Z[:, 0],
         "dim2": Z[:, 1],
     })
-
-    # 4) Labeling (as before)
     df_clusters["patient_id_str"] = df_clusters["patient_id"].astype(str)
     df_clusters["case_label"] = df_clusters["patient_id_str"].map(subject_to_label).map(label_to_name).fillna("Control")
 
-    # 5) Analysis
+    # 4) Basic Analysis
     calculate_cluster_composition(df_clusters, OUTPUT_DIR)
-    
-    # This generates the cluster_x_analysis.csv files
-    analyse_differential_features(
-        dataset, df_clusters, subject_to_record_idx, OUTPUT_DIR
-    )
-
-    # 6) Generate the Final Tables (Global + Your Terms)
-    df_summary = pd.read_csv(os.path.join(OUTPUT_DIR, "differential_cluster_analysis.csv"))
-    pivot, heatmap = generate_clinical_reports(df_summary, my_terms, OUTPUT_DIR)
-
-    # 7) Analysis & Viz
-    calculate_cluster_composition(df_clusters, OUTPUT_DIR)
-    
     analyse_differential_features(dataset, df_clusters, subject_to_record_idx, OUTPUT_DIR)
     
-    # Reload summary to generate the specific tables
+    # 5) Specific Reports & Heatmap
     df_summary = pd.read_csv(os.path.join(OUTPUT_DIR, "differential_cluster_analysis.csv"))
-    pivot, heatmap = generate_clinical_reports(df_summary, my_terms, OUTPUT_DIR)
+    heatmap_df = generate_fingerprint_and_signatures(df_summary, my_terms, OUTPUT_DIR)
 
-    # 8) Final Plots
-    visualize_clusters(df_clusters, OUTPUT_DIR) # The UMAP scatter plot
-    if heatmap is not None:
-        plot_clinical_heatmap(heatmap, OUTPUT_DIR) # The Fingerprint heatmap
+    # 6) Visualization
+    visualize_clusters(df_clusters, OUTPUT_DIR)
+    plot_clinical_heatmap(heatmap_df, OUTPUT_DIR)
 
-    print("Analysis complete.")
+    print(f"Pipeline complete. Check {OUTPUT_DIR} for analysis and images.")
 
 if __name__ == "__main__":
     main()

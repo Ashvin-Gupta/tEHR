@@ -93,37 +93,36 @@ class PureLLMBaseline(BaseBaseline):
     def extract_probability(self, output_text: str, sample_idx: int = None, prompt: str = None) -> float:
         """
         Extract probability from model output.
-        
+
         Tries multiple strategies to parse probability / binary decision from text.
-        
+
         Args:
             output_text: Model generated text
             sample_idx: Optional index for debugging failed extractions
             prompt: Optional prompt for debugging failed extractions
-        
+
         Returns:
             Extracted probability (0.0 to 1.0), or 0.5 if parsing fails
         """
         # Strategy 0: Prefer a leading 0/1 on the first non-empty line
-        # We strongly instructed the model to output exactly "0" or "1", but
-        # in practice models often produce e.g. "0. The patient is not ..."
-        # or "Answer: 0 (not high risk)". We treat the first leading digit
-        # on the first non-empty line as the decision when it is 0 or 1.
+        # Strip whitespace and ALL leading ';' (or similar ...) before interpreting the answer.
         text_stripped = output_text.strip()
         if text_stripped:
             first_line = text_stripped.splitlines()[0].strip()
+            # Remove all leading whitespace and any sequence of ';' characters before searching for the answer
+            # lstrip with combined " ;" will do whitespace and semicolon
+            processed_first_line = first_line.lstrip(" ;")
             # Exact match "0" or "1"
-            if first_line in {"0", "1"}:
-                return float(first_line)
+            if processed_first_line in {"0", "1"}:
+                return float(processed_first_line)
             # Line starts with 0/1 followed by punctuation / space / text
-            first_line_lstripped = first_line.lstrip()
-            if first_line_lstripped and first_line_lstripped[0] in {"0", "1"}:
-                return float(first_line_lstripped[0])
-            # Patterns like "Answer: 0" or "Answer 1"
-            answer_match = re.search(r'answer[:\s]+([01])\b', first_line.lower())
+            if processed_first_line and processed_first_line[0] in {"0", "1"}:
+                return float(processed_first_line[0])
+            # Patterns like "Answer: 0" or "Answer 1" (let's also do this after lstrip for robustness)
+            answer_match = re.search(r'answer[:\s]+([01])\b', processed_first_line.lower())
             if answer_match:
                 return float(answer_match.group(1))
-        
+
         # Strategy 1: Look for explicit probability value
         # Pattern: "0.XX" or "0.XXX" or "0.X"
         prob_patterns = [
@@ -132,7 +131,7 @@ class PureLLMBaseline(BaseBaseline):
             r'probability[:\s]+([0-9.]+)',
             r'risk[:\s]+([0-9.]+)',
         ]
-        
+
         for pattern in prob_patterns:
             matches = re.findall(pattern, output_text.lower())
             if matches:
@@ -144,7 +143,7 @@ class PureLLMBaseline(BaseBaseline):
                         return value
                 except:
                     continue
-        
+
         # Strategy 2: Look for percentage
         percent_match = re.search(r'(\d+(?:\.\d+)?)%', output_text)
         if percent_match:
@@ -154,7 +153,7 @@ class PureLLMBaseline(BaseBaseline):
                     return value
             except:
                 pass
-        
+
         # Strategy 3: Look for fraction
         fraction_match = re.search(r'(\d+)/(\d+)', output_text)
         if fraction_match:
@@ -167,7 +166,7 @@ class PureLLMBaseline(BaseBaseline):
                         return value
             except:
                 pass
-        
+
         # Default: return 0.5 (neutral)
         self.failed_extractions += 1
         self._log_extraction_failure(output_text, sample_idx=sample_idx, prompt=prompt)
