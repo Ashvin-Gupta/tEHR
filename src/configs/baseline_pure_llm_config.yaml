@@ -10,7 +10,7 @@ debug:
 # IMPORTANT: Use an *Instruct* model (e.g. Qwen3-8B-Instruct) for zero-shot prompting.
 # Base models are not instruction-tuned and often produce garbled output.
 model:
-  model_name: "unsloth/mistral-7b-v0.3-bnb-4bit"
+  model_name: "unsloth/Mistral-Small-3.2-24B-Instruct-2506"
   max_length: 16000
   load_in_4bit: true
 
