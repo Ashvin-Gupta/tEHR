@@ -548,6 +548,15 @@ def generate_clinical_reports(
         return None, None
 
     df_filtered = pd.concat(rows)
+
+    # Guard against two different raw codes translating to the same human label:
+    # keep the highest-count row per (event_human, cluster) pair.
+    df_filtered = (
+        df_filtered
+        .sort_values("count", ascending=False)
+        .drop_duplicates(subset=["event_human", "cluster"])
+    )
+
     df_filtered["display"] = df_filtered.apply(
         lambda r: (
             f"{r['median_value']:.1f}"
@@ -556,14 +565,20 @@ def generate_clinical_reports(
         ),
         axis=1,
     )
-    pivot = df_filtered.pivot(
-        index="event_human", columns="cluster", values="display"
-    ).fillna("-")
-    pivot.to_csv(os.path.join(output_dir, "terms_of_interest_pivot.csv"))
 
     heatmap_data = df_filtered.pivot(
         index="event_human", columns="cluster", values="enrichment_score"
     ).fillna(0)
+
+    # Sort rows by peak enrichment across clusters so the most discriminating
+    # terms appear at the top rather than in alphabetical order.
+    row_order = heatmap_data.max(axis=1).sort_values(ascending=False).index
+    heatmap_data = heatmap_data.loc[row_order]
+
+    pivot = df_filtered.pivot(
+        index="event_human", columns="cluster", values="display"
+    ).fillna("-").loc[row_order]
+    pivot.to_csv(os.path.join(output_dir, "terms_of_interest_pivot.csv"))
 
     return pivot, heatmap_data
 
