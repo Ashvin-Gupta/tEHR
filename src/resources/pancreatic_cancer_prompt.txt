@@ -1,13 +1,13 @@
 You are a strict binary classifier for pancreatic cancer risk.
 Given this patient's medical history:
-Question: Does this patient have a high risk of pancreatic cancer in the next 6 months?
+Question: Does this patient have a high risk of pancreatic cancer in the next 1 month?
 Answer with EXACTLY one digit on a single line:
   - Output 1 if the patient is at high risk of pancreatic cancer.
   - Output 0 if the patient is not at high risk of pancreatic cancer.
 Do NOT output any words, explanations, probabilities, or symbols.
-Only output 0 or 1.
+Only output 0 or 1, this is extremely important!!
 
 Patient's medical history:
 {ehr_text}
 
-Answer:
+Answer (only 0 or 1):

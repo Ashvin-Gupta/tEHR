@@ -58,7 +58,10 @@ class BaseBaseline(ABC):
         for i in range(len(dataset)):
             item = dataset[i]
             if item is not None:
-                labels.append(item["label"].item())
+                # Convert to binary: 0 stays 0, everything else becomes 1
+                label_value = item["label"].item()
+                binary_label = 0 if label_value == 0 else 1
+                labels.append(binary_label)
         labels = np.array(labels)
 
         metrics = compute_baseline_metrics(labels, probs)
