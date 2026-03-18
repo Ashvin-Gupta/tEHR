@@ -191,47 +191,47 @@ def load_dataset(config_path: str, split: str):
 
 def visualize_clusters(df_clusters: pd.DataFrame, output_dir: str):
     sns.set(style="white", context="talk")
-    fig, axes = plt.subplots(1, 2, figsize=(14, 6))
+    fig, axes = plt.subplots(1, 2, figsize=(16, 7))
+
+    # 1. Prepare a binary column for plotting to avoid Palette KeyErrors
+    # This keeps the original 'case_label' intact for analysis but simplifies for the plot
+    df_clusters['plot_label'] = df_clusters['case_label'].apply(
+        lambda x: 'Control' if str(x).lower() == 'control' else 'Case'
+    )
 
     # Left: UMAP colored by cluster
+    # Using 'viridis' or 'tab20' handles large numbers of clusters better than 'tab10'
     sns.scatterplot(
         data=df_clusters,
         x="dim1",
         y="dim2",
         hue="cluster",
-        palette="tab10",
+        palette="viridis", 
+        s=10,
+        alpha=0.6,
+        ax=axes[0],
+        legend="full"
+    )
+    axes[0].set_title("UMAP: Clusters")
+    axes[0].legend(title="Cluster", bbox_to_anchor=(1.05, 1), loc="upper left", fontsize='small', ncol=2 if len(df_clusters['cluster'].unique()) > 20 else 1)
+
+    # Right: UMAP colored by Case vs Control
+    sns.scatterplot(
+        data=df_clusters,
+        x="dim1",
+        y="dim2",
+        hue="plot_label",
+        palette={"Control": "lightgrey", "Case": "red"},
         s=10,
         alpha=0.7,
-        ax=axes[0],
+        ax=axes[1],
     )
-    axes[0].set_title("UMAP: colored by cluster")
-    axes[0].set_xlabel("dim1")
-    axes[0].set_ylabel("dim2")
-    axes[0].legend(title="Cluster", bbox_to_anchor=(1.05, 1), loc="upper left")
-
-    # Right: UMAP colored by case/control (if available)
-    if "case_label" in df_clusters.columns:
-        sns.scatterplot(
-            data=df_clusters,
-            x="dim1",
-            y="dim2",
-            hue="case_label",
-            palette={"Control": "lightgrey", "Case": "red"},
-            s=10,
-            alpha=0.7,
-            ax=axes[1],
-        )
-        axes[1].set_title("UMAP: cases (red) vs controls (grey)")
-        axes[1].legend(title="Label", bbox_to_anchor=(1.05, 1), loc="upper left")
-    else:
-        axes[1].axis("off")
-
-    axes[1].set_xlabel("dim1")
-    axes[1].set_ylabel("dim2")
+    axes[1].set_title("UMAP: Cases (Red) vs Controls (Grey)")
+    axes[1].legend(title="Status", bbox_to_anchor=(1.05, 1), loc="upper left")
 
     plt.tight_layout()
     os.makedirs(output_dir, exist_ok=True)
-    plt.savefig(os.path.join(output_dir, "umap_clusters_from_embeddings.png"), dpi=300)
+    plt.savefig(os.path.join(output_dir, "umap_clusters_visualization.png"), dpi=300)
     plt.close()
 
 
@@ -514,7 +514,7 @@ def run_clustering_pipeline(embeddings: np.ndarray, min_cluster_size=50):
     clusterer = hdbscan.HDBSCAN(
         min_cluster_size=min_cluster_size, # Increased to merge micro-clusters
         min_samples=5,                    # Increased to filter out more noise
-        cluster_selection_method='eom',    # 'eom' finds larger, more stable groups
+        cluster_selection_method='leaf',    # 'eom' finds larger, more stable groups, leaf finds smaller, more specific clusters
         prediction_data=True
     )
     labels = clusterer.fit_predict(embeddings_10d)
