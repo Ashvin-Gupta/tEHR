@@ -359,14 +359,21 @@ def analyse_events_and_measurements(
         )
 
 def calculate_cluster_composition(df_clusters: pd.DataFrame, output_dir: str):
-    """Calculates the ratio of Cases vs Controls per cluster."""
-    composition = df_clusters.groupby('cluster')['case_label'].value_counts(normalize=False).unstack(fill_value=0)
+    """Refined to ensure any non-control is treated as a Case."""
+    # Ensure binary labeling
+    df_clusters['binary_label'] = np.where(df_clusters['case_label'] == 'Control', 'Control', 'Case')
+    
+    composition = df_clusters.groupby('cluster')['binary_label'].value_counts().unstack(fill_value=0)
     composition['Total'] = composition.sum(axis=1)
-    composition['Case_%'] = (composition.get('Case', 0) / composition['Total'] * 100).round(2)
     
-    print("\n--- Cluster Composition ---")
+    # Calculate % based on the new binary Case column
+    if 'Case' in composition.columns:
+        composition['Case_%'] = (composition['Case'] / composition['Total'] * 100).round(2)
+    else:
+        composition['Case_%'] = 0.0
+    
+    print("\n--- Refined Cluster Composition ---")
     print(composition)
-    
     composition.to_csv(os.path.join(output_dir, "cluster_case_control_composition.csv"))
     return composition
 
@@ -509,7 +516,7 @@ def run_clustering_pipeline(embeddings: np.ndarray, min_cluster_size=20):
     print("Running HDBSCAN on 10D space...")
     clusterer = hdbscan.HDBSCAN(
         min_cluster_size=min_cluster_size,
-        min_samples=5,
+        min_samples=3,
         prediction_data=True
     )
     labels = clusterer.fit_predict(embeddings_low_d)
@@ -563,6 +570,25 @@ def generate_clinical_reports(df_summary, terms_list, output_dir):
         heatmap_data = df_filtered.pivot(index='event_human', columns='cluster', values='enrichment_score').fillna(0)
         return pivot, heatmap_data
     return None, None
+
+def plot_clinical_heatmap(heatmap_data, output_dir, title="Clinical Enrichment by Cluster"):
+    """Restored Heatmap code for viewing clinical fingerprints."""
+    if heatmap_data is None or heatmap_data.empty:
+        return
+
+    # Sort to group clusters together
+    plot_df = heatmap_data.copy()
+    plot_df['max_cluster'] = plot_df.idxmax(axis=1)
+    plot_df = plot_df.sort_values('max_cluster').drop(columns=['max_cluster'])
+
+    # Dynamic height: 0.2 inches per row
+    plt.figure(figsize=(12, max(8, len(plot_df) * 0.2)))
+    sns.heatmap(plot_df, annot=True, fmt=".1f", cmap="YlOrRd", linewidths=.5)
+    
+    plt.title(title)
+    plt.tight_layout()
+    plt.savefig(os.path.join(output_dir, "clinical_fingerprint_heatmap.png"), dpi=300)
+    plt.show()
 # def main():
 #     # 1) Load embeddings and run clustering
 #     embeddings, patient_ids = load_embeddings(OUTPUT_DIR)
@@ -657,12 +683,21 @@ def main():
     df_summary = pd.read_csv(os.path.join(OUTPUT_DIR, "differential_cluster_analysis.csv"))
     pivot, heatmap = generate_clinical_reports(df_summary, my_terms, OUTPUT_DIR)
 
-    # 7) Final Viz
-    visualize_clusters(df_clusters, OUTPUT_DIR)
-    if heatmap is not None:
-        plot_clinical_heatmap(heatmap, OUTPUT_DIR)
+    # 7) Analysis & Viz
+    calculate_cluster_composition(df_clusters, OUTPUT_DIR)
+    
+    analyse_differential_features(dataset, df_clusters, subject_to_record_idx, OUTPUT_DIR)
+    
+    # Reload summary to generate the specific tables
+    df_summary = pd.read_csv(os.path.join(OUTPUT_DIR, "differential_cluster_analysis.csv"))
+    pivot, heatmap = generate_clinical_reports(df_summary, my_terms, OUTPUT_DIR)
 
-    print("Pipeline complete. Check OUTPUT_DIR for 'global_cluster_signatures.csv' and 'terms_of_interest_pivot.csv'.")
+    # 8) Final Plots
+    visualize_clusters(df_clusters, OUTPUT_DIR) # The UMAP scatter plot
+    if heatmap is not None:
+        plot_clinical_heatmap(heatmap, OUTPUT_DIR) # The Fingerprint heatmap
+
+    print("Analysis complete.")
 
 if __name__ == "__main__":
     main()
