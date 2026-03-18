@@ -10,6 +10,7 @@ Pipeline:
 """
 
 import os
+import yaml
 from collections import defaultdict
 
 import numpy as np
@@ -21,7 +22,7 @@ from sklearn.metrics import silhouette_score
 import umap
 import hdbscan
 
-from src.baselines.utils import load_baseline_config, load_datasets
+from src.data.dataset_factory import get_dataset
 
 
 # --- CONFIG: update these paths for your run ---
@@ -64,24 +65,16 @@ def run_kmeans(embeddings: np.ndarray, k: int):
 
 
 def load_dataset(config_path: str, split: str):
-    config = load_baseline_config(config_path)
+    with open(config_path) as f:
+        config = yaml.safe_load(f)
     data_config = config["data"]
+    dataset_name = data_config.get("dataset", "CPRD")
 
-    datasets = load_datasets(
-        data_config=data_config,
-        splits=[split],
-        # Use 'text' so that UnifiedEHRDataset loads all translation lookups
-        # (medical_lookup, lab_lookup, region_lookup, time_lookup), which are
-        # required by _translate_token. We still access raw tokens from
-        # dataset.patient_records, so this does not affect the analysis.
-        format="text",
-        tokenizer=None,
-    )
-    dataset = datasets[split]
+    dataset = get_dataset(dataset_name, data_config, split)
 
     # Map subject_id -> label_id and label_id -> human-readable label
     subject_to_label = {str(k): v for k, v in dataset.subject_to_label.items()}
-    label_to_name = {v: k for k, v in dataset.label_to_id_map.items()}
+    label_to_name = {v: k for k, v in dataset.label_to_id.items()}
 
     # Map subject_id -> record index (string keys to be consistent)
     subject_to_record_idx = {}
@@ -156,59 +149,6 @@ def analyse_events_and_measurements(
     """
     os.makedirs(output_dir, exist_ok=True)
 
-    # Helper: apply the same time cutoff + cancer filtering used in UnifiedEHRDataset.__getitem__
-    def get_effective_token_ids(record):
-        import pandas as pd  # local import to avoid circulars
-
-        subject_id = record.get("subject_id")
-        token_ids = list(record.get("tokens", []))
-        timestamps = record.get("timestamps", [])
-
-        if subject_id is None:
-            return token_ids
-
-        # Determine label (for pretrain special-case; here mostly for completeness)
-        label = dataset.subject_to_label.get(subject_id)
-
-        # Figure out actual cutoff months
-        if dataset.format == "pretrain" and label is not None and not pd.isna(label) and label > 0:
-            actual_cutoff = 1
-        else:
-            actual_cutoff = getattr(dataset, "cutoff_months", None)
-
-        if actual_cutoff is not None:
-            cancer_date = dataset.subject_to_cancer_date.get(subject_id)
-
-            if pd.notna(cancer_date):
-                cutoff_date = cancer_date - pd.DateOffset(months=actual_cutoff)
-            else:
-                valid_ts = [ts for ts in timestamps if ts is not None and ts > 0]
-                if valid_ts:
-                    last_timestamp = max(valid_ts)
-                    last_date = pd.Timestamp.fromtimestamp(last_timestamp)
-                    cutoff_date = last_date - pd.DateOffset(months=actual_cutoff)
-                else:
-                    cutoff_date = None
-
-            if cutoff_date is not None:
-                cutoff_timestamp = cutoff_date.timestamp()
-                truncated_ids = []
-                for i, ts in enumerate(timestamps):
-                    token_str = dataset.id_to_token_map.get(token_ids[i], "")
-                    is_end_token = (token_str == "<end>")
-                    if ts == 0 or (ts is not None and ts < cutoff_timestamp) or is_end_token:
-                        truncated_ids.append(token_ids[i])
-                token_ids = truncated_ids
-
-        # Filter out tokens containing 'cancer' (same as dataset)
-        filtered = []
-        for tid in token_ids:
-            token_str = str(dataset.id_to_token_map.get(tid, ""))
-            if "cancer" not in token_str.lower():
-                filtered.append(tid)
-
-        return filtered
-
     # cluster -> event_key -> count
     cluster_event_counts = defaultdict(lambda: defaultdict(int))
     # cluster -> event_key -> list of numeric values
@@ -224,8 +164,8 @@ def analyse_events_and_measurements(
             continue
 
         record = dataset.patient_records[rec_idx]
-        token_ids = get_effective_token_ids(record)
-        string_codes = [str(dataset.id_to_token_map.get(tid, "")) for tid in token_ids]
+        token_ids = get_filtered_token_ids(dataset, record)
+        string_codes = [str(dataset.id_to_token.get(tid, "")) for tid in token_ids]
 
         i = 0
         while i < len(string_codes):
@@ -282,8 +222,7 @@ def analyse_events_and_measurements(
             # Optionally, translate event_key to something human readable
             human_readable = event_key
             try:
-                # Uses the dataset's translation logic where available
-                human_readable = dataset._translate_token(event_key).rstrip("; ")
+                human_readable = dataset.translator.translate(event_key).rstrip("; ")
             except Exception:
                 pass
 
@@ -350,58 +289,8 @@ def analyse_differential_features(
         if rec_idx is None: continue
 
         record = dataset.patient_records[rec_idx]
-
-        # Reuse the same cutoff + cancer filtering logic as above
-        from pandas import isna, notna, Timestamp, DateOffset  # type: ignore
-
-        def get_effective_token_ids_local(rec):
-            subject_id = rec.get("subject_id")
-            token_ids = list(rec.get("tokens", []))
-            timestamps = rec.get("timestamps", [])
-
-            if subject_id is None:
-                return token_ids
-
-            label = dataset.subject_to_label.get(subject_id)
-
-            if dataset.format == "pretrain" and label is not None and not isna(label) and label > 0:
-                actual_cutoff = 1
-            else:
-                actual_cutoff = getattr(dataset, "cutoff_months", None)
-
-            if actual_cutoff is not None:
-                cancer_date = dataset.subject_to_cancer_date.get(subject_id)
-
-                if notna(cancer_date):
-                    cutoff_date = cancer_date - DateOffset(months=actual_cutoff)
-                else:
-                    valid_ts = [ts for ts in timestamps if ts is not None and ts > 0]
-                    if valid_ts:
-                        last_timestamp = max(valid_ts)
-                        last_date = Timestamp.fromtimestamp(last_timestamp)
-                        cutoff_date = last_date - DateOffset(months=actual_cutoff)
-                    else:
-                        cutoff_date = None
-
-                if cutoff_date is not None:
-                    cutoff_timestamp = cutoff_date.timestamp()
-                    truncated_ids = []
-                    for i, ts in enumerate(timestamps):
-                        token_str = dataset.id_to_token_map.get(token_ids[i], "")
-                        is_end_token = (token_str == "<end>")
-                        if ts == 0 or (ts is not None and ts < cutoff_timestamp) or is_end_token:
-                            truncated_ids.append(token_ids[i])
-                    token_ids = truncated_ids
-
-            filtered = []
-            for tid in token_ids:
-                token_str = str(dataset.id_to_token_map.get(tid, ""))
-                if "cancer" not in token_str.lower():
-                    filtered.append(tid)
-
-            return filtered
-
-        tokens = [str(dataset.id_to_token_map.get(tid, "")) for tid in get_effective_token_ids_local(record)]
+        token_ids = get_filtered_token_ids(dataset, record)
+        tokens = [str(dataset.id_to_token.get(tid, "")) for tid in token_ids]
 
         for i, code in enumerate(tokens):
             is_measurement = any(code.startswith(prefix) for prefix in ["LAB//", "MEASUREMENT//", "MEDICAL//BMI", "MEDICAL//bp_"])
@@ -451,9 +340,10 @@ def analyse_differential_features(
             # Delta from global median (instead of mean)
             diff_from_global_median = median_v - global_medians[event_code] if not np.isnan(median_v) else 0
 
-            # Translation
-            try: human = dataset._translate_token(event_code).rstrip("; ")
-            except: human = event_code
+            try:
+                human = dataset.translator.translate(event_code).rstrip("; ")
+            except Exception:
+                human = event_code
 
             summary_rows.append({
                 "cluster": cluster_id,
@@ -482,6 +372,24 @@ def analyse_differential_features(
         cluster_subset.to_csv(os.path.join(output_dir, f"cluster_{cid}_analysis.csv"), index=False)
 
     print(f"Differential analysis complete. Files saved to {output_dir}")
+
+def get_filtered_token_ids(dataset, record: dict) -> list:
+    """Return token IDs for a record after applying time cutoff and removing cancer tokens."""
+    subject_id = record.get("subject_id")
+    token_ids = list(record.get("tokens", []))
+    timestamps = record.get("timestamps", [])
+
+    if subject_id is None:
+        return token_ids
+
+    label = dataset.subject_to_label.get(subject_id)
+    token_ids = dataset._apply_time_cutoff(token_ids, timestamps, subject_id, label)
+
+    return [
+        tid for tid in token_ids
+        if "cancer" not in str(dataset.id_to_token.get(tid, "")).lower()
+    ]
+
 
 def run_hdbscan(embeddings: np.ndarray, min_cluster_size: int = 15, min_samples: int = 5):
     """
