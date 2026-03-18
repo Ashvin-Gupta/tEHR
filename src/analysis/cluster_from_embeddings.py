@@ -30,7 +30,110 @@ CONFIG_PATH = "src/configs/classification_config.yaml"   # same config you used 
 OUTPUT_DIR = "/gpfs/scratch/qc25022/pancreas/experiments/Results/lora-1-month-logistic-refactored-new-time-mistral-7B/patient_clustering_heldout"  # directory containing embeddings.npy
 SPLIT = "held_out"  # "train", "tuning", or "held_out"
 K = 5               # number of clusters for k-means
-
+my_terms = ["Secondary polycythaemia", "ADHD", "Benign prostatic hyperplasia", "Bipolar affective disorder", "Bisphosphonates", "Black", "COPD", "Cervical intraepithelial neoplasia", "Chronic cystitis", "Chronic hepatitis", "Chronic kidney disease", "Cleidocranial dysplasia", "Coronary heart disease", "Covid2", "Diabetes", "Drinker - excess/disorder", "Drinker - unspecified", 
+    "Drinker - within limits", "End-Stage renal disease", "Epsstein-Barr virus", 
+    "Gastro-oesophageal reflux", "Giant cell arteritis", "Glomeruonephritis", 
+    "High birth weight", "HPV", "IBD", "IBS", "IBS medication", "Ischaemic stroke", 
+    "Left bundle branch block", "Low birth weight", "Myelodysplastic syndrome", 
+    "Monoclonal gammopathy undetermined significance", "MND", "Non-Hodgkin lymphoma", 
+    "Non-Alcoholic fatty liver disease", "Non-drinker", "Oesteoarthritis", 
+    "Postcoital and contact bleeding", "PCOS", "Polycythaemia vera", 
+    "Patent ductus arteriousus", "Pulmonary embolism", "Postmenopausal bleeding", 
+    "Polymyalgia rheumatica", "Psoriatic arthropathy", "PTSD", 
+    "Personality disorder", "Right bundle branch block", 
+    "Respiratory distress of newborn", "Rheumaticn valve disease", 
+    "Rheumatoid arthritis", "Lupus erythematosus", "Supraventricular tachycardia", 
+    "Stroke NOS", "Subarachnoid haemorrhage", "Tuberculosis", 
+    "Transient ischaemic attack", "Tubulo-interstitial nephritis", 
+    "Ventricular tachycardia", "Venous thromboembolism", "Abdominal mass", 
+    "Achalasia", "Acne", "Actinic keratosis", "Adrenal insufficiency", 
+    "Agranulocytosis", "Alcohol problems", "Alcohol Dependency", "Allergic rhinitis", 
+    "Alopecia areata", "Amylase", "Anal fissure", "Angiodysplasia colon", 
+    "Ankylosing spondylitus", "Anorectal fistula", "Anorectal prolapse", 
+    "Anterior uveitis", "Anxiety or phobia", "Aortic aneurysm", "Aplastic", 
+    "Appendicitis", "Appetite loss", "Arthritis", "Asbestosis", 
+    "Aspiration pneumonia", "Asthma", "Atrial fibrilation", "Autism", 
+    "Autoimmune liver disease", "Autoimmune skin disease", 
+    "Autonomic nervous system", "Atrioventricular block first degree", 
+    "Atrioventricular block second degree", "Atrioventricular block third degree", 
+    "Back pain", "Bariatric surgery", "Barretts", "Bells's palsy", 
+    "Benign brain neoplasm", "Benign colon neoplasm", "Benign ovary neoplasm", 
+    "Benign stomach neoplasm", "Benign uterus neoplasm", "Bifascicular block", 
+    "Biliary cancer", "Bilirubin", "Bladder cancer", "Blindness", 
+    "Bloating distension", "Blood pressure", "BMI", "Bone cancer", "Diastolic", 
+    "Systolic", "Brain cancer", "Breast cancer", "Bronchiectasis", 
+    "Cardiomyopathy", "Carpal tunnel", "Cataract", "Cerebral palsy", 
+    "Cerebrovascular disease", "Cervix cancer", "Change in bowel habit", 
+    "Chest pain", "Cholangitis", "Cholecystectomy", "Cholecystitis", 
+    "Cholelithiasis", "Cholesterol triglycerides", "Cholesterolaemia", 
+    "Chronic fatigue", "Carcinoma in cervical", "Cirrhosis", "Coeliac", 
+    "Collapsed vertabrae", "Colorectal cancer", "Congenital cardiac", 
+    "Constipation", "Creatinine serum", "Creatinine urine", "Crohn's", 
+    "Current or ex-smoker", "Current smoker", "Cystic fibrosis", "Cystic renal", 
+    "Dilated cardiomyopathy", "Deaf", "Delirium", "Dementia", "Depression", 
+    "Dermatitis", "Diabetes eye", "Diabetes neuro", "Diabetes type1", 
+    "Diabetes type2", "Diabetic retinopathy", "Diarrhoea", "Diverticular", 
+    "Diabetic neurological complications", "Down syndrome", "Dysmenorrhoea", 
+    "Dyspepsia", "Dysphagia", "Eating disorder", "Endometrial hyper", 
+    "Endometriosis", "Endoscopy", "Enteropathic arthropathy", "Enthesopathy", 
+    "Epigastric pain", "Epilepsy", "Erectile dysfunction", "Esophagus cancer", 
+    "Essential tremor", "Ex-smoker", "Family history of colon cancer", 
+    "Family history of esophagus cancer", "Family history of git cancer", 
+    "Family history of liver cancer", "Family history of other cancer", 
+    "Family history of pancreas cancer", "Family history of stomach cancer", 
+    "Fatigue malaise", "Fatty liver", "Female genital prolapse", 
+    "Female infertility", "Ferritin", "Fibromatosis", "Fibromyalgia", 
+    "Folate deficiency", "Fracture hip", "Fracture wrist", "Gallbladder disease", 
+    "Gallbladder disease without PSC", "Gastrectomy", "Gastritis duodenitis", 
+    "Gastrointestinal angiodysplasia", "GIT bleed", "Glaucoma", "Glucose", 
+    "GORD PUDB Barrets", "Gout", "Haemangioma", "Hayfever", "Headneck cancer", 
+    "Hearing loss", "Heart failure", "Heart valve dz", "Heartburn", "Height", 
+    "Hep B vaccine", "Hepatitis B", "Hepatitis C", "Hernia abdominal", 
+    "Hernia diaphragm", "Hidradenitis", "HIV", "Hoarseness", 
+    "Hypertrophic cardiomyopathy", "Hodgkins", "Hydrocele", "Hyperparathyroidism", 
+    "Hyper nasal turbs", "Hyperprolactinaemia", "Hypertension", "Hypopituitarism", 
+    "Hyposplenism", "Immunodef", "Infection bones joints", 
+    "Intellectual disability", "Intervertebral disc disorders", 
+    "Intracerebral haemorrhage", "Intracranial hypertension", 
+    "Intrauterine hypoxia", "Iron", "Iron medication", "Iron deficiency anaemia", 
+    "Jaundice", "Juvenile arthritis", "Keratitis", "Kidney cancer", "Leiomyoma", 
+    "Leukemia cancer", "Lichen planus", "Liver cancer", "Alcoholic liver disease", 
+    "Liver disease", "Liver disease with autoimmune", "Liver failure", 
+    "Lung cancer", "Lymphocyte", "Lymphoma cancer", "Macular degeneration", 
+    "Male infertility", "Melanoma cancer", "Meniere", "Menorrhagia", 
+    "Mesothelioma cancer", "Migraine", "Multiple valve diseas", 
+    "Multiple sclerosis", "Myasthenia", "Myeloma cancer", "Myocardial infarction", 
+    "Nasal polyp", "Nausea vomiting", "Neonatal jaundice", "Neuropathic bladder", 
+    "Neutrophils", "Nicotine or tobacco use", "Non-smoker", 
+    "Nonrheumatic aortic valve disorder", "Nonrheumatic mitral valve disorder", 
+    "Obesity", "Obstructive reflux uropathy", "OCD", "Odynophagia", 
+    "Oesophagus ulcer", "Oral cancer", "Osteoporosis", "Other cancer", 
+    "Other anaemia", "Other haem anaemia", "Ovary cancer", "Pancreas cancer", 
+    "Pancreatitis", "Parkinsons", "Pericardial effusion", 
+    "Peripheral atrerial disease", "Peripheral neuropathy", "Peritonitis", 
+    "Phlebitis", "Pilonidal", "Plasma proteins", "Plasma viscosity", 
+    "Plasmacell", "Platelets", "Pleural effusion", "Pleural plaque", "Pneumonia", 
+    "Pneumothorax", "Polyposis", "Portal hypertension", "Post term infant", 
+    "Posterior uveitis", "Prematurity", "Prostate cancer", "Pruritus", 
+    "Psoriasis", "Ptosis", "Pulmonary collapse", "Pulmonary fibrosis", 
+    "Pulmonary hypertension", "raynauds", "Reactive anthropathies", 
+    "Respiratory failure", "Retinal detachment", "Retinal vasc occlussion", 
+    "Retinal vein occlusion", "Rheumatic fever", "Rosacea", "Sarcoid", 
+    "Schizophrenia", "Scleritis", "Scoliosis", "Seborrhoeic dermatitis", 
+    "Sepsis newborn", "Sick sinus", "Sickle cell", "Sickle trait", "Sinusitis", 
+    "Sjogrens disease", "Skin ulcer", "Sleep apnoea", "Sleep disturbance", 
+    "Somatoform", "Spina bifida", "Spinal stenosis", "Splenomegaly", 
+    "Spondylolisthesis", "Spondylosis", "Stable angina", "Steatorrhea", 
+    "Stomach cancer", "Subarach", "Subdural haematoma", "Substance misuse", 
+    "Systemic sclerosis", "Testis cancer", "Thalassaemia", "Thrombocytopaenia", 
+    "Thrombophilia", "Thyroid", "Tinnitus", "Trifascicular block", 
+    "Trigeminal neuralgia", "Ulcerative colitis", "Peptic ulcer disease", 
+    "Undescended testis", "Unspecified rare diabetes", "Unstable angina", 
+    "Uppergit cancer", "Urea serum", "Urinary incontinence", "Urolithiasis", 
+    "Urticaria", "Uterine cancer", "Varices portal hypertension", 
+    "Venous lymphatic", "Venous thromboembolism", "Vitb12 deficiency", 
+    "Vitiligo", "Volvulus", "Weight", "Weightloss"
+]
 
 def load_embeddings(output_dir: str):
     emb_path = os.path.join(output_dir, "embeddings.npy")
@@ -391,31 +494,75 @@ def get_filtered_token_ids(dataset, record: dict) -> list:
     ]
 
 
-def run_hdbscan(embeddings: np.ndarray, min_cluster_size: int = 15, min_samples: int = 5):
-    """
-    Runs HDBSCAN on the high-dimensional embedding space.
-    
-    Args:
-        min_cluster_size: The smallest size a group can be to be considered a cluster.
-        min_samples: How 'conservative' the clustering is. Higher = more points labeled as noise.
-    """
+def run_clustering_pipeline(embeddings: np.ndarray, min_cluster_size=20):
+    """Reduces dimensions to 10D for clustering, then runs HDBSCAN."""
+    print(f"Reducing {embeddings.shape[1]}D to 10D for clustering...")
+    # Higher n_neighbors preserves more global structure for clustering
+    reducer_clustering = umap.UMAP(
+        n_components=10, 
+        n_neighbors=30, 
+        min_dist=0.0, 
+        metric='euclidean'
+    )
+    embeddings_low_d = reducer_clustering.fit_transform(embeddings)
+
+    print("Running HDBSCAN on 10D space...")
     clusterer = hdbscan.HDBSCAN(
         min_cluster_size=min_cluster_size,
-        min_samples=min_samples,
-        metric='euclidean', # or 'cosine' if your embeddings are normalized
+        min_samples=5,
         prediction_data=True
     )
+    labels = clusterer.fit_predict(embeddings_low_d)
     
-    labels = clusterer.fit_predict(embeddings)
+    # Also get 2D for the scatter plot
+    print("Generating 2D coordinates for visualization...")
+    reducer_viz = umap.UMAP(n_components=2, n_neighbors=15, min_dist=0.1)
+    z_2d = reducer_viz.fit_transform(embeddings)
     
-    # Calculate some stats
-    n_clusters = len(set(labels)) - (1 if -1 in labels else 0)
-    n_noise = list(labels).count(-1)
-    
-    print(f"HDBSCAN found {n_clusters} clusters and {n_noise} noise points out of {len(labels)} patients.")
-    
-    return labels, clusterer
+    return labels, z_2d
 
+def generate_clinical_reports(df_summary, terms_list, output_dir):
+    """
+    1. Produces a Global Top-20 enrichment report per cluster.
+    2. Produces the specific Term-of-Interest pivot table.
+    """
+    # --- Part 1: Global Signatures ---
+    global_report = []
+    for cid in sorted(df_summary['cluster'].unique()):
+        # Get top 20 most enriched codes that appear at least 5 times
+        top_codes = df_summary[
+            (df_summary['cluster'] == cid) & 
+            (df_summary['count'] > 5)
+        ].sort_values('enrichment_score', ascending=False).head(20)
+        global_report.append(top_codes)
+    
+    pd.concat(global_report).to_csv(os.path.join(output_dir, "global_cluster_signatures_hdbscan.csv"), index=False)
+
+    # --- Part 2: Terms of Interest Matrix ---
+    rows = []
+    for term in list(dict.fromkeys(terms_list)):
+        match = df_summary[df_summary['event_human'] == term].copy()
+        if match.empty: continue
+        
+        # Deduplicate: if "BMI" appears twice in cluster 1, take the one with higher count
+        match = match.sort_values('count', ascending=False).drop_duplicates(subset=['cluster'])
+        rows.append(match)
+
+    if rows:
+        df_filtered = pd.concat(rows)
+        # Create display string
+        df_filtered['display'] = df_filtered.apply(
+            lambda r: f"{r['median_value']:.1f}" if pd.notnull(r['median_value']) and r['median_value'] != 0 
+            else f"x{r['enrichment_score']:.1f}", axis=1
+        )
+        
+        pivot = df_filtered.pivot(index='event_human', columns='cluster', values='display').fillna("-")
+        pivot.to_csv(os.path.join(output_dir, "terms_of_interest_pivot_hdbscan.csv"))
+        
+        # Numeric heatmap data
+        heatmap_data = df_filtered.pivot(index='event_human', columns='cluster', values='enrichment_score').fillna(0)
+        return pivot, heatmap_data
+    return None, None
 # def main():
 #     # 1) Load embeddings and run clustering
 #     embeddings, patient_ids = load_embeddings(OUTPUT_DIR)
@@ -479,20 +626,14 @@ def run_hdbscan(embeddings: np.ndarray, min_cluster_size: int = 15, min_samples:
 #     print("Cluster analysis from embeddings complete.")
 
 def main():
-    # 1) Load dataset FIRST (required for mapping labels later)
-    dataset, subject_to_label, label_to_name, subject_to_record_idx = load_dataset(
-        CONFIG_PATH, SPLIT
-    )
-
-    # 2) Load embeddings
+    # 1) Load data
+    dataset, subject_to_label, label_to_name, subject_to_record_idx = load_dataset(CONFIG_PATH, SPLIT)
     embeddings, patient_ids = load_embeddings(OUTPUT_DIR)
     
-    # 3) Run HDBSCAN
-    # cluster_labels contains -1 for outliers (noise)
-    cluster_labels, clusterer = run_hdbscan(embeddings, min_cluster_size=20)
+    # 2) UMAP -> HDBSCAN Pipeline (Crucial for 1024D speed)
+    cluster_labels, Z = run_clustering_pipeline(embeddings, min_cluster_size=20)
     
-    # 4) Build cluster DataFrame
-    Z = run_umap(embeddings) # Dimensionality reduction for viz
+    # 3) Build DataFrame
     df_clusters = pd.DataFrame({
         "patient_id": patient_ids,
         "cluster": cluster_labels,
@@ -500,34 +641,28 @@ def main():
         "dim2": Z[:, 1],
     })
 
-    # 5) Map labels (Now variables like subject_to_label exist)
+    # 4) Labeling (as before)
     df_clusters["patient_id_str"] = df_clusters["patient_id"].astype(str)
-    df_clusters["label_id"] = df_clusters["patient_id_str"].map(subject_to_label)
-    df_clusters["label_name"] = df_clusters["label_id"].map(label_to_name)
+    df_clusters["case_label"] = df_clusters["patient_id_str"].map(subject_to_label).map(label_to_name).fillna("Control")
 
-    # Binary case vs control logic
-    df_clusters["is_case"] = df_clusters["label_id"].fillna(0).astype(int) > 0
-    df_clusters["case_label"] = np.where(df_clusters["is_case"], "Case", "Control")
-
-    # 6) Save clusters table
-    os.makedirs(OUTPUT_DIR, exist_ok=True)
-    df_clusters.to_csv(
-        os.path.join(OUTPUT_DIR, "patient_clusters_from_embeddings.csv"), index=False
-    )
-
-    # 7) Analysis & Visualization
+    # 5) Analysis
     calculate_cluster_composition(df_clusters, OUTPUT_DIR)
-
+    
+    # This generates the cluster_x_analysis.csv files
     analyse_differential_features(
-        dataset=dataset,
-        df_clusters=df_clusters,
-        subject_to_record_idx=subject_to_record_idx,
-        output_dir=OUTPUT_DIR
+        dataset, df_clusters, subject_to_record_idx, OUTPUT_DIR
     )
 
-    visualize_clusters(df_clusters, OUTPUT_DIR)
+    # 6) Generate the Final Tables (Global + Your Terms)
+    df_summary = pd.read_csv(os.path.join(OUTPUT_DIR, "differential_cluster_analysis.csv"))
+    pivot, heatmap = generate_clinical_reports(df_summary, my_terms, OUTPUT_DIR)
 
-    print("Cluster analysis from embeddings complete.")
+    # 7) Final Viz
+    visualize_clusters(df_clusters, OUTPUT_DIR)
+    if heatmap is not None:
+        plot_clinical_heatmap(heatmap, OUTPUT_DIR)
+
+    print("Pipeline complete. Check OUTPUT_DIR for 'global_cluster_signatures.csv' and 'terms_of_interest_pivot.csv'.")
 
 if __name__ == "__main__":
     main()
