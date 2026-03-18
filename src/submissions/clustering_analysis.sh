@@ -23,7 +23,7 @@ cd "${BASE_DIR}"
 echo "Starting experiment from directory: $(pwd)"
 export PYTHONPATH="${BASE_DIR}:${PYTHONPATH}"
 
-python -m src.analysis.cluster_from_embeddings
+python -m src.analysis.cluster_hdbscan_search
 
 echo "Pipeline finished."
 deactivate

@@ -616,6 +616,80 @@ def plot_clinical_heatmap(heatmap_data, output_dir):
     plt.title("Clinical Fingerprint: Enrichment by Cluster")
     plt.tight_layout()
     plt.savefig(os.path.join(output_dir, "clinical_fingerprint_heatmap.png"), dpi=300)
+
+def calculate_purity_score(df_clusters):
+    """
+    Scores the clustering based on how 'pure' the Case/Control split is.
+    1.0 = Perfect separation (all clusters are 0% or 100% cases).
+    0.0 = Random mix.
+    """
+    # Exclude noise for the score, but penalize if noise is too high
+    df_clean = df_clusters[df_clusters['cluster'] != -1]
+    if df_clean.empty or len(df_clean['cluster'].unique()) < 2:
+        return 0
+    
+    # Calculate % Cases per cluster
+    purity_per_cluster = []
+    for cid in df_clean['cluster'].unique():
+        subset = df_clean[df_clean['cluster'] == cid]
+        case_rate = subset['is_case'].mean() # 0 to 1
+        
+        # We want case_rate to be near 0 or 1. 
+        # abs(rate - 0.5) * 2 gives 1.0 for pure clusters and 0.0 for 50/50 mix.
+        purity = abs(case_rate - 0.5) * 2
+        purity_per_cluster.append(purity)
+    
+    avg_purity = np.mean(purity_per_cluster)
+    
+    # Penalty for too much noise (e.g., if more than 50% is noise)
+    noise_ratio = (df_clusters['cluster'] == -1).mean()
+    noise_penalty = 1 - noise_ratio
+    
+    # Penalty for too many/too few clusters
+    n_clusters = len(df_clean['cluster'].unique())
+    if n_clusters < 5 or n_clusters > 30:
+        cluster_penalty = 0.5
+    else:
+        cluster_penalty = 1.0
+
+    return avg_purity * noise_penalty * cluster_penalty
+
+def run_hyperparameter_search(embeddings, labels, patient_ids):
+    results = []
+    
+    # Define search space
+    n_neighbors_list = [15, 30, 50, 100]
+    min_size_list = [20, 50, 80, 120]
+    min_samples_list = [1, 5, 10, 20]
+    
+    for nn in n_neighbors_list:
+        # Step 1: Pre-reduce with UMAP
+        reducer = umap.UMAP(n_components=10, n_neighbors=nn, min_dist=0.0, random_state=42)
+        emb_10d = reducer.fit_transform(embeddings)
+        
+        for msiz in min_size_list:
+            for msamp in min_samples_list:
+                clusterer = hdbscan.HDBSCAN(min_cluster_size=msiz, min_samples=msamp)
+                cluster_labels = clusterer.fit_predict(emb_10d)
+                
+                temp_df = pd.DataFrame({
+                    "cluster": cluster_labels,
+                    "is_case": labels # Pass your binary 0/1 labels here
+                })
+                
+                score = calculate_purity_score(temp_df)
+                n_clusters = len(set(cluster_labels)) - (1 if -1 in cluster_labels else 0)
+                
+                results.append({
+                    'n_neighbors': nn, 'min_size': msiz, 'min_samples': msamp,
+                    'score': score, 'n_clusters': n_clusters, 
+                    'noise_pct': (cluster_labels == -1).mean() * 100
+                })
+                print(f"Tested: NN={nn}, Size={msiz}, Samp={msamp} -> Score: {score:.3f}, Clusters: {n_clusters}")
+
+    return pd.DataFrame(results).sort_values('score', ascending=False)
+
+
 # def main():
 #     # 1) Load embeddings and run clustering
 #     embeddings, patient_ids = load_embeddings(OUTPUT_DIR)
