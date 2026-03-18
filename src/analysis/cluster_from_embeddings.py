@@ -359,21 +359,25 @@ def analyse_events_and_measurements(
         )
 
 def calculate_cluster_composition(df_clusters: pd.DataFrame, output_dir: str):
-    """Refined to ensure any non-control is treated as a Case."""
-    # Ensure binary labeling
-    df_clusters['binary_label'] = np.where(df_clusters['case_label'] == 'Control', 'Control', 'Case')
+    # CRITICAL FIX: Any label that is NOT 'Control' (0) is a Case.
+    df_clusters['binary_label'] = df_clusters['case_label'].apply(
+        lambda x: 'Control' if str(x).lower() == 'control' else 'Case'
+    )
     
+    # Create the pivot table
     composition = df_clusters.groupby('cluster')['binary_label'].value_counts().unstack(fill_value=0)
-    composition['Total'] = composition.sum(axis=1)
     
-    # Calculate % based on the new binary Case column
-    if 'Case' in composition.columns:
-        composition['Case_%'] = (composition['Case'] / composition['Total'] * 100).round(2)
-    else:
-        composition['Case_%'] = 0.0
+    # Ensure columns exist even if one cluster has 0 cases or 0 controls
+    for col in ['Case', 'Control']:
+        if col not in composition.columns:
+            composition[col] = 0
+            
+    composition['Total'] = composition['Case'] + composition['Control']
+    composition['Case_%'] = (composition['Case'] / composition['Total'] * 100).round(2)
     
-    print("\n--- Refined Cluster Composition ---")
-    print(composition)
+    print("\n--- Optimized Cluster Composition ---")
+    print(composition.sort_values('Total', ascending=False))
+    
     composition.to_csv(os.path.join(output_dir, "cluster_case_control_composition.csv"))
     return composition
 
@@ -501,29 +505,24 @@ def get_filtered_token_ids(dataset, record: dict) -> list:
     ]
 
 
-def run_clustering_pipeline(embeddings: np.ndarray, min_cluster_size=15):
-    """Reduces to 10D for clustering, then HDBSCAN with strict parameters."""
-    print(f"Step 1: Reducing {embeddings.shape[1]}D to 10D for clustering...")
-    # Use higher n_neighbors for 10D to keep global structure
-    reducer_10d = umap.UMAP(n_components=10, n_neighbors=50, min_dist=0.0, metric='euclidean', random_state=42)
+def run_clustering_pipeline(embeddings: np.ndarray, min_cluster_size=50):
+    print(f"Reducing {embeddings.shape[1]}D to 10D...")
+    reducer_10d = umap.UMAP(n_components=10, n_neighbors=50, min_dist=0.0, random_state=42)
     embeddings_10d = reducer_10d.fit_transform(embeddings)
 
-    print("Step 2: Running HDBSCAN (Stricter params for more specific groups)...")
-    # min_samples=1 makes the algorithm less likely to label things as 'noise'
+    print("Running HDBSCAN (Optimizing for stable clusters)...")
     clusterer = hdbscan.HDBSCAN(
-        min_cluster_size=min_cluster_size,
-        min_samples=1, 
-        cluster_selection_method='leaf', # 'leaf' finds smaller, more specific clusters
+        min_cluster_size=min_cluster_size, # Increased to merge micro-clusters
+        min_samples=5,                    # Increased to filter out more noise
+        cluster_selection_method='eom',    # 'eom' finds larger, more stable groups
         prediction_data=True
     )
     labels = clusterer.fit_predict(embeddings_10d)
     
-    print(f"Step 3: Generating 2D UMAP for visualization...")
+    # 2D for the plot
     reducer_2d = umap.UMAP(n_components=2, n_neighbors=15, min_dist=0.1, random_state=42)
     z_2d = reducer_2d.fit_transform(embeddings)
     
-    n_clusters = len(set(labels)) - (1 if -1 in labels else 0)
-    print(f"Found {n_clusters} clusters (and {list(labels).count(-1)} noise points).")
     return labels, z_2d
 
 def generate_fingerprint_and_signatures(df_summary, terms_list, output_dir):
