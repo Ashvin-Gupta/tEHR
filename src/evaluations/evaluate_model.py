@@ -13,12 +13,12 @@ from typing import Dict, Any
 from transformers import Trainer, TrainingArguments
 from unsloth import FastLanguageModel
 
-from src.training.utils import seed_all
-from src.baselines.utils import load_baseline_config, load_datasets
+from src.training.training_utils import seed_all
+from src.data.dataset_factory import get_dataset
 from src.models.llm_classifier import LLMClassifier
 from src.data.classification_collator import ClassificationCollator
 from src.training.metrics import compute_classification_metrics
-from src.evaluations.baseline_metrics import compute_baseline_metrics, plot_all_curves, save_results, print_results
+from src.evaluations.evaluations import compute_baseline_metrics, plot_all_curves, save_results, print_results
 from src.training.model_loader import load_classification_model, load_pretrained_lora_model
 
 
@@ -292,39 +292,36 @@ class ModelEvaluator:
         self.wrap_with_classifier()
         
         # Load datasets
-        datasets = load_datasets(
-            self.data_config,
-            splits=['tuning', 'held_out'],  # Only need validation and test
-            format='text',
-            tokenizer=self.tokenizer
-        )
-        
+        dataset_name = self.data_config.get('dataset', 'CPRD')
+        data_config = {**self.data_config, 'format': 'text'}
+        tuning_dataset = get_dataset(dataset_name, data_config, 'tuning')
+        held_out_dataset = get_dataset(dataset_name, data_config, 'held_out')
+
         # Create collator
         collator = ClassificationCollator(
             tokenizer=self.tokenizer,
             max_length=self.data_config.get('max_length', 12000),
         )
-        
-        # Create trainer
-        self.create_trainer(datasets['held_out'], datasets['held_out'], collator)
-        self.create_trainer(datasets['tuning'], datasets['held_out'], collator)
-        
+
+        # Create trainer (uses held_out as eval_dataset for Trainer compatibility)
+        self.create_trainer(tuning_dataset, held_out_dataset, collator)
+
         # Evaluate
-        # val_metrics = self.evaluate(datasets['tuning'], 'validation')
-        test_metrics = self.evaluate(datasets['held_out'], 'test')
-        
+        val_metrics = self.evaluate(tuning_dataset, 'validation')
+        test_metrics = self.evaluate(held_out_dataset, 'test')
+
         # Save summary
         summary = {
             'model_checkpoint': self.model_checkpoint,
             'validation': val_metrics,
-            'test': test_metrics
+            'test': test_metrics,
         }
         save_results(summary, self.output_dir, 'summary.json')
-        
+
         print("\n" + "=" * 80)
         print("Evaluation Complete!")
         print("=" * 80)
-        
+
         return val_metrics, test_metrics
 
 
@@ -347,7 +344,8 @@ def main(config_path: str, model_checkpoint: str):
     print(f"\nLoading configuration from: {config_path}")
     print(f"Loading model from: {model_checkpoint}")
     
-    config = load_baseline_config(config_path)
+    with open(config_path) as f:
+        config = yaml.safe_load(f)
     
     print('Loaded configuration:')
     pprint.pprint(config)
