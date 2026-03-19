@@ -16,7 +16,6 @@ BASE_DIR="/data/home/qc25022/TextCancEHR2"
 export WANDB_API_KEY="REDACTED"
 
 # --- Environment Setup ---
-module load intel intel-mpi python
 source /data/home/qc25022/CancEHR-Training/venv/bin/activate
 
 # --- Execute from Project Root ---
@@ -28,13 +27,9 @@ export PYTHONPATH="${BASE_DIR}:${PYTHONPATH}"
 
 python -m src.analysis.cluster_patients \
   --config_filepath src/configs/classification_config.yaml \
-  --model_checkpoint /gpfs/scratch/qc25022/pancreas/experiments/Results/lora-1-month-logistic-refactored-new-time-mistral-7B/final_model \
+  --model_checkpoint /gpfs/scratch/qc25022/pancreas/experiments/Results/lora-12-month-logistic-refactored-new-time-mistral-7B/final_model \
   --split held_out \
-  --output_dir /gpfs/scratch/qc25022/pancreas/experiments/Results/lora-1-month-logistic-refactored-new-time-mistral-7B/patient_clustering_heldout \
+  --output_dir /gpfs/scratch/qc25022/pancreas/experiments/Results/lora-12-month-logistic-refactored-new-time-mistral-7B/patient_clustering_heldout \
   --batch_size 4 \
-  --dim_reducer umap \
-  --cluster_space original \
-  --k 5 \
-  --plot
 echo "Pipeline finished."
 deactivate
