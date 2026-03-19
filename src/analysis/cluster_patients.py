@@ -20,7 +20,7 @@ import numpy as np
 import torch
 from torch.utils.data import DataLoader
 
-from src.pipelines.evaluate_model import ModelEvaluator
+from src.evaluations.evaluate_model import ModelEvaluator
 from src.data.dataset_factory import get_dataset
 from src.data.classification_collator import ClassificationCollator
 
