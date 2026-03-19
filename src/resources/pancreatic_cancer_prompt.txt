@@ -10,4 +10,4 @@ Only output 0 or 1, this is extremely important!!
 Patient's medical history:
 {ehr_text}
 
-Answer:
+Answer (only 0 or 1):

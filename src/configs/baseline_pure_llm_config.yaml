@@ -17,14 +17,14 @@ model:
 inference:
   batch_size: 4
 
-output_dir: "/gpfs/scratch/qc25022/pancreas/experiments/Results/baselines/pure_llm-1months"
+output_dir: "/gpfs/scratch/qc25022/pancreas/experiments/Results/baselines/pure_llm-3months"
 overwrite_output_dir: true
 
 prompt:
   filepath: "src/resources/pancreatic_cancer_prompt.txt"
 
 data:
-  cutoff_months: 1
+  cutoff_months: 3
   data_dir: '/gpfs/scratch/qc25022/pancreas/tokenised_data_pancreas_MEDS_new_time/cprd_upgi'
   vocab_filepath: "/gpfs/scratch/qc25022/pancreas/tokenised_data_pancreas_MEDS_new_time/cprd_upgi/vocab.csv"
   labels_filepath: "/data/home/qc25022/TextCancEHR2/src/resources/subject_information.csv"

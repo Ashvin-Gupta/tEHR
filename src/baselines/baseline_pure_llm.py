@@ -205,7 +205,7 @@ class PureLLMBaseline(BaseBaseline):
                 if prompt:
                     print(f"[DEBUG] Prompt (first 300 chars): {prompt[:300]}...")
         else:
-            print(f"Warning: Could not extract probability from: {output_text[:100]}...")
+            print(f"Warning: Could not extract probability from: {output_text[:1000]}...")
     
     def predict_batch(self, texts: List[str], batch_size: int = 4) -> np.ndarray:
         """
