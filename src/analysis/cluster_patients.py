@@ -97,12 +97,9 @@ class ClusterCollator:
         return collated
 
 
-def resolve_device(arg_device: str | None) -> torch.device:
-    if arg_device is not None:
-        return torch.device(arg_device)
-    if torch.cuda.is_available():
-        return torch.device("cuda")
-    return torch.device("cpu")
+def resolve_device() -> torch.device:
+    return torch.device("cuda")
+
 
 
 def load_model_and_tokenizer(
@@ -221,7 +218,7 @@ def main():
 
     os.makedirs(args.output_dir, exist_ok=True)
 
-    device = resolve_device(args.device)
+    device = resolve_device()
     print(f"Using device: {device}")
 
     print("Loading model and tokenizer...")
