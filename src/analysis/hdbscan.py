@@ -284,13 +284,20 @@ def generate_journal_reports(df_summary: pd.DataFrame, output_dir: str):
             cat_rows.append(match)
             
     if cat_rows:
-        df_cat = pd.concat(cat_rows)
+        df_cat = pd.concat(cat_rows).drop_duplicates(subset=["event_human", "cluster"])
         df_cat["display"] = df_cat["enrichment_score"].apply(lambda x: f"x{x:.1f}")
-        cat_pivot = df_cat.pivot(index="event_human", columns="cluster", values="display").fillna("-")
-        cat_pivot.to_csv(os.path.join(output_dir, "table_categorical_enrichment.csv"))
-        
+
         heatmap_cat = df_cat.pivot(index="event_human", columns="cluster", values="enrichment_score").fillna(0)
-    else: heatmap_cat = None
+        # Drop noise cluster before ordering
+        if -1 in heatmap_cat.columns:
+            heatmap_cat = heatmap_cat.drop(columns=[-1])
+        row_order = cluster_priority_row_order(heatmap_cat)
+        heatmap_cat = heatmap_cat.loc[row_order]
+
+        cat_pivot = df_cat.pivot(index="event_human", columns="cluster", values="display").fillna("-").loc[row_order]
+        cat_pivot.to_csv(os.path.join(output_dir, "table_categorical_enrichment.csv"))
+    else:
+        heatmap_cat = None
 
     # 2. Continuous (Labs) - Report Medians & IQR
     lab_rows = []
@@ -301,16 +308,62 @@ def generate_journal_reports(df_summary: pd.DataFrame, output_dir: str):
             lab_rows.append(match)
             
     if lab_rows:
-        df_lab = pd.concat(lab_rows)
-        df_lab["display"] = df_lab.apply(lambda r: f"{r['median_value']:.1f} [{r['q25_value']:.1f}-{r['q75_value']:.1f}]" if pd.notnull(r['median_value']) else "-", axis=1)
-        lab_pivot = df_lab.pivot(index="event_human", columns="cluster", values="display").fillna("-")
-        lab_pivot.to_csv(os.path.join(output_dir, "table_continuous_labs_median_iqr.csv"))
-        
-        # Raw median pivot for Z-score plotting
+        df_lab = pd.concat(lab_rows).drop_duplicates(subset=["event_human", "cluster"])
+        df_lab["display"] = df_lab.apply(
+            lambda r: f"{r['median_value']:.1f} [{r['q25_value']:.1f}-{r['q75_value']:.1f}]"
+            if pd.notnull(r['median_value']) else "-", axis=1
+        )
+
+        # Raw median pivot for Z-score plotting; order rows by cluster priority
         heatmap_lab = df_lab.pivot(index="event_human", columns="cluster", values="median_value")
-    else: heatmap_lab = None
+        if -1 in heatmap_lab.columns:
+            heatmap_lab = heatmap_lab.drop(columns=[-1])
+        heatmap_lab = heatmap_lab.dropna(how='all')
+        if not heatmap_lab.empty:
+            # Use filled version only for ordering, keep NaNs for plotting
+            filled = heatmap_lab.fillna(0)
+            row_order_lab = cluster_priority_row_order(filled)
+            heatmap_lab = heatmap_lab.loc[row_order_lab]
+
+        lab_pivot = df_lab.pivot(index="event_human", columns="cluster", values="display").fillna("-")
+        if -1 in lab_pivot.columns:
+            lab_pivot = lab_pivot.drop(columns=[-1])
+        lab_pivot.to_csv(os.path.join(output_dir, "table_continuous_labs_median_iqr.csv"))
+    else:
+        heatmap_lab = None
 
     return heatmap_cat, heatmap_lab
+
+# ---------------------------------------------------------------------------
+# Row ordering helper
+# ---------------------------------------------------------------------------
+def cluster_priority_row_order(heatmap_data: pd.DataFrame) -> list:
+    """
+    Order rows cluster-by-cluster.
+
+    For each cluster (ascending ID order), find the rows where that cluster
+    has the highest enrichment value and they haven't already been assigned
+    to a prior cluster.  Within each cluster's group, rows are sorted by
+    that cluster's value descending.  Any rows not dominated by any single
+    cluster are appended at the end.
+    """
+    ordered = []
+    seen = set()
+
+    for col in sorted(heatmap_data.columns):
+        remaining_idx = [r for r in heatmap_data.index if r not in seen]
+        if not remaining_idx:
+            break
+        remaining = heatmap_data.loc[remaining_idx]
+        dominated = remaining[remaining.idxmax(axis=1) == col]
+        dominated = dominated.sort_values(col, ascending=False)
+        ordered.extend(dominated.index.tolist())
+        seen.update(dominated.index.tolist())
+
+    # Any rows not dominated by any cluster (all-zero or tied)
+    ordered.extend([r for r in heatmap_data.index if r not in seen])
+    return ordered
+
 
 # ---------------------------------------------------------------------------
 # Journal-Ready Visualizations
@@ -366,22 +419,27 @@ def plot_stacked_composition(df_clusters: pd.DataFrame, output_dir: str):
 def plot_lab_zscore_heatmap(heatmap_lab: pd.DataFrame, output_dir: str):
     """Row-standardized heatmap of median lab values."""
     if heatmap_lab is None or heatmap_lab.empty: return
-    if -1 in heatmap_lab.columns: heatmap_lab = heatmap_lab.drop(columns=[-1])
-    
-    # Drop rows with all NaNs
+    if -1 in heatmap_lab.columns:
+        heatmap_lab = heatmap_lab.drop(columns=[-1])
+
     heatmap_lab = heatmap_lab.dropna(how='all')
-    
+    if heatmap_lab.empty: return
+
+    # Rename columns to "Cluster N" for readability
+    heatmap_lab = heatmap_lab.rename(columns={c: f"Cluster {c}" for c in heatmap_lab.columns})
+
     # Z-Score scale by row (Lab type)
     scaler = StandardScaler()
     z_scored_data = scaler.fit_transform(heatmap_lab.T).T
     z_scored_df = pd.DataFrame(z_scored_data, index=heatmap_lab.index, columns=heatmap_lab.columns)
 
     plt.figure(figsize=(8, max(6, len(z_scored_df) * 0.3)))
-    sns.heatmap(z_scored_df, cmap="coolwarm", center=0, annot=heatmap_lab, fmt=".1f", 
+    sns.heatmap(z_scored_df, cmap="coolwarm", center=0, annot=heatmap_lab, fmt=".1f",
                 cbar_kws={'label': 'Row Z-Score (Std Dev from Mean)'}, annot_kws={"size": 9})
     plt.title("Lab Value Signatures (Median)", weight='bold')
     plt.ylabel("")
-    plt.xlabel("Cluster ID")
+    plt.xlabel("")
+    plt.xticks(rotation=30, ha='right')
     plt.tight_layout()
     plt.savefig(os.path.join(output_dir, "fig3_lab_zscore_heatmap.png"), dpi=300)
     plt.close()
@@ -389,16 +447,23 @@ def plot_lab_zscore_heatmap(heatmap_lab: pd.DataFrame, output_dir: str):
 def plot_clinical_heatmap(heatmap_cat: pd.DataFrame, output_dir: str):
     """Heatmap of Categorical Enrichment Scores."""
     if heatmap_cat is None or heatmap_cat.empty: return
-    if -1 in heatmap_cat.columns: heatmap_cat = heatmap_cat.drop(columns=[-1])
-    
+    if -1 in heatmap_cat.columns:
+        heatmap_cat = heatmap_cat.drop(columns=[-1])
+
     # Filter to only show highly enriched terms to save space in the paper
     top_heatmap = heatmap_cat[heatmap_cat.max(axis=1) >= 1.5]
+    if top_heatmap.empty: return
+
+    # Rename columns to "Cluster N" for readability
+    top_heatmap = top_heatmap.rename(columns={c: f"Cluster {c}" for c in top_heatmap.columns})
 
     plt.figure(figsize=(8, max(8, len(top_heatmap) * 0.25)))
-    sns.heatmap(top_heatmap, annot=True, fmt=".1f", cmap="YlOrRd", cbar_kws={'label': 'Enrichment Score (x-fold)'})
+    sns.heatmap(top_heatmap, annot=True, fmt=".1f", cmap="YlOrRd",
+                cbar_kws={'label': 'Enrichment Score (x-fold)'})
     plt.title("Clinical Phenotypes (Enrichment > 1.5x)", weight='bold')
     plt.ylabel("")
-    plt.xlabel("Cluster ID")
+    plt.xlabel("")
+    plt.xticks(rotation=30, ha='right')
     plt.tight_layout()
     plt.savefig(os.path.join(output_dir, "fig4_clinical_fingerprint_heatmap.png"), dpi=300)
     plt.close()
