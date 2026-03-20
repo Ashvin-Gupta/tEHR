@@ -451,7 +451,7 @@ def plot_clinical_heatmap(heatmap_cat: pd.DataFrame, output_dir: str):
         heatmap_cat = heatmap_cat.drop(columns=[-1])
 
     # Filter to only show highly enriched terms to save space in the paper
-    top_heatmap = heatmap_cat[heatmap_cat.max(axis=1) >= 1.5]
+    top_heatmap = heatmap_cat[heatmap_cat.max(axis=1) >= 2]
     if top_heatmap.empty: return
 
     # Rename columns to "Cluster N" for readability
