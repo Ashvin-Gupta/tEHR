@@ -41,7 +41,7 @@ EMBEDDINGS_DIR = (
 )
 OUTPUT_DIR = EMBEDDINGS_DIR + "/hdbscan_search"
 os.makedirs(OUTPUT_DIR, exist_ok=True)
-N_TRIALS = 2
+N_TRIALS = 30
 RANDOM_SEED = 42
 
 MY_TERMS = [

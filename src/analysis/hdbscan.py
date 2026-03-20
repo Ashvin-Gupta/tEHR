@@ -24,7 +24,7 @@ from src.data.dataset_factory import get_dataset
 # Configuration & Hyperparameters (Fixed for Reproducibility)
 # ---------------------------------------------------------------------------
 CONFIG_PATH = "src/configs/classification_config.yaml"
-EMBEDDINGS_DIR = "/gpfs/scratch/qc25022/pancreas/experiments/Results/lora-1-month-logistic-refactored-new-time-mistral-7B/patient_clustering_heldout"
+EMBEDDINGS_DIR = "/gpfs/scratch/qc25022/pancreas/experiments/Results/lora-12-month-logistic-refactored-new-time-mistral-7B/patient_clustering_heldout"
 OUTPUT_DIR = EMBEDDINGS_DIR + "/journal_clustering_output"
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
@@ -451,7 +451,7 @@ def plot_clinical_heatmap(heatmap_cat: pd.DataFrame, output_dir: str):
         heatmap_cat = heatmap_cat.drop(columns=[-1])
 
     # Filter to only show highly enriched terms to save space in the paper
-    top_heatmap = heatmap_cat[heatmap_cat.max(axis=1) >= 2]
+    top_heatmap = heatmap_cat[heatmap_cat.max(axis=1) >= 1.5]
     if top_heatmap.empty: return
 
     # Rename columns to "Cluster N" for readability
