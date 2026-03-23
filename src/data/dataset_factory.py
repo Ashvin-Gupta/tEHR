@@ -6,6 +6,7 @@ from torch.utils.data import Dataset
 
 from src.data.cprd_dataset import CPRDDataset
 from src.data.mimic_dataset import MIMICDataset
+from src.data.ehrshot_dataset import EHRSHOTDataset
 
 def get_dataset(
     dataset_name: str,
@@ -45,6 +46,11 @@ def get_dataset(
             split = split,
             label_column = data_config.get('label_column', 'label'),
             task = data_config.get('task', 'pretrain'),
+        )
+    elif dataset_name == 'EHRSHOT':
+        return EHRSHOTDataset(
+            csv_filepath = data_config['csv_filepath'],
+            split = split,
         )
     else:
         raise ValueError(f"Unsupported dataset type '{dataset_name}' in data_config.")

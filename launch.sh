@@ -6,7 +6,7 @@ conda activate meds_train_clean
 # 2. Pathing and Auth
 export PYTHONPATH=$PYTHONPATH:$(pwd)
 export WANDB_API_KEY="REDACTED"
-export CUDA_VISIBLE_DEVICES=2
+export CUDA_VISIBLE_DEVICES=0,1
 # export TORCH_DISTRIBUTED_DEBUG=INFO
 # export NCCL_P2P_DISABLE=1
 # export NCCL_IB_DISABLE=1
@@ -65,11 +65,11 @@ echo "🚀 Starting Pretraining on GPUs..."
 # python -m src.pipelines.run_baseline --baseline pure_llm --config_filepath /home/ag619/TextCancEHR2/src/configs/baseline_pure_llm_config.yaml
   
 # # MIMIC Trajectory Generation
-python -m src.inference.trajectory_generator \
-  --config src/configs/generate_trajectories.yaml \
-  --split tuning \
-  --benchmark \
-  2>&1 | tee -a trajectory_generation.log
+# python -m src.inference.trajectory_generator \
+#   --config src/configs/generate_trajectories.yaml \
+#   --split tuning \
+#   --benchmark \
+#   2>&1 | tee -a trajectory_generation.log
 
 # CPRD Baseline ClinicalBERT
 # python -m src.pipelines.run_baseline --baseline clinicalbert --config_filepath src/configs/baseline_clinicalbert_config.yaml 2>&1 | tee -a logs/cprd_clinicalbert.log
@@ -91,3 +91,15 @@ python -m src.inference.trajectory_generator \
 
 # CPRD Baseline Qwen3 Embedding
 # python -m src.pipelines.run_baseline --baseline qwen3_embedding --config_filepath src/configs/baseline_qwen3_embedding_config.yaml 2>&1 | tee -a logs/cprd_qwen3_embedding.log
+
+# EHRSHOT Classifier
+# python -m src.evaluations.evaluate_model \
+#   --config_filepath src/configs/ehrshot_evaluate_config.yaml \
+#   --model_checkpoint /data/private/ag619/experiments/Results/mimic-ICU-mortality-classification/seed_405745800/checkpoint-63
+
+torchrun \
+  --standalone \
+  --nproc_per_node=2 \
+  src/evaluations/evaluate_model.py \
+  --config_filepath src/configs/ehrshot_evaluate_config.yaml \
+  --model_checkpoint /data/private/ag619/experiments/Results/mimic-ICU-mortality-classification/seed_405745800/checkpoint-63

@@ -294,6 +294,36 @@ class ModelEvaluator:
         # Load datasets
         dataset_name = self.data_config.get('dataset', 'CPRD')
         data_config = {**self.data_config, 'format': 'text'}
+
+        # External validation mode: evaluate on the entire CSV as a single
+        # test set, with no training/validation split.
+        external_validation = self.data_config.get('external_validation', False)
+
+        if external_validation:
+            all_dataset = get_dataset(dataset_name, data_config, None)
+            print(f"  [External validation] Loaded {len(all_dataset)} samples (all splits combined)")
+
+            collator = ClassificationCollator(
+                tokenizer=self.tokenizer,
+                max_length=self.data_config.get('max_length', 12000),
+            )
+            self.create_trainer(all_dataset, all_dataset, collator)
+
+            test_metrics = self.evaluate(all_dataset, 'external_test')
+
+            summary = {
+                'model_checkpoint': self.model_checkpoint,
+                'external_test': test_metrics,
+            }
+            save_results(summary, self.output_dir, 'summary.json')
+
+            print("\n" + "=" * 80)
+            print("Evaluation Complete!")
+            print("=" * 80)
+
+            return None, test_metrics
+
+        # Standard mode: separate validation and held-out test sets.
         tuning_dataset = get_dataset(dataset_name, data_config, 'tuning')
         held_out_dataset = get_dataset(dataset_name, data_config, 'held_out')
 
