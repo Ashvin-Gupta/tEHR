@@ -1,6 +1,6 @@
 #!/bin/bash
 #SBATCH -n 4
-#SBATCH -t 1:0:0
+#SBATCH -t 24:0:0
 #SBATCH --mem-per-cpu=1G
 #SBATCH -o /data/home/qc25022/TextCancEHR2/HPC_Base/logo/%x.o%j
 #SBATCH -e /data/home/qc25022/TextCancEHR2/HPC_Base/loge/%x.e%j
