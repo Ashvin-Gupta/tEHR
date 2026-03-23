@@ -12,6 +12,7 @@ BASELINE_REGISTRY = {
     "xgboost_bow":           "src.baselines.baseline_xgboost_bow.XGBoostBOWBaseline",
     "encoder_transformer":   "src.baselines.baseline_encoder_transformer.EncoderTransformerBaseline",
     "qwen3_embedding":       "src.baselines.baseline_qwen3_embedding.Qwen3EmbeddingBaseline",
+    "qwen_llm_linear":       "src.baselines.baseline_qwen_llm_linear.QwenLLMLinearBaseline",
 }
 
 def load_class(dotted_path: str):
