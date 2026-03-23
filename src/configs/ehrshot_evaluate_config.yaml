@@ -8,8 +8,8 @@ name: "ehrshot_evaluation"
 # The classifier head weights are loaded separately from model_checkpoint
 # (passed on the command line).
 model:
-  pretrained_checkpoint: "/data/private/ag619/experiments/Pretrain-Mistral-7B-Mimic/checkpoint-4000"  # EDIT ME
-  max_length: 4096
+  pretrained_checkpoint: "/gpfs/scratch/qc25022/pancreas/experiments/Pretrain-Mistral-7B-Pancreas-new-time/checkpoint-6000"  # EDIT ME
+  max_length: 12000
   hidden_size: 4096        # Must match the hidden size of your base LLM
   num_labels: 2
   head_type: "linear"
@@ -20,7 +20,7 @@ model:
 # Training (only the fields used during evaluation)
 # ---------------------------------------------------------------------------
 training:
-  output_dir: "/data/private/ag619/experiments/Results/ehrshot-ICU-mortality-classification"  # EDIT ME
+  output_dir: "/gpfs/scratch/qc25022/pancreas/experiments/Results/ehrshot-pancreas-classification"  # EDIT ME
   eval_batch_size: 4
   fp16: false
   bf16: true
@@ -33,7 +33,7 @@ training:
 # ---------------------------------------------------------------------------
 data:
   dataset: "EHRSHOT"
-  csv_filepath: "/home/ag619/EHRSHOT_massaging/new_pancan_formatted.csv"  # EDIT ME if needed
-  max_length: 4096
+  csv_filepath: "/home/ashvingupta/Documents/PhD/Projects/TextCacnEHR2/src/resources/new_pancan_formatted.csv"  # EDIT ME if needed
+  # max_length: 4096
   # Load every row in the CSV as a single external test set (no train/val split).
   external_validation: true
