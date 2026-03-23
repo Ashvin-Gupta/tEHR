@@ -87,40 +87,33 @@ def reduce_umap(
 MAX_NOISE_FRACTION = 0.15   # configs with more noise than this are rejected outright
 
 
-def calculate_purity_score(cluster_labels: np.ndarray, binary_labels: np.ndarray) -> float:
+def calculate_validity_score(clusterer, cluster_labels: np.ndarray) -> float:
     """
-    Score how well clusters separate cases from controls.
-
-    - Hard cap: any configuration where more than MAX_NOISE_FRACTION of patients
-      are labelled as noise (-1) scores 0 immediately.
-    - avg_purity    : mean of |case_rate - 0.5| * 2 per cluster (1 = pure, 0 = 50/50).
-    - noise_penalty : (1 - noise_fraction)^2 — quadratic, so high noise is penalised
-      much more steeply than a linear term would allow.
-    - cluster_penalty: 0.5 if cluster count is outside [5, 30], else 1.0.
-
-    Final score = avg_purity * noise_penalty * cluster_penalty.
+    Score clusters based on intrinsic density and separation (DBCV),
+    while still penalizing massive noise or weird cluster counts.
     """
     noise_ratio = float((cluster_labels == -1).mean())
-    if noise_ratio > MAX_NOISE_FRACTION:
+    if noise_ratio > 0.30:  # Be a bit more lenient with noise at 12 months
         return 0.0
 
     mask = cluster_labels != -1
     unique_clusters = np.unique(cluster_labels[mask])
 
-    if len(unique_clusters) < 2:
+    if len(unique_clusters) < 3: # We want at least a few distinct phenotypes
         return 0.0
 
-    purity_per_cluster = []
-    for cid in unique_clusters:
-        idx = np.where(cluster_labels == cid)[0]
-        case_rate = binary_labels[idx].mean()
-        purity_per_cluster.append(abs(case_rate - 0.5) * 2)
+    # 1. HDBSCAN's native relative validity score (usually between 0 and 1)
+    # Higher means clusters are dense and well-separated.
+    try:
+        validity = clusterer.relative_validity_
+    except ValueError:
+        return 0.0 # Catches edge cases where validity can't be computed
 
-    avg_purity = float(np.mean(purity_per_cluster))
+    # 2. Apply the same common-sense penalties
     noise_penalty = (1.0 - noise_ratio) ** 2
     cluster_penalty = 1.0 if 5 <= len(unique_clusters) <= 30 else 0.5
 
-    return avg_purity * noise_penalty * cluster_penalty
+    return validity * noise_penalty * cluster_penalty
 
 
 # ---------------------------------------------------------------------------
@@ -162,14 +155,19 @@ def run_random_search(
 
         emb_10d = umap_cache[n_neighbors]
 
-        cluster_labels = hdbscan.HDBSCAN(
+        clusterer = hdbscan.HDBSCAN(
             min_cluster_size=min_cluster_size,
             min_samples=min_samples,
             cluster_selection_method=method,
             prediction_data=False,
-        ).fit_predict(emb_10d)
+            gen_min_span_tree=True # Required for relative_validity_
+        )
+        
+        clusterer.fit(emb_10d)
+        cluster_labels = clusterer.labels_
 
-        score = calculate_purity_score(cluster_labels, binary_labels)
+        # Use the new unsupervised score
+        score = calculate_validity_score(clusterer, cluster_labels)
         n_clusters = len(set(cluster_labels)) - (1 if -1 in cluster_labels else 0)
         noise_pct = float((cluster_labels == -1).mean() * 100)
 
