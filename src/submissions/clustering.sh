@@ -27,9 +27,9 @@ export PYTHONPATH="${BASE_DIR}:${PYTHONPATH}"
 
 python -m src.analysis.cluster_patients \
   --config_filepath src/configs/classification_config.yaml \
-  --model_checkpoint /gpfs/scratch/qc25022/pancreas/experiments/Results/lora-6-month-logistic-refactored-new-time-mistral-7B/final_model \
+  --model_checkpoint /gpfs/scratch/qc25022/pancreas/experiments/Results/lora-3-month-logistic-refactored-new-time-mistral-7B/final_model \
   --split held_out \
-  --output_dir /gpfs/scratch/qc25022/pancreas/experiments/Results/lora-6-month-logistic-refactored-new-time-mistral-7B/patient_clustering_heldout \
+  --output_dir /gpfs/scratch/qc25022/pancreas/experiments/Results/lora-3-month-logistic-refactored-new-time-mistral-7B/patient_clustering_heldout \
   --batch_size 4
 echo "Pipeline finished."
 deactivate
