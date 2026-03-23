@@ -32,7 +32,7 @@ EMBEDDINGS_DIR = (
     "patient_clustering_heldout"
 )
 OUTPUT_DIR = EMBEDDINGS_DIR + "/hdbscan_search"
-N_TRIALS = 10
+N_TRIALS = 100
 RANDOM_SEED = 42
 
 
@@ -132,7 +132,7 @@ def run_random_search(
         n_neighbors              : int in [10, 100]  (for the 10D UMAP reduction)
         min_cluster_size         : int in [10, 150]
         min_samples              : int in [1, 30]
-        cluster_selection_method : 'eom' or 'leaf'
+        cluster_selection_method : 'eom' or 'leaf' | changed to only eom
 
     10D UMAP reductions are cached by n_neighbors to avoid redundant computation.
     Returns a DataFrame of all trial results sorted by score descending.
@@ -145,7 +145,7 @@ def run_random_search(
         n_neighbors = rng.randint(10, 100)
         min_cluster_size = rng.randint(10, 150)
         min_samples = rng.randint(1, 30)
-        method = rng.choice(["eom", "leaf"])
+        method = rng.choice(["eom"])
 
         if n_neighbors not in umap_cache:
             print(f"  [Trial {trial}/{n_trials}] UMAP 10D (n_neighbors={n_neighbors})...")
