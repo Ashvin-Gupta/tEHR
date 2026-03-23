@@ -84,16 +84,26 @@ def reduce_umap(
 # ---------------------------------------------------------------------------
 # Scoring
 # ---------------------------------------------------------------------------
+MAX_NOISE_FRACTION = 0.15   # configs with more noise than this are rejected outright
+
+
 def calculate_purity_score(cluster_labels: np.ndarray, binary_labels: np.ndarray) -> float:
     """
     Score how well clusters separate cases from controls.
 
+    - Hard cap: any configuration where more than MAX_NOISE_FRACTION of patients
+      are labelled as noise (-1) scores 0 immediately.
     - avg_purity    : mean of |case_rate - 0.5| * 2 per cluster (1 = pure, 0 = 50/50).
-    - noise_penalty : 1 - noise_fraction (penalises many patients labelled as noise).
+    - noise_penalty : (1 - noise_fraction)^2 — quadratic, so high noise is penalised
+      much more steeply than a linear term would allow.
     - cluster_penalty: 0.5 if cluster count is outside [5, 30], else 1.0.
 
     Final score = avg_purity * noise_penalty * cluster_penalty.
     """
+    noise_ratio = float((cluster_labels == -1).mean())
+    if noise_ratio > MAX_NOISE_FRACTION:
+        return 0.0
+
     mask = cluster_labels != -1
     unique_clusters = np.unique(cluster_labels[mask])
 
@@ -107,7 +117,7 @@ def calculate_purity_score(cluster_labels: np.ndarray, binary_labels: np.ndarray
         purity_per_cluster.append(abs(case_rate - 0.5) * 2)
 
     avg_purity = float(np.mean(purity_per_cluster))
-    noise_penalty = 1.0 - float((cluster_labels == -1).mean())
+    noise_penalty = (1.0 - noise_ratio) ** 2
     cluster_penalty = 1.0 if 5 <= len(unique_clusters) <= 30 else 0.5
 
     return avg_purity * noise_penalty * cluster_penalty
