@@ -207,9 +207,26 @@ class LLMClassifier(nn.Module):
         # Get the last non-padding token's hidden state (usually EOS token)
         sequence_lengths = attention_mask.sum(dim=1) - 1  # -1 for 0-indexing
         batch_size = hidden_states.size(0)
-        last_hidden_states = hidden_states[range(batch_size), sequence_lengths]
-        
-        
+        last_token_indices = sequence_lengths
+        last_hidden_states = hidden_states[range(batch_size), last_token_indices]
+
+        # Print whether the selected token is EOS
+        eos_token_id = getattr(self, "eos_token_id", None)
+        if eos_token_id is None:
+            # Try to get from base_model config if not set
+            if hasattr(self.base_model, "config") and hasattr(self.base_model.config, "eos_token_id"):
+                eos_token_id = self.base_model.config.eos_token_id
+            elif hasattr(backbone, "config") and hasattr(backbone.config, "eos_token_id"):
+                eos_token_id = backbone.config.eos_token_id
+            else:
+                eos_token_id = None
+        if eos_token_id is not None:
+            last_token_ids = input_ids[range(batch_size), last_token_indices]
+            is_eos = (last_token_ids == eos_token_id)
+            print("Is last non-padding token SOS/EOS? (batch):", is_eos.tolist(), "EOS token id:", eos_token_id)
+        else:
+            print("EOS token id not found; cannot check EOS status for last non-padding tokens.")
+
         # Pass through classification head
         logits = self.classifier(last_hidden_states)
         

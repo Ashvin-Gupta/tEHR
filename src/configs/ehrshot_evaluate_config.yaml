@@ -33,7 +33,7 @@ training:
 # ---------------------------------------------------------------------------
 data:
   dataset: "EHRSHOT"
-  csv_filepath: "/home/ashvingupta/Documents/PhD/Projects/TextCacnEHR2/src/resources/new_pancan_formatted.csv"  # EDIT ME if needed
+  csv_filepath: "/data/home/qc25022/TextCancEHR2/src/resources/new_pancan_formatted.csv"  # EDIT ME if needed
   # max_length: 4096
   # Load every row in the CSV as a single external test set (no train/val split).
   external_validation: true
