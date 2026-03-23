@@ -22,11 +22,11 @@ lora:
 
 wandb:
   enabled: true
-  project: "Qwen3-8B-Pancreas-classification"
+  project: "Pretrain-Qwen3-8B-Pancreas-classification"
   run_name: "qwen-llm-linear-single-stage"
 
 training:
-  output_dir: "/gpfs/scratch/qc25022/pancreas/experiments/Results/CPRD/qwen_llm_linear"
+  output_dir: "/gpfs/scratch/qc25022/pancreas/experiments/Results/Baselines/qwen_llm_linear"
   overwrite_output_dir: true
   epochs: 1
   batch_size: 2
