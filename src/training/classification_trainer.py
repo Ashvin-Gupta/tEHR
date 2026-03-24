@@ -332,6 +332,16 @@ class EHRClassificationTrainer:
             if not os.path.exists(resume_from_checkpoint):
                 raise ValueError(f"Checkpoint not found: {resume_from_checkpoint}")
             logger.info(f"  - Resuming from checkpoint: {resume_from_checkpoint}")
+
+            # Auto-detect checkpoint format: if the checkpoint only contains
+            # model.safetensors (and no pytorch_model.bin), force safetensors
+            # loading so the Trainer doesn't mistakenly look for the .bin file.
+            safetensors_path = os.path.join(resume_from_checkpoint, "model.safetensors")
+            bin_path = os.path.join(resume_from_checkpoint, "pytorch_model.bin")
+            if os.path.exists(safetensors_path) and not os.path.exists(bin_path):
+                logger.info("  - Checkpoint is in safetensors format; enabling safetensors loading.")
+                self.trainer.args.save_safetensors = True
+
             self.trainer.train(resume_from_checkpoint=resume_from_checkpoint)
         else:
             self.trainer.train()
