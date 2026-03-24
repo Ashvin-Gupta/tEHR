@@ -7,6 +7,7 @@ import torch
 from typing import Dict, Any
 from transformers import TrainingArguments, Trainer, EarlyStoppingCallback
 import wandb
+from torch.utils.data import ConcatDataset
 
 from src.data.classification_collator import ClassificationCollator
 from src.training.training_utils import compute_and_sort_by_length
@@ -351,6 +352,33 @@ class EHRClassificationTrainer:
     
     def evaluate_and_visualize(self, val_dataset, test_dataset):
         """Run evaluation and create visualization plots."""
+        combine_eval_splits = self.data_config.get("combine_eval_splits", False)
+
+        if combine_eval_splits:
+            logger.info("\n" + "=" * 80)
+            logger.info("Running final evaluation on combined validation + test set...")
+            logger.info("=" * 80)
+
+            combined_dataset = ConcatDataset([val_dataset, test_dataset])
+            logger.info(
+                f"  - Combined eval dataset size: {len(combined_dataset)} "
+                f"(val={len(val_dataset)} + test={len(test_dataset)})"
+            )
+
+            combined_results = self.trainer.evaluate(combined_dataset, metric_key_prefix="combined")
+            logger.info("\nFinal Combined Results:")
+            for key, value in combined_results.items():
+                logger.info(f"  {key}: {value:.4f}" if isinstance(value, float) else f"  {key}: {value}")
+
+            logger.info("\nGenerating ROC and PR curves for combined validation + test set...")
+            combined_pred_output = self.trainer.predict(combined_dataset)
+            plot_all_curves(
+                combined_pred_output.label_ids,
+                combined_pred_output.predictions,
+                os.path.join(self.training_config['output_dir'], 'plots_combined')
+            )
+            return combined_results, combined_results
+
         # Evaluate on validation set
         logger.info("\n" + "=" * 80)
         logger.info("Running final evaluation on validation set...")
