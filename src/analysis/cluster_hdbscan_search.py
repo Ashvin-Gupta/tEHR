@@ -84,34 +84,45 @@ def reduce_umap(
 # ---------------------------------------------------------------------------
 # Scoring
 # ---------------------------------------------------------------------------
-MAX_NOISE_FRACTION = 0.15   # configs with more noise than this are rejected outright
+MIN_NOISE_FRACTION = 0.001  # must have *some* noise (pure assignments are suspect)
+MAX_NOISE_FRACTION = 0.05   # more than 5% noise → rejected outright
+MIN_CLUSTERS = 4            # fewer than this → rejected outright
 
 
 def calculate_validity_score(clusterer, cluster_labels: np.ndarray) -> float:
     """
-    Score clusters based on intrinsic density and separation (DBCV),
-    while still penalizing massive noise or weird cluster counts.
+    Score clusters based on intrinsic density and separation (DBCV).
+
+    Hard constraints (score = 0 immediately if violated):
+        - noise fraction must be in (MIN_NOISE_FRACTION, MAX_NOISE_FRACTION)
+          i.e. some noise is expected, but no more than 5 %.
+        - at least MIN_CLUSTERS real clusters must be found.
+
+    Soft penalty:
+        - noise_penalty = (1 - noise_fraction)^2 — quadratic, so even noise
+          below the cap is penalised more steeply than a linear term would.
+        - cluster_penalty = 0.5 if more than 30 clusters (too fragmented).
+
+    Final score = relative_validity * noise_penalty * cluster_penalty.
     """
     noise_ratio = float((cluster_labels == -1).mean())
-    if noise_ratio > 0.30:  # Be a bit more lenient with noise at 12 months
+
+    if noise_ratio <= MIN_NOISE_FRACTION or noise_ratio >= MAX_NOISE_FRACTION:
         return 0.0
 
     mask = cluster_labels != -1
     unique_clusters = np.unique(cluster_labels[mask])
 
-    if len(unique_clusters) < 3: # We want at least a few distinct phenotypes
+    if len(unique_clusters) < MIN_CLUSTERS:
         return 0.0
 
-    # 1. HDBSCAN's native relative validity score (usually between 0 and 1)
-    # Higher means clusters are dense and well-separated.
     try:
         validity = clusterer.relative_validity_
     except ValueError:
-        return 0.0 # Catches edge cases where validity can't be computed
+        return 0.0
 
-    # 2. Apply the same common-sense penalties
     noise_penalty = (1.0 - noise_ratio) ** 2
-    cluster_penalty = 1.0 if 5 <= len(unique_clusters) <= 30 else 0.5
+    cluster_penalty = 1.0 if len(unique_clusters) <= 30 else 0.5
 
     return validity * noise_penalty * cluster_penalty
 
