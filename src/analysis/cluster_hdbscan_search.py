@@ -32,7 +32,7 @@ EMBEDDINGS_DIR = (
     "patient_clustering_heldout"
 )
 OUTPUT_DIR = EMBEDDINGS_DIR + "/hdbscan_search"
-N_TRIALS = 100
+N_TRIALS = 10
 RANDOM_SEED = 42
 
 
