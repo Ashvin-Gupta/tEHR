@@ -28,7 +28,7 @@ from src.data.dataset_factory import get_dataset
 CONFIG_PATH = "src/configs/classification_config.yaml"
 EMBEDDINGS_DIR = (
     "/gpfs/scratch/qc25022/pancreas/experiments/Results/"
-    "lora-12-month-logistic-refactored-new-time-mistral-7B/"
+    "lora-1-month-logistic-refactored-new-time-mistral-7B/"
     "patient_clustering_heldout"
 )
 OUTPUT_DIR = EMBEDDINGS_DIR + "/hdbscan_search"
@@ -142,9 +142,9 @@ def run_random_search(
     results = []
 
     for trial in range(1, n_trials + 1):
-        n_neighbors = rng.randint(10, 100)
-        min_cluster_size = rng.randint(10, 150)
-        min_samples = rng.randint(1, 30)
+        n_neighbors = rng.randint(10, 50)
+        min_cluster_size = rng.randint(20, 80)
+        min_samples = rng.randint(5, 30)
         method = rng.choice(["eom"])
 
         if n_neighbors not in umap_cache:
