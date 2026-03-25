@@ -14,6 +14,7 @@ import os
 import random
 
 import hdbscan
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import umap
@@ -86,7 +87,8 @@ def reduce_umap(
 # ---------------------------------------------------------------------------
 MIN_NOISE_FRACTION = 0.001  # must have *some* noise (pure assignments are suspect)
 MAX_NOISE_FRACTION = 0.05   # more than 5% noise → rejected outright
-MIN_CLUSTERS = 4            # fewer than this → rejected outright
+MIN_CLUSTERS = 4            # outside [MIN_CLUSTERS, MAX_CLUSTERS] → rejected outright
+MAX_CLUSTERS = 6
 
 
 def calculate_purity_score(cluster_labels: np.ndarray, binary_labels: np.ndarray) -> float:
@@ -94,21 +96,14 @@ def calculate_purity_score(cluster_labels: np.ndarray, binary_labels: np.ndarray
     Score how well clusters separate cases from controls.
 
     Hard constraints (score = 0 immediately if violated):
-        - noise fraction must be in (MIN_NOISE_FRACTION, MAX_NOISE_FRACTION),
-          i.e. some noise is expected but no more than 5%.
-        - at least MIN_CLUSTERS real clusters must be found.
+        - noise fraction must be in (MIN_NOISE_FRACTION, MAX_NOISE_FRACTION).
+        - cluster count must be in [MIN_CLUSTERS, MAX_CLUSTERS].
 
     Purity per cluster = |case_rate - 0.5| * 2
-        → 1.0 means the cluster is entirely case or entirely control.
+        → 1.0 means entirely case or entirely control.
         → 0.0 means a perfect 50/50 mix.
-    avg_purity is the mean across all clusters.
 
-    Soft penalty:
-        - noise_penalty = (1 - noise_fraction)^2 — quadratic, so even noise
-          below the cap is penalised more steeply than a linear term.
-        - cluster_penalty = 0.5 if more than 30 clusters (too fragmented).
-
-    Final score = avg_purity * noise_penalty * cluster_penalty.
+    Final score = avg_purity * (1 - noise_fraction)^2.
     """
     noise_ratio = float((cluster_labels == -1).mean())
 
@@ -118,7 +113,7 @@ def calculate_purity_score(cluster_labels: np.ndarray, binary_labels: np.ndarray
     mask = cluster_labels != -1
     unique_clusters = np.unique(cluster_labels[mask])
 
-    if len(unique_clusters) < MIN_CLUSTERS:
+    if not (MIN_CLUSTERS <= len(unique_clusters) <= MAX_CLUSTERS):
         return 0.0
 
     purity_per_cluster = []
@@ -129,9 +124,53 @@ def calculate_purity_score(cluster_labels: np.ndarray, binary_labels: np.ndarray
 
     avg_purity = float(np.mean(purity_per_cluster))
     noise_penalty = (1.0 - noise_ratio) ** 2
-    cluster_penalty = 1.0 if len(unique_clusters) <= 30 else 0.5
 
-    return avg_purity * noise_penalty * cluster_penalty
+    return avg_purity * noise_penalty
+
+
+# ---------------------------------------------------------------------------
+# Visualisation helper
+# ---------------------------------------------------------------------------
+def save_trial_umap(
+    z_2d: np.ndarray,
+    cluster_labels: np.ndarray,
+    params: dict,
+    output_dir: str,
+) -> None:
+    """Save a 2D UMAP scatter for a valid trial with params annotated on the side."""
+    fig, ax = plt.subplots(figsize=(9, 6))
+
+    unique = sorted(set(cluster_labels))
+    cmap = plt.cm.get_cmap("tab10", len(unique))
+    for i, cid in enumerate(unique):
+        mask = cluster_labels == cid
+        label = f"Noise ({mask.sum()})" if cid == -1 else f"Cluster {cid} ({mask.sum()})"
+        color = "lightgrey" if cid == -1 else cmap(i)
+        ax.scatter(z_2d[mask, 0], z_2d[mask, 1], s=8, alpha=0.5, color=color, label=label)
+
+    ax.set_title(f"Trial {int(params['trial'])}  —  score={params['score']:.4f}", weight="bold")
+    ax.axis("off")
+    ax.legend(title="Cluster", bbox_to_anchor=(1.01, 1), loc="upper left", fontsize=8)
+
+    param_text = (
+        f"n_neighbors : {int(params['n_neighbors'])}\n"
+        f"min_cluster_size : {int(params['min_cluster_size'])}\n"
+        f"min_samples : {int(params['min_samples'])}\n"
+        f"method : {params['cluster_selection_method']}\n"
+        f"n_clusters : {int(params['n_clusters'])}\n"
+        f"noise : {params['noise_pct']:.2f}%"
+    )
+    fig.text(
+        0.78, 0.35, param_text,
+        fontsize=8, family="monospace",
+        va="top", ha="left",
+        bbox=dict(facecolor="lightyellow", edgecolor="grey", boxstyle="round,pad=0.4"),
+    )
+
+    plt.tight_layout()
+    fname = f"trial_{int(params['trial']):03d}_score{params['score']:.4f}.png"
+    plt.savefig(os.path.join(output_dir, fname), dpi=150, bbox_inches="tight")
+    plt.close()
 
 
 # ---------------------------------------------------------------------------
@@ -140,6 +179,7 @@ def calculate_purity_score(cluster_labels: np.ndarray, binary_labels: np.ndarray
 def run_random_search(
     embeddings: np.ndarray,
     binary_labels: np.ndarray,
+    output_dir: str,
     n_trials: int = N_TRIALS,
     seed: int = RANDOM_SEED,
 ) -> pd.DataFrame:
@@ -147,23 +187,32 @@ def run_random_search(
     Randomly sample HDBSCAN hyperparameter combinations and score each one.
 
     Search space:
-        n_neighbors              : int in [10, 100]  (for the 10D UMAP reduction)
-        min_cluster_size         : int in [10, 150]
-        min_samples              : int in [1, 30]
-        cluster_selection_method : 'eom' or 'leaf' | changed to only eom
+        n_neighbors              : int in [10, 50]  (for the 10D UMAP reduction)
+        min_cluster_size         : int in [20, 80]
+        min_samples              : int in [5, 30]
+        cluster_selection_method : 'eom'
 
     10D UMAP reductions are cached by n_neighbors to avoid redundant computation.
+    A fixed 2D UMAP (n_neighbors=15) is computed once for visualisation.
+    For every trial that passes all hard constraints a scatter plot is saved.
+
     Returns a DataFrame of all trial results sorted by score descending.
     """
     rng = random.Random(seed)
     umap_cache: dict = {}
     results = []
 
+    plots_dir = os.path.join(output_dir, "trial_plots")
+    os.makedirs(plots_dir, exist_ok=True)
+
+    print("  Pre-computing 2D UMAP for visualisation (fixed, n_neighbors=15)...")
+    z_2d = reduce_umap(embeddings, n_components=2, n_neighbors=15, min_dist=0.1)
+
     for trial in range(1, n_trials + 1):
         n_neighbors = rng.randint(10, 50)
         min_cluster_size = rng.randint(20, 80)
         min_samples = rng.randint(5, 30)
-        method = rng.choice(["eom"])
+        method = "eom"
 
         if n_neighbors not in umap_cache:
             print(f"  [Trial {trial}/{n_trials}] UMAP 10D (n_neighbors={n_neighbors})...")
@@ -184,7 +233,7 @@ def run_random_search(
         n_clusters = len(set(cluster_labels)) - (1 if -1 in cluster_labels else 0)
         noise_pct = float((cluster_labels == -1).mean() * 100)
 
-        results.append({
+        row = {
             "trial": trial,
             "n_neighbors": n_neighbors,
             "min_cluster_size": min_cluster_size,
@@ -193,13 +242,18 @@ def run_random_search(
             "score": round(score, 4),
             "n_clusters": n_clusters,
             "noise_pct": round(noise_pct, 2),
-        })
+        }
+        results.append(row)
+
+        status = "✓ VALID" if score > 0 else "✗"
         print(
-            f"  [Trial {trial}/{n_trials}] "
-            f"nn={n_neighbors}, mcs={min_cluster_size}, ms={min_samples}, "
-            f"method={method} → score={score:.3f}, clusters={n_clusters}, "
-            f"noise={noise_pct:.1f}%"
+            f"  [Trial {trial}/{n_trials}] {status} "
+            f"nn={n_neighbors}, mcs={min_cluster_size}, ms={min_samples} "
+            f"→ score={score:.3f}, clusters={n_clusters}, noise={noise_pct:.1f}%"
         )
+
+        if score > 0:
+            save_trial_umap(z_2d, cluster_labels, row, plots_dir)
 
     return pd.DataFrame(results).sort_values("score", ascending=False).reset_index(drop=True)
 
@@ -217,7 +271,7 @@ def main() -> None:
     binary_labels = load_labels(CONFIG_PATH, "held_out", patient_ids)
 
     print(f"\nStarting {N_TRIALS}-trial random search...")
-    df_search = run_random_search(embeddings, binary_labels, n_trials=N_TRIALS)
+    df_search = run_random_search(embeddings, binary_labels, OUTPUT_DIR, n_trials=N_TRIALS)
 
     search_path = os.path.join(OUTPUT_DIR, "hdbscan_search_results.csv")
     df_search.to_csv(search_path, index=False)
