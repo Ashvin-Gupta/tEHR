@@ -69,16 +69,16 @@ class EHRClassificationTrainer:
                     name=run_name,
                     config=self.config
                 )
-                logger.info(f"\nWandB enabled - Project: {self.wandb_config['project']}, Run: {run_name}")
+                print(f"\nWandB enabled - Project: {self.wandb_config['project']}, Run: {run_name}")
             
             return run_name
         return "classification-run"
     
     def load_pretrained_model(self):
         """Load pretrained model with LoRA adapters from pretraining stage."""
-        logger.info("\n" + "=" * 80)
-        logger.info("Loading pretrained model...")
-        logger.info("=" * 80)
+        print("\n" + "=" * 80)
+        print("Loading pretrained model...")
+        print("=" * 80)
         
         pretrained_checkpoint = self.model_config.get('pretrained_checkpoint')
         if not pretrained_checkpoint:
@@ -93,9 +93,9 @@ class EHRClassificationTrainer:
     
     def create_classifier(self):
         """Wrap the pretrained model with a classification head."""
-        logger.info("\n" + "=" * 80)
-        logger.info("Creating LLM Classifier wrapper...")
-        logger.info("=" * 80)
+        print("\n" + "=" * 80)
+        print("Creating LLM Classifier wrapper...")
+        print("=" * 80)
         
         # Determine training mode
         train_lora = self.model_config.get('train_lora', False)
@@ -106,9 +106,9 @@ class EHRClassificationTrainer:
         trainable_keywords = ["lora_"] if train_lora else None
         
         if train_lora:
-            logger.info("  - Training mode: LoRA adapters + Classification head")
+            print("  - Training mode: LoRA adapters + Classification head")
         else:
-            logger.info("  - Training mode: Classification head only (LoRA frozen)")
+            print("  - Training mode: Classification head only (LoRA frozen)")
         
         self.classifier_model = LLMClassifier(
             base_model=self.base_model,
@@ -155,7 +155,7 @@ class EHRClassificationTrainer:
 
         # Fast path: cache already exists
         if os.path.exists(cache_path):
-            logger.info(f"  - Found cached length-sorted indices for split '{split}', loading from disk...")
+            print(f"  - Found cached length-sorted indices for split '{split}', loading from disk...")
             indices = _load_indices(cache_path)
             return torch.utils.data.Subset(dataset, indices)
 
@@ -170,7 +170,7 @@ class EHRClassificationTrainer:
 
         if acquired:
             # We hold the lock: compute and write, then remove lock
-            logger.info(f"  - No cached length-sorted indices for split '{split}', computing and caching...")
+            print(f"  - No cached length-sorted indices for split '{split}', computing and caching...")
             sorted_dataset = compute_and_sort_by_length(
                 dataset,
                 self.tokenizer,
@@ -179,7 +179,7 @@ class EHRClassificationTrainer:
             )
             if isinstance(sorted_dataset, torch.utils.data.Subset):
                 torch.save(sorted_dataset.indices, cache_path)
-                logger.info(f"  ✓ Cached sorted indices for split '{split}' to: {cache_path}")
+                print(f"  ✓ Cached sorted indices for split '{split}' to: {cache_path}")
             try:
                 os.remove(lock_path)
             except OSError:
@@ -190,7 +190,7 @@ class EHRClassificationTrainer:
         for _ in range(14400):
             time.sleep(1)
             if os.path.exists(cache_path):
-                logger.info(f"  - Found cached length-sorted indices for split '{split}' (written by another process), loading...")
+                print(f"  - Found cached length-sorted indices for split '{split}' (written by another process), loading...")
                 indices = _load_indices(cache_path)
                 return torch.utils.data.Subset(dataset, indices)
         raise TimeoutError(
@@ -199,9 +199,9 @@ class EHRClassificationTrainer:
     
     def prepare_datasets(self):
         """Prepare train, validation, and test datasets."""
-        logger.info("\n" + "=" * 80)
-        logger.info("Loading datasets...")
-        logger.info("=" * 80)
+        print("\n" + "=" * 80)
+        print("Loading datasets...")
+        print("=" * 80)
 
         train_dataset = get_dataset(self.data_config['dataset'], self.data_config, "train")
         val_dataset = get_dataset(self.data_config['dataset'], self.data_config, "tuning")
@@ -209,7 +209,7 @@ class EHRClassificationTrainer:
 
         # Optional: Sort by length for efficient batching, with caching
         if self.data_config.get('sort_by_length', False):
-            logger.info("\n  - Sorting datasets by sequence length (with caching)...")
+            print("\n  - Sorting datasets by sequence length (with caching)...")
             train_dataset = self._sort_with_cache(
                 train_dataset, split="train", shuffle_buckets=True, num_buckets=20
             )
@@ -219,11 +219,11 @@ class EHRClassificationTrainer:
             test_dataset = self._sort_with_cache(
                 test_dataset, split="held_out", shuffle_buckets=False, num_buckets=20
             )
-            logger.info("  ✓ Datasets sorted by length (cached)")
+            print("  ✓ Datasets sorted by length (cached)")
         
-        logger.info(f"  - Train dataset: {len(train_dataset)} patients")
-        logger.info(f"  - Validation dataset: {len(val_dataset)} patients")
-        logger.info(f"  - Test dataset: {len(test_dataset)} patients")
+        print(f"  - Train dataset: {len(train_dataset)} patients")
+        print(f"  - Validation dataset: {len(val_dataset)} patients")
+        print(f"  - Test dataset: {len(test_dataset)} patients")
 
         for split_name, ds in [("train", train_dataset), ("val", val_dataset), ("test", test_dataset)]:
             self._log_class_distribution(ds, split_name)
@@ -247,7 +247,7 @@ class EHRClassificationTrainer:
             total = len(labels)
             pos = counts.get(1, 0)
             neg = counts.get(0, 0)
-            logger.info(
+            print(
                 f"  - [{split_name}] class distribution: "
                 f"{pos} positive ({100*pos/total:.1f}%), "
                 f"{neg} negative ({100*neg/total:.1f}%), "
@@ -258,9 +258,9 @@ class EHRClassificationTrainer:
 
     def create_collator(self):
         """Create data collator for batching."""
-        logger.info("\n" + "=" * 80)
-        logger.info("Creating data collator...")
-        logger.info("=" * 80)
+        print("\n" + "=" * 80)
+        print("Creating data collator...")
+        print("=" * 80)
         
         multi_label = self.training_config.get('multi_label', False)
         binary_classification = not multi_label
@@ -276,9 +276,9 @@ class EHRClassificationTrainer:
     
     def create_trainer(self, train_dataset, val_dataset, collator, run_name: str):
         """Create HuggingFace Trainer."""
-        logger.info("\n" + "=" * 80)
-        logger.info("Setting up trainer...")
-        logger.info("=" * 80)
+        print("\n" + "=" * 80)
+        print("Setting up trainer...")
+        print("=" * 80)
 
         # Control whether checkpoints are written with safetensors.
         save_safetensors = bool(self.training_config.get("save_safetensors", False))
@@ -337,7 +337,7 @@ class EHRClassificationTrainer:
                 early_stopping_patience=early_stopping_patience,
                 early_stopping_threshold=self.training_config.get('early_stopping_threshold', 0.0)
             ))
-            logger.info(f"  - Early stopping enabled with patience={early_stopping_patience}")
+            print(f"  - Early stopping enabled with patience={early_stopping_patience}")
         
         
         self.trainer = Trainer(
@@ -353,14 +353,14 @@ class EHRClassificationTrainer:
     
     def train(self, resume_from_checkpoint: str | None = None):
         """Run the training loop."""
-        logger.info("\n" + "=" * 80)
-        logger.info("Starting classification training...")
-        logger.info("=" * 80)
+        print("\n" + "=" * 80)
+        print("Starting classification training...")
+        print("=" * 80)
 
         if resume_from_checkpoint:
             if not os.path.exists(resume_from_checkpoint):
                 raise ValueError(f"Checkpoint not found: {resume_from_checkpoint}")
-            logger.info(f"  - Resuming from checkpoint: {resume_from_checkpoint}")
+            print(f"  - Resuming from checkpoint: {resume_from_checkpoint}")
 
             # Auto-detect checkpoint format: if the checkpoint only contains
             # model.safetensors (and no pytorch_model.bin), force safetensors
@@ -368,7 +368,7 @@ class EHRClassificationTrainer:
             safetensors_path = os.path.join(resume_from_checkpoint, "model.safetensors")
             bin_path = os.path.join(resume_from_checkpoint, "pytorch_model.bin")
             if os.path.exists(safetensors_path) and not os.path.exists(bin_path):
-                logger.info("  - Checkpoint is in safetensors format; enabling safetensors loading.")
+                print("  - Checkpoint is in safetensors format; enabling safetensors loading.")
                 self.trainer.args.save_safetensors = True
 
             self.trainer.train(resume_from_checkpoint=resume_from_checkpoint)
@@ -377,39 +377,39 @@ class EHRClassificationTrainer:
     
     def save_model(self):
         """Save the final trained model."""
-        logger.info("\n" + "=" * 80)
-        logger.info("Saving final model...")
-        logger.info("=" * 80)
+        print("\n" + "=" * 80)
+        print("Saving final model...")
+        print("=" * 80)
 
         if not self.training_config.get('save_model', True):
-            logger.info("  - Skipping model save because 'save_model' is set to False in training config.")
+            print("  - Skipping model save because 'save_model' is set to False in training config.")
             return
         
         final_model_path = os.path.join(self.training_config['output_dir'], "final_model")
         self.trainer.save_model(final_model_path)
-        logger.info(f"  - Model saved to: {final_model_path}")
+        print(f"  - Model saved to: {final_model_path}")
     
     def evaluate_and_visualize(self, val_dataset, test_dataset):
         """Run evaluation and create visualization plots."""
         combine_eval_splits = self.data_config.get("combine_eval_splits", False)
 
         if combine_eval_splits:
-            logger.info("\n" + "=" * 80)
-            logger.info("Running final evaluation on combined validation + test set...")
-            logger.info("=" * 80)
+            print("\n" + "=" * 80)
+            print("Running final evaluation on combined validation + test set...")
+            print("=" * 80)
 
             combined_dataset = ConcatDataset([val_dataset, test_dataset])
-            logger.info(
+            print(
                 f"  - Combined eval dataset size: {len(combined_dataset)} "
                 f"(val={len(val_dataset)} + test={len(test_dataset)})"
             )
 
             combined_results = self.trainer.evaluate(combined_dataset, metric_key_prefix="combined")
-            logger.info("\nFinal Combined Results:")
+            print("\nFinal Combined Results:")
             for key, value in combined_results.items():
-                logger.info(f"  {key}: {value:.4f}" if isinstance(value, float) else f"  {key}: {value}")
+                print(f"  {key}: {value:.4f}" if isinstance(value, float) else f"  {key}: {value}")
 
-            logger.info("\nGenerating ROC and PR curves for combined validation + test set...")
+            print("\nGenerating ROC and PR curves for combined validation + test set...")
             combined_pred_output = self.trainer.predict(combined_dataset)
             c_labels, c_probs = self._pred_to_labels_and_probs(combined_pred_output)
             plot_all_curves(
@@ -420,33 +420,33 @@ class EHRClassificationTrainer:
             return combined_results, combined_results
 
         # Evaluate on validation set
-        logger.info("\n" + "=" * 80)
-        logger.info("Running final evaluation on validation set...")
-        logger.info("=" * 80)
+        print("\n" + "=" * 80)
+        print("Running final evaluation on validation set...")
+        print("=" * 80)
         
         eval_results = self.trainer.evaluate()
-        logger.info("\nFinal Validation Results:")
+        print("\nFinal Validation Results:")
         for key, value in eval_results.items():
-            logger.info(f"  {key}: {value:.4f}" if isinstance(value, float) else f"  {key}: {value}")
+            print(f"  {key}: {value:.4f}" if isinstance(value, float) else f"  {key}: {value}")
         
         # Generate validation plots
-        logger.info("\nGenerating ROC and PR curves for validation set...")
+        print("\nGenerating ROC and PR curves for validation set...")
         pred_output = self.trainer.predict(val_dataset)
         v_labels, v_probs = self._pred_to_labels_and_probs(pred_output)
         plot_all_curves(v_labels, v_probs, os.path.join(self.training_config['output_dir'], 'plots_validation'))
         
         # Evaluate on test set
-        logger.info("\n" + "=" * 80)
-        logger.info("Running evaluation on test set...")
-        logger.info("=" * 80)
+        print("\n" + "=" * 80)
+        print("Running evaluation on test set...")
+        print("=" * 80)
         
         test_results = self.trainer.evaluate(test_dataset, metric_key_prefix="test")
-        logger.info("\nFinal Test Results:")
+        print("\nFinal Test Results:")
         for key, value in test_results.items():
-            logger.info(f"  {key}: {value:.4f}" if isinstance(value, float) else f"  {key}: {value}")
+            print(f"  {key}: {value:.4f}" if isinstance(value, float) else f"  {key}: {value}")
         
         # Generate test plots
-        logger.info("\nGenerating ROC and PR curves for test set...")
+        print("\nGenerating ROC and PR curves for test set...")
         test_pred_output = self.trainer.predict(test_dataset)
         t_labels, t_probs = self._pred_to_labels_and_probs(test_pred_output)
         plot_all_curves(t_labels, t_probs, os.path.join(self.training_config['output_dir'], 'plots_test'))
@@ -471,10 +471,10 @@ class EHRClassificationTrainer:
             checkpoint_path: Directory of a Trainer checkpoint containing
                              `model.safetensors` (full LLMClassifier state).
         """
-        logger.info("\n" + "=" * 80)
-        logger.info("Warm-starting weights from checkpoint (LoRA adapters + classifier head)...")
-        logger.info("=" * 80)
-        logger.info(f"  - Source checkpoint: {checkpoint_path}")
+        print("\n" + "=" * 80)
+        print("Warm-starting weights from checkpoint (LoRA adapters + classifier head)...")
+        print("=" * 80)
+        print(f"  - Source checkpoint: {checkpoint_path}")
 
         weights_file = os.path.join(checkpoint_path, "model.safetensors")
         if not os.path.exists(weights_file):
@@ -492,17 +492,17 @@ class EHRClassificationTrainer:
 
         # ── Diagnostic: show what's actually in the checkpoint ───────────────
         all_ckpt_keys = sorted(ckpt_state.keys())
-        logger.info(f"  - Checkpoint contains {len(all_ckpt_keys)} total keys.")
-        logger.info("  - First 10 checkpoint keys (to verify naming convention):")
+        print(f"  - Checkpoint contains {len(all_ckpt_keys)} total keys.")
+        print("  - First 10 checkpoint keys (to verify naming convention):")
         for k in all_ckpt_keys[:10]:
-            logger.info(f"      {k}")
+            print(f"      {k}")
 
         model_state = self.classifier_model.state_dict()
         all_model_keys = sorted(model_state.keys())
-        logger.info(f"  - Current model has {len(all_model_keys)} total parameter keys.")
-        logger.info("  - First 10 model keys (to compare naming with checkpoint):")
+        print(f"  - Current model has {len(all_model_keys)} total parameter keys.")
+        print("  - First 10 model keys (to compare naming with checkpoint):")
         for k in all_model_keys[:10]:
-            logger.info(f"      {k}")
+            print(f"      {k}")
         # ─────────────────────────────────────────────────────────────────────
 
         # Load LoRA adapter matrices and the classifier head.
@@ -533,8 +533,8 @@ class EHRClassificationTrainer:
             )
 
         missing, unexpected = self.classifier_model.load_state_dict(transfer_state, strict=False)
-        logger.info(f"  - Loaded {len(lora_keys)} LoRA parameter tensors.")
-        logger.info(f"  - Loaded {len(head_keys)} classifier head tensors.")
+        print(f"  - Loaded {len(lora_keys)} LoRA parameter tensors.")
+        print(f"  - Loaded {len(head_keys)} classifier head tensors.")
 
         # Critical check: unexpected keys mean the key names in transfer_state
         # do NOT exist in the current model — those weights were silently dropped.
@@ -549,7 +549,7 @@ class EHRClassificationTrainer:
             for k in unexpected[:10]:
                 logger.warning(f"      {k}")
         else:
-            logger.info("  - All transfer keys matched the current model successfully.")
+            print("  - All transfer keys matched the current model successfully.")
 
         if missing:
             # Non-LoRA / non-classifier missing keys are expected (base model weights).
@@ -571,7 +571,7 @@ class EHRClassificationTrainer:
                 before = model_state[probe_key].float().mean().item()
                 after  = self.classifier_model.state_dict()[probe_key].float().mean().item()
                 ckpt_val = transfer_state[probe_key].float().mean().item()
-                logger.info(
+                print(
                     f"  - Sanity check on '{probe_key}':\n"
                     f"      mean before load = {before:.6f}\n"
                     f"      mean in ckpt     = {ckpt_val:.6f}\n"
@@ -582,10 +582,10 @@ class EHRClassificationTrainer:
                 elif abs(before - after) < 1e-8:
                     logger.warning("  - *** Sanity check WARNING: value unchanged after load — key may not have matched. ***")
                 else:
-                    logger.info("  - Sanity check PASSED: LoRA weight updated correctly.")
+                    print("  - Sanity check PASSED: LoRA weight updated correctly.")
         # ─────────────────────────────────────────────────────────────────────
 
-        logger.info("  - Training will start from step 0 with the above weights.")
+        print("  - Training will start from step 0 with the above weights.")
 
     def _pred_to_labels_and_probs(self, pred_output):
         """
@@ -623,7 +623,7 @@ class EHRClassificationTrainer:
         
         multi_label = self.training_config.get('multi_label', False)
         if multi_label:
-            logger.info("  - Skipping ROC/PR plots for multi-label (not yet supported)")
+            print("  - Skipping ROC/PR plots for multi-label (not yet supported)")
             return
         
         # Convert to probabilities.
@@ -635,7 +635,7 @@ class EHRClassificationTrainer:
         # Create plots
         plot_output_dir = os.path.join(self.training_config['output_dir'], plot_dir_name)
         plot_classification_performance(labels, probs, plot_output_dir)
-        logger.info(f"  - Plots saved to: {plot_output_dir}")
+        print(f"  - Plots saved to: {plot_output_dir}")
     
     def run_full_pipeline(self, resume_from_checkpoint: str | None = None):
         """
