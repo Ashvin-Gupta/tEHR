@@ -569,9 +569,11 @@ class EHRClassificationTrainer:
         if lora_keys:
             probe_key = lora_keys[0]
             if probe_key in model_state and probe_key in transfer_state:
-                t_before = model_state[probe_key].float()
-                t_ckpt   = transfer_state[probe_key].float()
-                t_after  = self.classifier_model.state_dict()[probe_key].float()
+                # Keep everything on CPU for comparison — state_dict() may
+                # return GPU tensors depending on where the model lives.
+                t_before = model_state[probe_key].float().cpu()
+                t_ckpt   = transfer_state[probe_key].float().cpu()
+                t_after  = self.classifier_model.state_dict()[probe_key].float().cpu()
                 logger.info(
                     f"  - Sanity check on '{probe_key}':\n"
                     f"      std  before={t_before.std().item():.6f}  "
