@@ -21,7 +21,7 @@ import seaborn as sns
 BASE_DIR = "/gpfs/scratch/qc25022/pancreas/experiments/Results"
 
 # Where your 1-month models and labels were just saved
-ANCHOR_DIR = f"{BASE_DIR}/lora-1-month-logistic-refactored-new-time-mistral-7B/journal_clustering_output"
+ANCHOR_DIR = f"{BASE_DIR}/lora-1-month-logistic-refactored-new-time-mistral-7B/patient_clustering_heldout/journal_clustering_output"
 
 # Paths to the raw embeddings for each time point
 PATH_12M = f"{BASE_DIR}/lora-12-month-logistic-refactored-new-time-mistral-7B/patient_clustering_heldout"
