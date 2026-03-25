@@ -63,7 +63,7 @@ def load_and_align_embeddings(emb_dir: str, reference_ids: list):
 def main():
     print("1. Loading 1-Month Anchor Models & Labels...")
     # Load the freeze-dried 2D UMAP map
-    umap_2d_model = joblib.load(os.path.join(ANCHOR_DIR, "umap_2d_model.joblib"))
+    umap_2d_model = joblib.load(os.path.join(ANCHOR_DIR, "umap_2d.joblib"))
     
     # Load the labels and reference patient IDs
     df_anchor = pd.read_csv(os.path.join(ANCHOR_DIR, "patient_clusters.csv"))
