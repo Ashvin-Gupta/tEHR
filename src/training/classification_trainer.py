@@ -224,9 +224,38 @@ class EHRClassificationTrainer:
         logger.info(f"  - Train dataset: {len(train_dataset)} patients")
         logger.info(f"  - Validation dataset: {len(val_dataset)} patients")
         logger.info(f"  - Test dataset: {len(test_dataset)} patients")
-        
+
+        for split_name, ds in [("train", train_dataset), ("val", val_dataset), ("test", test_dataset)]:
+            self._log_class_distribution(ds, split_name)
+
         return train_dataset, val_dataset, test_dataset
-    
+
+    def _log_class_distribution(self, dataset, split_name: str):
+        """Log positive/negative counts and prevalence for a dataset split."""
+        try:
+            labels = []
+            for i in range(len(dataset)):
+                item = dataset[i]
+                lbl = item.get('label') if isinstance(item, dict) else None
+                if lbl is None:
+                    continue
+                labels.append(int(lbl.item()) if hasattr(lbl, 'item') else int(lbl))
+            if not labels:
+                return
+            import collections
+            counts = collections.Counter(labels)
+            total = len(labels)
+            pos = counts.get(1, 0)
+            neg = counts.get(0, 0)
+            logger.info(
+                f"  - [{split_name}] class distribution: "
+                f"{pos} positive ({100*pos/total:.1f}%), "
+                f"{neg} negative ({100*neg/total:.1f}%), "
+                f"total={total}"
+            )
+        except Exception as e:
+            logger.warning(f"  - Could not compute class distribution for {split_name}: {e}")
+
     def create_collator(self):
         """Create data collator for batching."""
         logger.info("\n" + "=" * 80)
@@ -461,6 +490,21 @@ class EHRClassificationTrainer:
         except Exception:
             ckpt_state = torch.load(weights_file, map_location="cpu", weights_only=True)
 
+        # ── Diagnostic: show what's actually in the checkpoint ───────────────
+        all_ckpt_keys = sorted(ckpt_state.keys())
+        logger.info(f"  - Checkpoint contains {len(all_ckpt_keys)} total keys.")
+        logger.info("  - First 10 checkpoint keys (to verify naming convention):")
+        for k in all_ckpt_keys[:10]:
+            logger.info(f"      {k}")
+
+        model_state = self.classifier_model.state_dict()
+        all_model_keys = sorted(model_state.keys())
+        logger.info(f"  - Current model has {len(all_model_keys)} total parameter keys.")
+        logger.info("  - First 10 model keys (to compare naming with checkpoint):")
+        for k in all_model_keys[:10]:
+            logger.info(f"      {k}")
+        # ─────────────────────────────────────────────────────────────────────
+
         # Load LoRA adapter matrices and the classifier head.
         # Skip quantised base-model weights (bitsandbytes NF4 state tensors) —
         # they are already in memory from the original pretrained_checkpoint.
@@ -491,16 +535,56 @@ class EHRClassificationTrainer:
         missing, unexpected = self.classifier_model.load_state_dict(transfer_state, strict=False)
         logger.info(f"  - Loaded {len(lora_keys)} LoRA parameter tensors.")
         logger.info(f"  - Loaded {len(head_keys)} classifier head tensors.")
+
+        # Critical check: unexpected keys mean the key names in transfer_state
+        # do NOT exist in the current model — those weights were silently dropped.
         if unexpected:
-            logger.info(
-                f"  - Skipped {len(unexpected)} unrecognised keys "
-                f"(expected for quantised base-model weights)."
-            )
-        if missing:
             logger.warning(
-                f"  - {len(missing)} keys not found in checkpoint "
-                f"(will use random init): {missing[:5]}{'...' if len(missing) > 5 else ''}"
+                f"  - *** WARNING: {len(unexpected)} keys from the checkpoint could NOT "
+                f"be matched to the current model and were DROPPED (weights NOT loaded). "
+                f"This likely means a key-name mismatch between the checkpoint and the "
+                f"current model (e.g. different Unsloth/PEFT version). ***"
             )
+            logger.warning("  - First 10 unmatched keys:")
+            for k in unexpected[:10]:
+                logger.warning(f"      {k}")
+        else:
+            logger.info("  - All transfer keys matched the current model successfully.")
+
+        if missing:
+            # Non-LoRA / non-classifier missing keys are expected (base model weights).
+            unexpected_missing = [
+                k for k in missing
+                if any(kw in k for kw in lora_keywords) or k.startswith("classifier.")
+            ]
+            if unexpected_missing:
+                logger.warning(
+                    f"  - *** WARNING: {len(unexpected_missing)} LoRA/classifier keys are "
+                    f"missing from the checkpoint (will use random init): "
+                    f"{unexpected_missing[:5]}{'...' if len(unexpected_missing) > 5 else ''} ***"
+                )
+
+        # ── Sanity-check: verify a LoRA weight was actually changed ──────────
+        if lora_keys:
+            probe_key = lora_keys[0]
+            if probe_key in model_state and probe_key in transfer_state:
+                before = model_state[probe_key].float().mean().item()
+                after  = self.classifier_model.state_dict()[probe_key].float().mean().item()
+                ckpt_val = transfer_state[probe_key].float().mean().item()
+                logger.info(
+                    f"  - Sanity check on '{probe_key}':\n"
+                    f"      mean before load = {before:.6f}\n"
+                    f"      mean in ckpt     = {ckpt_val:.6f}\n"
+                    f"      mean after load  = {after:.6f}"
+                )
+                if abs(after - ckpt_val) > 1e-5:
+                    logger.warning("  - *** Sanity check FAILED: loaded value does not match checkpoint! ***")
+                elif abs(before - after) < 1e-8:
+                    logger.warning("  - *** Sanity check WARNING: value unchanged after load — key may not have matched. ***")
+                else:
+                    logger.info("  - Sanity check PASSED: LoRA weight updated correctly.")
+        # ─────────────────────────────────────────────────────────────────────
+
         logger.info("  - Training will start from step 0 with the above weights.")
 
     def _pred_to_labels_and_probs(self, pred_output):

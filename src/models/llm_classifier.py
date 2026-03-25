@@ -55,6 +55,7 @@ class LLMClassifier(nn.Module):
         # Debugging flags for EOS token verification
         self._eos_check_count = 0          # How many batches we've checked
         self._max_eos_checks = 1           # Max batches to print debug info for
+        self._lora_verified = False        # Whether LoRA forward-pass check has run
 
         # Enable gradient checkpointing if available
         if hasattr(self.base_model, "gradient_checkpointing_enable"):
@@ -187,8 +188,29 @@ class LLMClassifier(nn.Module):
         Returns:
             Dict with 'loss' and 'logits'.
         """
-        # Get the base model (unwrap if needed)
+        # Get the base model (unwrap if needed).
+        # For PEFT/Unsloth models self.base_model is a PeftModel; .model is the
+        # underlying MistralForCausalLM.  LoRA is injected at the linear-layer
+        # level so it IS applied even when calling the base model directly.
         backbone = getattr(self.base_model, "model", self.base_model)
+
+        # One-time check: verify LoRA adapters exist and are in the call graph.
+        if not self._lora_verified:
+            lora_params = [(n, p) for n, p in self.base_model.named_parameters() if "lora_A" in n]
+            if lora_params:
+                name, param = lora_params[0]
+                logger.info(
+                    f"  [LoRA check] Found {len(lora_params)} lora_A parameters. "
+                    f"Example: '{name}' shape={tuple(param.shape)} "
+                    f"requires_grad={param.requires_grad} "
+                    f"mean={param.float().mean().item():.6f}"
+                )
+            else:
+                logger.warning(
+                    "  [LoRA check] *** No lora_A parameters found in self.base_model! "
+                    "LoRA may not be active. ***"
+                )
+            self._lora_verified = True
 
         # Forward pass
         outputs = backbone(
