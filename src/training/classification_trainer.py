@@ -254,7 +254,7 @@ class EHRClassificationTrainer:
                 f"total={total}"
             )
         except Exception as e:
-            logger.warning(f"  - Could not compute class distribution for {split_name}: {e}")
+            print(f"  - Could not compute class distribution for {split_name}: {e}")
 
     def create_collator(self):
         """Create data collator for batching."""
@@ -527,7 +527,7 @@ class EHRClassificationTrainer:
                 f"LoRA adapters (keys containing lora_A / lora_B)."
             )
         if not head_keys:
-            logger.warning(
+            print(
                 "  - No 'classifier.*' keys found in checkpoint; "
                 "classifier head will be randomly initialised."
             )
@@ -539,15 +539,15 @@ class EHRClassificationTrainer:
         # Critical check: unexpected keys mean the key names in transfer_state
         # do NOT exist in the current model — those weights were silently dropped.
         if unexpected:
-            logger.warning(
+            print(
                 f"  - *** WARNING: {len(unexpected)} keys from the checkpoint could NOT "
                 f"be matched to the current model and were DROPPED (weights NOT loaded). "
                 f"This likely means a key-name mismatch between the checkpoint and the "
                 f"current model (e.g. different Unsloth/PEFT version). ***"
             )
-            logger.warning("  - First 10 unmatched keys:")
+            print("  - First 10 unmatched keys:")
             for k in unexpected[:10]:
-                logger.warning(f"      {k}")
+                print(f"      {k}")
         else:
             print("  - All transfer keys matched the current model successfully.")
 
@@ -558,34 +558,42 @@ class EHRClassificationTrainer:
                 if any(kw in k for kw in lora_keywords) or k.startswith("classifier.")
             ]
             if unexpected_missing:
-                logger.warning(
+                print(
                     f"  - *** WARNING: {len(unexpected_missing)} LoRA/classifier keys are "
                     f"missing from the checkpoint (will use random init): "
                     f"{unexpected_missing[:5]}{'...' if len(unexpected_missing) > 5 else ''} ***"
                 )
 
         # ── Sanity-check: verify a LoRA weight was actually changed ──────────
+        # Use std and a specific element — LoRA A means are always ≈ 0 by init.
         if lora_keys:
             probe_key = lora_keys[0]
             if probe_key in model_state and probe_key in transfer_state:
-                before = model_state[probe_key].float().mean().item()
-                after  = self.classifier_model.state_dict()[probe_key].float().mean().item()
-                ckpt_val = transfer_state[probe_key].float().mean().item()
-                print(
+                t_before = model_state[probe_key].float()
+                t_ckpt   = transfer_state[probe_key].float()
+                t_after  = self.classifier_model.state_dict()[probe_key].float()
+                logger.info(
                     f"  - Sanity check on '{probe_key}':\n"
-                    f"      mean before load = {before:.6f}\n"
-                    f"      mean in ckpt     = {ckpt_val:.6f}\n"
-                    f"      mean after load  = {after:.6f}"
+                    f"      std  before={t_before.std().item():.6f}  "
+                    f"ckpt={t_ckpt.std().item():.6f}  "
+                    f"after={t_after.std().item():.6f}\n"
+                    f"      [0,0] before={t_before.flatten()[0].item():.8f}  "
+                    f"ckpt={t_ckpt.flatten()[0].item():.8f}  "
+                    f"after={t_after.flatten()[0].item():.8f}"
                 )
-                if abs(after - ckpt_val) > 1e-5:
-                    logger.warning("  - *** Sanity check FAILED: loaded value does not match checkpoint! ***")
-                elif abs(before - after) < 1e-8:
-                    logger.warning("  - *** Sanity check WARNING: value unchanged after load — key may not have matched. ***")
+                if not torch.allclose(t_after, t_ckpt, atol=1e-5):
+                    print("  - *** Sanity check FAILED: loaded tensor does not match checkpoint! ***")
+                elif torch.allclose(t_before, t_after, atol=1e-8):
+                    print(
+                        "  - *** Sanity check WARNING: tensor unchanged after load. "
+                        "The pretrained_checkpoint may already contain these LoRA values "
+                        "(expected if both checkpoints share the same pretraining base). ***"
+                    )
                 else:
-                    print("  - Sanity check PASSED: LoRA weight updated correctly.")
+                    logger.info("  - Sanity check PASSED: LoRA weight matches checkpoint and differs from pre-load value.")
         # ─────────────────────────────────────────────────────────────────────
 
-        print("  - Training will start from step 0 with the above weights.")
+        logger.info("  - Training will start from step 0 with the above weights.")
 
     def _pred_to_labels_and_probs(self, pred_output):
         """

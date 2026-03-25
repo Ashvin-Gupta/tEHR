@@ -30,7 +30,7 @@ wandb:
 training:
   output_dir: "/gpfs/scratch/qc25022/pancreas/experiments/Results/ehrshot-pancreas-classification-finetune"  # EDIT ME
   overwrite_output_dir: false
-  epochs: 1
+  epochs: 3
   batch_size: 8
   eval_batch_size: 8
   learning_rate: 1e-6
