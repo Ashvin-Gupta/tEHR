@@ -382,9 +382,10 @@ class EHRClassificationTrainer:
 
             logger.info("\nGenerating ROC and PR curves for combined validation + test set...")
             combined_pred_output = self.trainer.predict(combined_dataset)
+            c_labels, c_probs = self._pred_to_labels_and_probs(combined_pred_output)
             plot_all_curves(
-                combined_pred_output.label_ids,
-                combined_pred_output.predictions,
+                c_labels,
+                c_probs,
                 os.path.join(self.training_config['output_dir'], 'plots_combined')
             )
             return combined_results, combined_results
@@ -402,7 +403,8 @@ class EHRClassificationTrainer:
         # Generate validation plots
         logger.info("\nGenerating ROC and PR curves for validation set...")
         pred_output = self.trainer.predict(val_dataset)
-        plot_all_curves(pred_output.label_ids, pred_output.predictions, os.path.join(self.training_config['output_dir'], 'plots_validation'))
+        v_labels, v_probs = self._pred_to_labels_and_probs(pred_output)
+        plot_all_curves(v_labels, v_probs, os.path.join(self.training_config['output_dir'], 'plots_validation'))
         
         # Evaluate on test set
         logger.info("\n" + "=" * 80)
@@ -417,10 +419,118 @@ class EHRClassificationTrainer:
         # Generate test plots
         logger.info("\nGenerating ROC and PR curves for test set...")
         test_pred_output = self.trainer.predict(test_dataset)
-        plot_all_curves(test_pred_output.label_ids, test_pred_output.predictions, os.path.join(self.training_config['output_dir'], 'plots_test'))
+        t_labels, t_probs = self._pred_to_labels_and_probs(test_pred_output)
+        plot_all_curves(t_labels, t_probs, os.path.join(self.training_config['output_dir'], 'plots_test'))
         
         return eval_results, test_results
     
+    def restore_weights_from_checkpoint(self, checkpoint_path: str):
+        """
+        Warm-start LoRA adapter weights AND the classifier head from a
+        previously saved classifier checkpoint, WITHOUT resuming the training
+        step counter, optimizer, or scheduler.
+
+        Use this when the task is the same (e.g. pancreatic cancer prediction)
+        but the dataset has changed: you want the same trained weights as a
+        starting point, but a clean training run from step 0.
+
+        The quantised base-model weights are intentionally skipped — they are
+        already loaded correctly from `pretrained_checkpoint` and bitsandbytes
+        NF4 state cannot be trivially restored from a safetensors file.
+
+        Args:
+            checkpoint_path: Directory of a Trainer checkpoint containing
+                             `model.safetensors` (full LLMClassifier state).
+        """
+        logger.info("\n" + "=" * 80)
+        logger.info("Warm-starting weights from checkpoint (LoRA adapters + classifier head)...")
+        logger.info("=" * 80)
+        logger.info(f"  - Source checkpoint: {checkpoint_path}")
+
+        weights_file = os.path.join(checkpoint_path, "model.safetensors")
+        if not os.path.exists(weights_file):
+            weights_file = os.path.join(checkpoint_path, "pytorch_model.bin")
+        if not os.path.exists(weights_file):
+            raise FileNotFoundError(
+                f"No model weights found in checkpoint directory: {checkpoint_path}"
+            )
+
+        try:
+            from safetensors.torch import load_file as _st_load
+            ckpt_state = _st_load(weights_file)
+        except Exception:
+            ckpt_state = torch.load(weights_file, map_location="cpu", weights_only=True)
+
+        # Load LoRA adapter matrices and the classifier head.
+        # Skip quantised base-model weights (bitsandbytes NF4 state tensors) —
+        # they are already in memory from the original pretrained_checkpoint.
+        lora_keywords = (
+            "lora_A", "lora_B", "lora_magnitude_vector",
+            "lora_embedding_A", "lora_embedding_B",
+        )
+        transfer_state = {
+            k: v for k, v in ckpt_state.items()
+            if any(kw in k for kw in lora_keywords) or k.startswith("classifier.")
+        }
+
+        lora_keys = [k for k in transfer_state if any(kw in k for kw in lora_keywords)]
+        head_keys = [k for k in transfer_state if k.startswith("classifier.")]
+
+        if not lora_keys:
+            raise RuntimeError(
+                f"No LoRA adapter keys found in {weights_file}. "
+                f"Make sure the checkpoint was saved from an LLMClassifier with "
+                f"LoRA adapters (keys containing lora_A / lora_B)."
+            )
+        if not head_keys:
+            logger.warning(
+                "  - No 'classifier.*' keys found in checkpoint; "
+                "classifier head will be randomly initialised."
+            )
+
+        missing, unexpected = self.classifier_model.load_state_dict(transfer_state, strict=False)
+        logger.info(f"  - Loaded {len(lora_keys)} LoRA parameter tensors.")
+        logger.info(f"  - Loaded {len(head_keys)} classifier head tensors.")
+        if unexpected:
+            logger.info(
+                f"  - Skipped {len(unexpected)} unrecognised keys "
+                f"(expected for quantised base-model weights)."
+            )
+        if missing:
+            logger.warning(
+                f"  - {len(missing)} keys not found in checkpoint "
+                f"(will use random init): {missing[:5]}{'...' if len(missing) > 5 else ''}"
+            )
+        logger.info("  - Training will start from step 0 with the above weights.")
+
+    def _pred_to_labels_and_probs(self, pred_output):
+        """
+        Convert a PredictionOutput into 1-D numpy arrays suitable for sklearn
+        metrics and the plot_all_curves helper.
+
+        - label_ids may be 1-D class indices or 2-D one-hot; we always return
+          1-D class indices.
+        - predictions are raw logits of shape (N, C); we softmax them and
+          return the positive-class (index 1) column as a 1-D probability array.
+        """
+        import numpy as np
+
+        labels = pred_output.label_ids
+        logits = pred_output.predictions
+        if isinstance(logits, tuple):
+            logits = logits[0]
+
+        # One-hot → class indices
+        if np.ndim(labels) == 2:
+            labels = np.argmax(labels, axis=1)
+
+        probs = torch.softmax(torch.tensor(logits, dtype=torch.float32), dim=-1).numpy()
+        # For binary classification extract the positive-class column
+        if probs.ndim == 2 and probs.shape[1] == 2:
+            probs = probs[:, 1]
+
+        return labels, probs
+
     def _generate_plots(self, pred_output, plot_dir_name: str):
         """Helper to generate ROC and PR curves."""
         logits = pred_output.predictions
@@ -458,7 +568,13 @@ class EHRClassificationTrainer:
         
         # Create classifier
         self.create_classifier()
-        
+
+        # Optionally warm-start LoRA adapters + classifier head from a previous
+        # checkpoint (same task, new dataset — training restarts from step 0).
+        init_ckpt = self.model_config.get("init_from_checkpoint")
+        if init_ckpt:
+            self.restore_weights_from_checkpoint(init_ckpt)
+
         # Prepare datasets
         train_dataset, val_dataset, test_dataset = self.prepare_datasets()
         

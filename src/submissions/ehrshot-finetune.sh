@@ -5,8 +5,8 @@
 #SBATCH --cpus-per-gpu=12
 #SBATCH -t 24:0:0
 #SBATCH --mem-per-cpu=7500M
-#SBATCH -o /data/home/qc25022/TextCancEHR2/HPC_Classifier/logo/%x.o%j
-#SBATCH -e /data/home/qc25022/TextCancEHR2/HPC_Classifier/loge/%x.e%j
+#SBATCH -o /data/home/qc25022/TextCancEHR2/HPC_Eval/logo/%x.o%j
+#SBATCH -e /data/home/qc25022/TextCancEHR2/HPC_Eval/loge/%x.e%j
 
 set -e
 
@@ -23,10 +23,15 @@ export PYTHONPATH="${BASE_DIR}:${PYTHONPATH}"
 # contains LoRA + classifier head training state.
 # Example:
 #   CHECKPOINT_PATH="/path/to/seed_123456/checkpoint-2000" sbatch ehrshot-finetune.sh
-CHECKPOINT_PATH="/gpfs/scratch/qc25022/pancreas/experiments/Results/lora-12-month-logistic-refactored-new-time-mistral-7B/seed_3078332855/checkpoint-7372"
+
+# CHECKPOINT_PATH="/gpfs/scratch/qc25022/pancreas/experiments/Results/lora-12-month-logistic-refactored-new-time-mistral-7B/seed_3078332855/checkpoint-7372"
+
+# python -m src.pipelines.finetune_llm_classifier \
+#   --config_filepath src/configs/ehrshot_finetune_config.yaml \
+#   ${CHECKPOINT_PATH:+--checkpoint_path "$CHECKPOINT_PATH"}
+
 
 python -m src.pipelines.finetune_llm_classifier \
   --config_filepath src/configs/ehrshot_finetune_config.yaml \
-  ${CHECKPOINT_PATH:+--checkpoint_path "$CHECKPOINT_PATH"}
 
 deactivate

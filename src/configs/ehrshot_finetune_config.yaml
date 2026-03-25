@@ -14,6 +14,14 @@ model:
   head_hidden_size: 512
   head_dropout: 0.1
 
+  # Warm-start: load LoRA adapter weights AND the classifier head from a
+  # previously trained classifier checkpoint.  Training still starts from
+  # step 0 with a clean optimizer/scheduler — only the model weights are
+  # carried over.  Use this when the task is the same (pancreatic cancer
+  # prediction) but the dataset has changed.
+  # Comment out to start from the pretrained_checkpoint LoRA weights only.
+  init_from_checkpoint: "/gpfs/scratch/qc25022/pancreas/experiments/Results/lora-12-month-logistic-refactored-new-time-mistral-7B/seed_3078332855/checkpoint-7372"
+
 wandb:
   enabled: true
   project: "EHRSHOT-classification"
