@@ -24,16 +24,16 @@ from src.data.dataset_factory import get_dataset
 # Configuration & Hyperparameters (Fixed for Reproducibility)
 # ---------------------------------------------------------------------------
 CONFIG_PATH = "src/configs/classification_config.yaml"
-EMBEDDINGS_DIR = "/gpfs/scratch/qc25022/pancreas/experiments/Results/lora-12-month-logistic-refactored-new-time-mistral-7B/patient_clustering_heldout"
+EMBEDDINGS_DIR = "/gpfs/scratch/qc25022/pancreas/experiments/Results/lora-1-month-logistic-refactored-new-time-mistral-7B/patient_clustering_heldout"
 OUTPUT_DIR = EMBEDDINGS_DIR + "/journal_clustering_output"
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 RANDOM_SEED = 42
 
 # Fixed HDBSCAN parameters from previous search
-N_NEIGHBORS = 40
-MIN_CLUSTER_SIZE = 65
-MIN_SAMPLES = 10
+N_NEIGHBORS = 41
+MIN_CLUSTER_SIZE = 67
+MIN_SAMPLES = 5
 CLUSTER_SELECTION_METHOD = "eom"
 
 # --- Categorical Terms (Conditions/Events) ---
