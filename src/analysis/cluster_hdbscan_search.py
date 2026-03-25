@@ -89,21 +89,26 @@ MAX_NOISE_FRACTION = 0.05   # more than 5% noise → rejected outright
 MIN_CLUSTERS = 4            # fewer than this → rejected outright
 
 
-def calculate_validity_score(clusterer, cluster_labels: np.ndarray) -> float:
+def calculate_purity_score(cluster_labels: np.ndarray, binary_labels: np.ndarray) -> float:
     """
-    Score clusters based on intrinsic density and separation (DBCV).
+    Score how well clusters separate cases from controls.
 
     Hard constraints (score = 0 immediately if violated):
-        - noise fraction must be in (MIN_NOISE_FRACTION, MAX_NOISE_FRACTION)
-          i.e. some noise is expected, but no more than 5 %.
+        - noise fraction must be in (MIN_NOISE_FRACTION, MAX_NOISE_FRACTION),
+          i.e. some noise is expected but no more than 5%.
         - at least MIN_CLUSTERS real clusters must be found.
+
+    Purity per cluster = |case_rate - 0.5| * 2
+        → 1.0 means the cluster is entirely case or entirely control.
+        → 0.0 means a perfect 50/50 mix.
+    avg_purity is the mean across all clusters.
 
     Soft penalty:
         - noise_penalty = (1 - noise_fraction)^2 — quadratic, so even noise
-          below the cap is penalised more steeply than a linear term would.
+          below the cap is penalised more steeply than a linear term.
         - cluster_penalty = 0.5 if more than 30 clusters (too fragmented).
 
-    Final score = relative_validity * noise_penalty * cluster_penalty.
+    Final score = avg_purity * noise_penalty * cluster_penalty.
     """
     noise_ratio = float((cluster_labels == -1).mean())
 
@@ -116,15 +121,17 @@ def calculate_validity_score(clusterer, cluster_labels: np.ndarray) -> float:
     if len(unique_clusters) < MIN_CLUSTERS:
         return 0.0
 
-    try:
-        validity = clusterer.relative_validity_
-    except ValueError:
-        return 0.0
+    purity_per_cluster = []
+    for cid in unique_clusters:
+        idx = np.where(cluster_labels == cid)[0]
+        case_rate = binary_labels[idx].mean()
+        purity_per_cluster.append(abs(case_rate - 0.5) * 2)
 
+    avg_purity = float(np.mean(purity_per_cluster))
     noise_penalty = (1.0 - noise_ratio) ** 2
     cluster_penalty = 1.0 if len(unique_clusters) <= 30 else 0.5
 
-    return validity * noise_penalty * cluster_penalty
+    return avg_purity * noise_penalty * cluster_penalty
 
 
 # ---------------------------------------------------------------------------
@@ -166,19 +173,14 @@ def run_random_search(
 
         emb_10d = umap_cache[n_neighbors]
 
-        clusterer = hdbscan.HDBSCAN(
+        cluster_labels = hdbscan.HDBSCAN(
             min_cluster_size=min_cluster_size,
             min_samples=min_samples,
             cluster_selection_method=method,
             prediction_data=False,
-            gen_min_span_tree=True # Required for relative_validity_
-        )
-        
-        clusterer.fit(emb_10d)
-        cluster_labels = clusterer.labels_
+        ).fit_predict(emb_10d)
 
-        # Use the new unsupervised score
-        score = calculate_validity_score(clusterer, cluster_labels)
+        score = calculate_purity_score(cluster_labels, binary_labels)
         n_clusters = len(set(cluster_labels)) - (1 if -1 in cluster_labels else 0)
         noise_pct = float((cluster_labels == -1).mean() * 100)
 
