@@ -19,6 +19,7 @@ import numpy as np
 import pandas as pd
 import umap
 import yaml
+from sklearn.metrics import silhouette_score
 from sklearn.preprocessing import normalize
 
 from src.data.dataset_factory import get_dataset
@@ -150,17 +151,20 @@ def save_trial_umap(
         color = "lightgrey" if cid == -1 else cmap(i)
         ax.scatter(z_2d[mask, 0], z_2d[mask, 1], s=8, alpha=0.5, color=color, label=label)
 
-    ax.set_title(f"Trial {int(params['trial'])}  —  score={params['score']:.4f}", weight="bold")
+    ax.set_title(f"Trial {int(params['trial'])}  —  purity={params['purity_score']:.4f}", weight="bold")
     ax.axis("off")
     ax.legend(title="Cluster", bbox_to_anchor=(1.01, 1), loc="upper left", fontsize=8)
 
     param_text = (
-        f"n_neighbors : {int(params['n_neighbors'])}\n"
+        f"n_neighbors      : {int(params['n_neighbors'])}\n"
         f"min_cluster_size : {int(params['min_cluster_size'])}\n"
-        f"min_samples : {int(params['min_samples'])}\n"
-        f"method : {params['cluster_selection_method']}\n"
-        f"n_clusters : {int(params['n_clusters'])}\n"
-        f"noise : {params['noise_pct']:.2f}%"
+        f"min_samples      : {int(params['min_samples'])}\n"
+        f"method           : {params['cluster_selection_method']}\n"
+        f"n_clusters       : {int(params['n_clusters'])}\n"
+        f"noise            : {params['noise_pct']:.2f}%\n"
+        f"purity           : {params['purity_score']:.4f}\n"
+        f"silhouette       : {params['silhouette_score']:.4f}\n"
+        f"DBCV validity    : {params['dbcv_validity']:.4f}"
     )
     fig.text(
         0.78, 0.35, param_text,
@@ -170,7 +174,7 @@ def save_trial_umap(
     )
 
     plt.tight_layout()
-    fname = f"trial_{int(params['trial']):03d}_score{params['score']:.4f}.png"
+    fname = f"trial_{int(params['trial']):03d}_purity{params['purity_score']:.4f}.png"
     plt.savefig(os.path.join(output_dir, fname), dpi=150, bbox_inches="tight")
     plt.close()
 
@@ -224,16 +228,31 @@ def run_random_search(
 
         emb_10d = umap_cache[n_neighbors]
 
-        cluster_labels = hdbscan.HDBSCAN(
+        clusterer = hdbscan.HDBSCAN(
             min_cluster_size=min_cluster_size,
             min_samples=min_samples,
             cluster_selection_method=method,
             prediction_data=False,
-        ).fit_predict(emb_10d)
+            gen_min_span_tree=True,
+        ).fit(emb_10d)
+        cluster_labels = clusterer.labels_
 
         score = calculate_purity_score(cluster_labels, binary_labels)
         n_clusters = len(set(cluster_labels)) - (1 if -1 in cluster_labels else 0)
         noise_pct = float((cluster_labels == -1).mean() * 100)
+
+        # Silhouette: unsupervised geometry score, computed on non-noise points only
+        non_noise = cluster_labels != -1
+        if non_noise.sum() > 0 and len(np.unique(cluster_labels[non_noise])) >= 2:
+            sil = round(float(silhouette_score(emb_10d[non_noise], cluster_labels[non_noise])), 4)
+        else:
+            sil = float("nan")
+
+        # DBCV relative validity: HDBSCAN's own density-based internal score
+        try:
+            dbcv = round(float(clusterer.relative_validity_), 4)
+        except Exception:
+            dbcv = float("nan")
 
         row = {
             "trial": trial,
@@ -241,7 +260,9 @@ def run_random_search(
             "min_cluster_size": min_cluster_size,
             "min_samples": min_samples,
             "cluster_selection_method": method,
-            "score": round(score, 4),
+            "purity_score": round(score, 4),
+            "silhouette_score": sil,
+            "dbcv_validity": dbcv,
             "n_clusters": n_clusters,
             "noise_pct": round(noise_pct, 2),
         }
@@ -251,13 +272,14 @@ def run_random_search(
         print(
             f"  [Trial {trial}/{n_trials}] {status} "
             f"nn={n_neighbors}, mcs={min_cluster_size}, ms={min_samples} "
-            f"→ score={score:.3f}, clusters={n_clusters}, noise={noise_pct:.1f}%"
+            f"→ purity={score:.3f}, sil={sil:.3f}, dbcv={dbcv:.3f}, "
+            f"clusters={n_clusters}, noise={noise_pct:.1f}%"
         )
 
         if score > 0:
             save_trial_umap(z_2d, cluster_labels, row, plots_dir)
 
-    return pd.DataFrame(results).sort_values("score", ascending=False).reset_index(drop=True)
+    return pd.DataFrame(results).sort_values("purity_score", ascending=False).reset_index(drop=True)
 
 
 # ---------------------------------------------------------------------------
