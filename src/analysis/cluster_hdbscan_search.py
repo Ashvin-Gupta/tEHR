@@ -124,40 +124,66 @@ def calculate_purity(cluster_labels: np.ndarray, binary_labels: np.ndarray) -> f
 def save_trial_umap(
     z_2d: np.ndarray,
     cluster_labels: np.ndarray,
+    binary_labels: np.ndarray,
     params: dict,
     output_dir: str,
 ) -> None:
-    """Save a 2D UMAP scatter for a valid trial with params annotated on the side."""
-    fig, ax = plt.subplots(figsize=(9, 6))
+    """Save a 1x2 UMAP figure: left = clusters, right = case/control."""
+    fig, (ax_cl, ax_cc) = plt.subplots(1, 2, figsize=(14, 6))
+    fig.suptitle(
+        f"Trial {int(params['trial'])}  —  silhouette={params['silhouette_score']:.4f}",
+        weight="bold", fontsize=12,
+    )
 
+    # --- Left: coloured by cluster ---
     unique = sorted(set(cluster_labels))
-    cmap = plt.cm.get_cmap("tab10", len(unique))
-    for i, cid in enumerate(unique):
+    real_clusters = [c for c in unique if c != -1]
+    cmap = plt.cm.get_cmap("tab10", max(len(real_clusters), 1))
+
+    if -1 in unique:
+        mask = cluster_labels == -1
+        ax_cl.scatter(z_2d[mask, 0], z_2d[mask, 1], s=6, alpha=0.3,
+                      color="lightgrey", label=f"Noise ({mask.sum()})", rasterized=True)
+    for i, cid in enumerate(real_clusters):
         mask = cluster_labels == cid
-        label = f"Noise ({mask.sum()})" if cid == -1 else f"Cluster {cid} ({mask.sum()})"
-        color = "lightgrey" if cid == -1 else cmap(i)
-        ax.scatter(z_2d[mask, 0], z_2d[mask, 1], s=8, alpha=0.5, color=color, label=label)
+        ax_cl.scatter(z_2d[mask, 0], z_2d[mask, 1], s=8, alpha=0.6,
+                      color=cmap(i), label=f"Cluster {cid} ({mask.sum()})", rasterized=True)
+        cx, cy = float(np.median(z_2d[mask, 0])), float(np.median(z_2d[mask, 1]))
+        ax_cl.text(cx, cy, str(cid), fontsize=9, weight="bold", ha="center", va="center",
+                   bbox=dict(facecolor="white", alpha=0.7, edgecolor="none", boxstyle="round,pad=0.2"))
 
-    ax.set_title(f"Trial {int(params['trial'])}  —  silhouette={params['silhouette_score']:.4f}", weight="bold")
-    ax.axis("off")
-    ax.legend(title="Cluster", bbox_to_anchor=(1.01, 1), loc="upper left", fontsize=8)
+    ax_cl.set_title("Clusters", fontsize=11)
+    ax_cl.axis("off")
+    ax_cl.legend(title="Cluster", loc="lower right", fontsize=7, markerscale=1.5, framealpha=0.6)
 
+    # --- Right: coloured by case / control ---
+    case_mask = binary_labels == 1
+    ctrl_mask = binary_labels == 0
+    ax_cc.scatter(z_2d[ctrl_mask, 0], z_2d[ctrl_mask, 1], s=6, alpha=0.35,
+                  color="lightgrey", label=f"Control ({ctrl_mask.sum()})", rasterized=True)
+    ax_cc.scatter(z_2d[case_mask, 0], z_2d[case_mask, 1], s=8, alpha=0.7,
+                  color="#e74c3c", label=f"Case ({case_mask.sum()})", rasterized=True)
+
+    ax_cc.set_title("Case vs Control", fontsize=11)
+    ax_cc.axis("off")
+    ax_cc.legend(loc="lower right", fontsize=7, markerscale=1.5, framealpha=0.6)
+
+    # --- Parameter box: top-left corner, small ---
     param_text = (
-        f"n_neighbors      : {int(params['n_neighbors'])}\n"
-        f"min_cluster_size : {int(params['min_cluster_size'])}\n"
-        f"min_samples      : {int(params['min_samples'])}\n"
-        f"method           : {params['cluster_selection_method']}\n"
-        f"n_clusters       : {int(params['n_clusters'])}\n"
-        f"noise            : {params['noise_pct']:.2f}%\n"
-        f"purity           : {params['purity_score']:.4f}\n"
-        f"silhouette       : {params['silhouette_score']:.4f}\n"
-        f"DBCV validity    : {params['dbcv_validity']:.4f}"
+        f"nn={int(params['n_neighbors'])}  "
+        f"mcs={int(params['min_cluster_size'])}  "
+        f"ms={int(params['min_samples'])}\n"
+        f"clusters={int(params['n_clusters'])}  "
+        f"noise={params['noise_pct']:.1f}%\n"
+        f"sil={params['silhouette_score']:.4f}  "
+        f"dbcv={params['dbcv_validity']:.4f}  "
+        f"purity={params['purity_score']:.4f}"
     )
     fig.text(
-        0.78, 0.35, param_text,
-        fontsize=8, family="monospace",
+        0.01, 0.99, param_text,
+        fontsize=6.5, family="monospace",
         va="top", ha="left",
-        bbox=dict(facecolor="lightyellow", edgecolor="grey", boxstyle="round,pad=0.4"),
+        bbox=dict(facecolor="lightyellow", edgecolor="grey", boxstyle="round,pad=0.3", alpha=0.8),
     )
 
     plt.tight_layout()
@@ -268,7 +294,7 @@ def run_random_search(
         )
 
         if valid:
-            save_trial_umap(z_2d, cluster_labels, row, plots_dir)
+            save_trial_umap(z_2d, cluster_labels, binary_labels, row, plots_dir)
 
     return (
         pd.DataFrame(results)
@@ -284,6 +310,7 @@ def main() -> None:
     os.makedirs(OUTPUT_DIR, exist_ok=True)
 
     print("Loading embeddings...")
+    print(EMBEDDINGS_DIR)
     embeddings, patient_ids = load_embeddings(EMBEDDINGS_DIR)
 
     print("Loading labels...")
