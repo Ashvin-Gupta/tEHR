@@ -19,6 +19,7 @@ import numpy as np
 import pandas as pd
 import umap
 import yaml
+from sklearn.preprocessing import normalize
 
 from src.data.dataset_factory import get_dataset
 
@@ -33,7 +34,7 @@ EMBEDDINGS_DIR = (
     "patient_clustering_heldout"
 )
 OUTPUT_DIR = EMBEDDINGS_DIR + "/hdbscan_search"
-N_TRIALS = 10
+N_TRIALS = 30
 RANDOM_SEED = 42
 
 
@@ -42,6 +43,7 @@ RANDOM_SEED = 42
 # ---------------------------------------------------------------------------
 def load_embeddings(output_dir: str):
     embeddings = np.load(os.path.join(output_dir, "embeddings.npy"))
+    embeddings = normalize(embeddings, norm='l2')
     patient_ids_path = os.path.join(output_dir, "patient_ids.npy")
     if os.path.exists(patient_ids_path):
         patient_ids = np.load(patient_ids_path, allow_pickle=True).tolist()
@@ -85,7 +87,7 @@ def reduce_umap(
 # ---------------------------------------------------------------------------
 # Scoring
 # ---------------------------------------------------------------------------
-MIN_NOISE_FRACTION = 0.001  # must have *some* noise (pure assignments are suspect)
+MIN_NOISE_FRACTION = 0.005  # must have *some* noise (pure assignments are suspect)
 MAX_NOISE_FRACTION = 0.05   # more than 5% noise → rejected outright
 MIN_CLUSTERS = 4            # outside [MIN_CLUSTERS, MAX_CLUSTERS] → rejected outright
 MAX_CLUSTERS = 6
@@ -210,7 +212,7 @@ def run_random_search(
 
     for trial in range(1, n_trials + 1):
         n_neighbors = rng.randint(10, 50)
-        min_cluster_size = rng.randint(20, 80)
+        min_cluster_size = rng.randint(20, 150)
         min_samples = rng.randint(5, 30)
         method = "eom"
 
