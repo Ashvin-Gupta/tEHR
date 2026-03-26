@@ -30,9 +30,7 @@ from src.data.dataset_factory import get_dataset
 # ---------------------------------------------------------------------------
 CONFIG_PATH = "src/configs/classification_config.yaml"
 EMBEDDINGS_DIR = (
-    "/gpfs/scratch/qc25022/pancreas/experiments/Results/"
-    "lora-3month-logistic-refactored-new-time-mistral-7B/"
-    "patient_clustering_heldout"
+    "/gpfs/scratch/qc25022/pancreas/experiments/Results/lora-3-month-logistic-refactored-new-time-mistral-7B/patient_clustering_heldout"
 )
 OUTPUT_DIR = EMBEDDINGS_DIR + "/hdbscan_search"
 N_TRIALS = 30

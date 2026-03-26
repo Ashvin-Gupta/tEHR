@@ -488,6 +488,7 @@ def main():
     df_clusters["patient_id_str"] = df_clusters["patient_id"].astype(str)
     df_clusters["label_id"] = df_clusters["patient_id_str"].map(subject_to_label)
     df_clusters["case_label"] = df_clusters["label_id"].map(label_to_name).fillna("Control")
+    df_clusters.to_csv(os.path.join(OUTPUT_DIR, "patient_clusters.csv"), index=False)
 
     print("3. Analyzing Differential Features...")
     df_summary = analyse_differential_features(dataset, df_clusters, subject_to_record_idx, OUTPUT_DIR)
