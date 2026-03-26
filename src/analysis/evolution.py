@@ -14,6 +14,7 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
+from sklearn.preprocessing import normalize
 
 # ---------------------------------------------------------------------------
 # Config: Update these to your exact paths
@@ -43,7 +44,7 @@ def load_and_align_embeddings(emb_dir: str, reference_ids: list):
     print(f"Loading data from: {emb_dir}")
     embeddings = np.load(os.path.join(emb_dir, "embeddings.npy"))
     patient_ids = np.load(os.path.join(emb_dir, "patient_ids.npy"), allow_pickle=True).tolist()
-    
+    embeddings = normalize(embeddings, norm='l2')
     # Create a mapping of patient_id -> embedding vector
     emb_dict = {pid: emb for pid, emb in zip(patient_ids, embeddings)}
     
