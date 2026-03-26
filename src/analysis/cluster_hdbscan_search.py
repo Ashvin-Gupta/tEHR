@@ -31,7 +31,7 @@ from src.data.dataset_factory import get_dataset
 CONFIG_PATH = "src/configs/classification_config.yaml"
 EMBEDDINGS_DIR = (
     "/gpfs/scratch/qc25022/pancreas/experiments/Results/"
-    "lora-1-month-logistic-refactored-new-time-mistral-7B/"
+    "lora-3month-logistic-refactored-new-time-mistral-7B/"
     "patient_clustering_heldout"
 )
 OUTPUT_DIR = EMBEDDINGS_DIR + "/hdbscan_search"
@@ -86,49 +86,38 @@ def reduce_umap(
 
 
 # ---------------------------------------------------------------------------
-# Scoring
+# Constraints & scoring
 # ---------------------------------------------------------------------------
 MIN_NOISE_FRACTION = 0.005  # must have *some* noise (pure assignments are suspect)
 MAX_NOISE_FRACTION = 0.05   # more than 5% noise → rejected outright
 MIN_CLUSTERS = 4            # outside [MIN_CLUSTERS, MAX_CLUSTERS] → rejected outright
-MAX_CLUSTERS = 6
+MAX_CLUSTERS = 12
 
 
-def calculate_purity_score(cluster_labels: np.ndarray, binary_labels: np.ndarray) -> float:
-    """
-    Score how well clusters separate cases from controls.
-
-    Hard constraints (score = 0 immediately if violated):
-        - noise fraction must be in (MIN_NOISE_FRACTION, MAX_NOISE_FRACTION).
-        - cluster count must be in [MIN_CLUSTERS, MAX_CLUSTERS].
-
-    Purity per cluster = |case_rate - 0.5| * 2
-        → 1.0 means entirely case or entirely control.
-        → 0.0 means a perfect 50/50 mix.
-
-    Final score = avg_purity * (1 - noise_fraction)^2.
-    """
+def passes_constraints(cluster_labels: np.ndarray) -> bool:
+    """Return True only if the clustering satisfies the hard noise/count constraints."""
     noise_ratio = float((cluster_labels == -1).mean())
-
     if noise_ratio <= MIN_NOISE_FRACTION or noise_ratio >= MAX_NOISE_FRACTION:
-        return 0.0
+        return False
+    unique_clusters = np.unique(cluster_labels[cluster_labels != -1])
+    return MIN_CLUSTERS <= len(unique_clusters) <= MAX_CLUSTERS
 
-    mask = cluster_labels != -1
-    unique_clusters = np.unique(cluster_labels[mask])
 
-    if not (MIN_CLUSTERS <= len(unique_clusters) <= MAX_CLUSTERS):
-        return 0.0
-
+def calculate_purity(cluster_labels: np.ndarray, binary_labels: np.ndarray) -> float:
+    """
+    Diagnostic metric: avg |case_rate - 0.5| * 2 across clusters.
+    1.0 = all clusters entirely case or control; 0.0 = every cluster 50/50.
+    Always computed (even for failing trials) so it can be inspected.
+    """
+    unique_clusters = np.unique(cluster_labels[cluster_labels != -1])
+    if len(unique_clusters) == 0:
+        return float("nan")
     purity_per_cluster = []
     for cid in unique_clusters:
         idx = np.where(cluster_labels == cid)[0]
         case_rate = binary_labels[idx].mean()
         purity_per_cluster.append(abs(case_rate - 0.5) * 2)
-
-    avg_purity = float(np.mean(purity_per_cluster))
-    noise_penalty = (1.0 - noise_ratio) ** 2
-
-    return avg_purity * noise_penalty
+    return round(float(np.mean(purity_per_cluster)), 4)
 
 
 # ---------------------------------------------------------------------------
@@ -151,7 +140,7 @@ def save_trial_umap(
         color = "lightgrey" if cid == -1 else cmap(i)
         ax.scatter(z_2d[mask, 0], z_2d[mask, 1], s=8, alpha=0.5, color=color, label=label)
 
-    ax.set_title(f"Trial {int(params['trial'])}  —  purity={params['purity_score']:.4f}", weight="bold")
+    ax.set_title(f"Trial {int(params['trial'])}  —  silhouette={params['silhouette_score']:.4f}", weight="bold")
     ax.axis("off")
     ax.legend(title="Cluster", bbox_to_anchor=(1.01, 1), loc="upper left", fontsize=8)
 
@@ -174,7 +163,7 @@ def save_trial_umap(
     )
 
     plt.tight_layout()
-    fname = f"trial_{int(params['trial']):03d}_purity{params['purity_score']:.4f}.png"
+    fname = f"trial_{int(params['trial']):03d}_sil{params['silhouette_score']:.4f}.png"
     plt.savefig(os.path.join(output_dir, fname), dpi=150, bbox_inches="tight")
     plt.close()
 
@@ -237,13 +226,17 @@ def run_random_search(
         ).fit(emb_10d)
         cluster_labels = clusterer.labels_
 
-        score = calculate_purity_score(cluster_labels, binary_labels)
         n_clusters = len(set(cluster_labels)) - (1 if -1 in cluster_labels else 0)
         noise_pct = float((cluster_labels == -1).mean() * 100)
+        valid = passes_constraints(cluster_labels)
 
-        # Silhouette: unsupervised geometry score, computed on non-noise points only
+        # Purity: supervised diagnostic (reported but not used for ranking)
+        purity = calculate_purity(cluster_labels, binary_labels)
+
+        # Silhouette: primary optimisation target — unsupervised geometry score.
+        # Only meaningful (and only computed) for trials passing hard constraints.
         non_noise = cluster_labels != -1
-        if non_noise.sum() > 0 and len(np.unique(cluster_labels[non_noise])) >= 2:
+        if valid and non_noise.sum() > 0 and len(np.unique(cluster_labels[non_noise])) >= 2:
             sil = round(float(silhouette_score(emb_10d[non_noise], cluster_labels[non_noise])), 4)
         else:
             sil = float("nan")
@@ -260,26 +253,30 @@ def run_random_search(
             "min_cluster_size": min_cluster_size,
             "min_samples": min_samples,
             "cluster_selection_method": method,
-            "purity_score": round(score, 4),
             "silhouette_score": sil,
             "dbcv_validity": dbcv,
+            "purity_score": purity,
             "n_clusters": n_clusters,
             "noise_pct": round(noise_pct, 2),
         }
         results.append(row)
 
-        status = "✓ VALID" if score > 0 else "✗"
+        status = "✓ VALID" if valid else "✗"
         print(
             f"  [Trial {trial}/{n_trials}] {status} "
             f"nn={n_neighbors}, mcs={min_cluster_size}, ms={min_samples} "
-            f"→ purity={score:.3f}, sil={sil:.3f}, dbcv={dbcv:.3f}, "
+            f"→ sil={sil:.3f}, dbcv={dbcv:.3f}, purity={purity:.3f}, "
             f"clusters={n_clusters}, noise={noise_pct:.1f}%"
         )
 
-        if score > 0:
+        if valid:
             save_trial_umap(z_2d, cluster_labels, row, plots_dir)
 
-    return pd.DataFrame(results).sort_values("purity_score", ascending=False).reset_index(drop=True)
+    return (
+        pd.DataFrame(results)
+        .sort_values("silhouette_score", ascending=False, na_position="last")
+        .reset_index(drop=True)
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -304,7 +301,11 @@ def main() -> None:
     print("\nTop 5 configurations:")
     print(df_search.head(5).to_string(index=False))
 
-    best = df_search.iloc[0].to_dict()
+    valid_results = df_search.dropna(subset=["silhouette_score"])
+    if valid_results.empty:
+        print("\nNo trials passed the hard constraints. Consider relaxing them.")
+        return
+    best = valid_results.iloc[0].to_dict()
     best_path = os.path.join(OUTPUT_DIR, "best_params.json")
     with open(best_path, "w") as f:
         json.dump(best, f, indent=2)
