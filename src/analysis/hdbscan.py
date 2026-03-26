@@ -16,7 +16,7 @@ import seaborn as sns
 import umap
 import hdbscan
 from collections import defaultdict
-from sklearn.preprocessing import StandardScaler
+from sklearn.preprocessing import StandardScaler, normalize
 import joblib
 
 from src.data.dataset_factory import get_dataset
@@ -32,9 +32,9 @@ os.makedirs(OUTPUT_DIR, exist_ok=True)
 RANDOM_SEED = 42
 
 # Fixed HDBSCAN parameters from previous search
-N_NEIGHBORS = 40
-MIN_CLUSTER_SIZE = 30
-MIN_SAMPLES = 20
+N_NEIGHBORS = 42
+MIN_CLUSTER_SIZE = 58
+MIN_SAMPLES = 5
 CLUSTER_SELECTION_METHOD = "eom"
 
 # --- Categorical Terms (Conditions/Events) ---
@@ -165,6 +165,7 @@ LAB_TERMS = [
 # ---------------------------------------------------------------------------
 def load_embeddings(output_dir: str):
     embeddings = np.load(os.path.join(output_dir, "embeddings.npy"))
+    embeddings = normalize(embeddings, norm='l2')
     patient_ids_path = os.path.join(output_dir, "patient_ids.npy")
     if os.path.exists(patient_ids_path):
         patient_ids = np.load(patient_ids_path, allow_pickle=True).tolist()
