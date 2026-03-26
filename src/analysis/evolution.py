@@ -21,8 +21,8 @@ import seaborn as sns
 BASE_DIR = "/gpfs/scratch/qc25022/pancreas/experiments/Results"
 
 # Where your 1-month models and labels were just saved
-ANCHOR_DIR = f"{BASE_DIR}/lora-1-month-logistic-refactored-new-time-mistral-7B/patient_clustering_heldout/journal_clustering_output"
-
+JOURNAL_DIR = f"{BASE_DIR}/lora-1-month-logistic-refactored-new-time-mistral-7B/patient_clustering_heldout/journal_clustering_output"
+ANCHOR_DIR = f"{BASE_DIR}/lora-1-month-logistic-refactored-new-time-mistral-7B/patient_clustering_heldout"
 # Paths to the raw embeddings for each time point
 PATH_12M = f"{BASE_DIR}/lora-12-month-logistic-refactored-new-time-mistral-7B/patient_clustering_heldout"
 PATH_6M  = f"{BASE_DIR}/lora-6-month-logistic-refactored-new-time-mistral-7B/patient_clustering_heldout"
@@ -63,7 +63,7 @@ def load_and_align_embeddings(emb_dir: str, reference_ids: list):
 def main():
     print("1. Loading 1-Month Anchor Models & Labels...")
     # Load the freeze-dried 2D UMAP map
-    umap_2d_model = joblib.load(os.path.join(ANCHOR_DIR, "umap_2d.joblib"))
+    umap_2d_model = joblib.load(os.path.join(JOURNAL_DIR, "umap_2d.joblib"))
     
     # Load the labels and reference patient IDs
     df_anchor = pd.read_csv(os.path.join(ANCHOR_DIR, "patient_clusters.csv"))
