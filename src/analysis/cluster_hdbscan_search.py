@@ -206,9 +206,9 @@ def run_random_search(
     Randomly sample HDBSCAN hyperparameter combinations and score each one.
 
     Search space:
-        n_neighbors              : int in [10, 50]  (for the 10D UMAP reduction)
-        min_cluster_size         : int in [20, 80]
-        min_samples              : int in [5, 30]
+        n_neighbors              : int in [10, 100]  (for the 10D UMAP reduction)
+        min_cluster_size         : int in [5, 40]
+        min_samples              : int in [1, 15]
         cluster_selection_method : 'eom'
 
     10D UMAP reductions are cached by n_neighbors to avoid redundant computation.
@@ -228,9 +228,9 @@ def run_random_search(
     z_2d = reduce_umap(embeddings, n_components=2, n_neighbors=15, min_dist=0.1)
 
     for trial in range(1, n_trials + 1):
-        n_neighbors = rng.randint(10, 50)
-        min_cluster_size = rng.randint(20, 150)
-        min_samples = rng.randint(5, 30)
+        n_neighbors = rng.randint(10, 100)
+        min_cluster_size = rng.randint(5, 40)
+        min_samples = rng.randint(1, 15)
         method = "eom"
 
         if n_neighbors not in umap_cache:
