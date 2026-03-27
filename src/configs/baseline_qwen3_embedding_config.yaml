@@ -27,7 +27,7 @@ model:
 pretrain:
   enabled: false
   # Keep this small for memory; 12k–16k contexts will OOM even with LoRA.
-  max_length: 1024
+  max_length: 2048
   mlm_probability: 0.15
   # Adds a real [MASK] token if missing (removes warning and enables standard 80/10/10 masking)
   add_mask_token: true
@@ -65,5 +65,4 @@ data:
   lab_lookup_filepath: "/data/home/qc25022/TextCancEHR2/src/resources/LabLookUP.csv"
   region_lookup_filepath: "/data/home/qc25022/TextCancEHR2/src/resources/RegionLookUp.csv"
   time_lookup_filepath: "/data/home/qc25022/TextCancEHR2/src/resources/TimeLookUp.csv"
-  max_length: 1024
   dataset: "CPRD"
