@@ -28,6 +28,9 @@ def compute_classification_metrics(eval_pred):
     
     # Get predicted class (argmax of logits)
     preds = np.argmax(predictions, axis=1)
+
+    # Calculate AUROC using softmax probabilities
+    probs = torch.softmax(torch.tensor(predictions), dim=1).numpy()[:, 1]
     
     # Calculate metrics
     accuracy = accuracy_score(labels, preds)
@@ -35,8 +38,6 @@ def compute_classification_metrics(eval_pred):
         labels, preds, average='binary', zero_division=0
     )
     
-    # Calculate AUROC using softmax probabilities
-    probs = torch.softmax(torch.tensor(predictions), dim=1).numpy()[:, 1]
     try:
         auroc = roc_auc_score(labels, probs)
     except ValueError:

@@ -25,9 +25,13 @@ export PYTHONPATH="${BASE_DIR}:${PYTHONPATH}"
 # python -m src.pipelines.run_baseline_qwen3_embedding --config_filepath src/configs/baseline_qwen3_embedding_config.yaml 
 # torchrun --nproc_per_node=2 src/pipelines/run_baseline_qwen3_embedding.py --config_filepath src/configs/baseline_qwen3_embedding_config.yaml
 
+# python -m src.pipelines.run_baseline \
+#   --baseline qwen_llm_linear \
+#   --config_filepath src/configs/baseline_qwen_llm_linear_config.yaml
+
 python -m src.pipelines.run_baseline \
-  --baseline qwen_llm_linear \
-  --config_filepath src/configs/baseline_qwen_llm_linear_config.yaml
+  --baseline qwen3_embedding \
+  --config_filepath src/configs/baseline_qwen3_embedding_config.yaml
 
 echo "Pipeline finished."
 deactivate

@@ -228,7 +228,7 @@ def run_random_search(
     z_2d = reduce_umap(embeddings, n_components=2, n_neighbors=15, min_dist=0.1)
 
     for trial in range(1, n_trials + 1):
-        n_neighbors = rng.randint(10, 100)
+        n_neighbors = rng.randint(5, 30)
         min_cluster_size = rng.randint(5, 40)
         min_samples = rng.randint(1, 15)
         method = "eom"

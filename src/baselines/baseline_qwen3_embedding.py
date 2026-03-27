@@ -509,7 +509,7 @@ class Qwen3EmbeddingBaseline(BaseBaseline):
             self.create_mlm_trainer(mlm_datasets['train'], mlm_datasets['tuning'], run_name)
             self.train_mlm()
         else:
-            print("\nTwo-stage training disabled (no MLM pretraining). Proceeding directly to classification.")
+            print("\nOne-stage mode: MLM disabled. Proceeding directly to classification.")
 
         # Stage 2: supervised classification with logistic regression head
         self.build_classifier_model()

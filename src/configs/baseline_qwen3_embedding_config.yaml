@@ -25,7 +25,7 @@ model:
       - down_proj
 
 pretrain:
-  enabled: true
+  enabled: false
   # Keep this small for memory; 12k–16k contexts will OOM even with LoRA.
   max_length: 1024
   mlm_probability: 0.15
