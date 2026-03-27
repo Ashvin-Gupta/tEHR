@@ -1,7 +1,7 @@
 name: "qwen3_embedding_baseline"
 
 model:
-  model_name: "Qwen/Qwen3-Embedding-0.6B"
+  model_name: "Qwen/Qwen3-Embedding-8B"
   hidden_size: 1024
   num_labels: 2
   head_dropout: 0.1
@@ -35,10 +35,10 @@ pretrain:
 wandb:
   enabled: true
   project: "Pretrain-Qwen3-8B-Pancreas-classification"
-  run_name: "baseline-qwen3-embedding-0.6B-6-months"
+  run_name: "baseline-qwen3-embedding-8B-6-months"
 
 training:
-  output_dir: "/gpfs/scratch/qc25022/pancreas/experiments/Results/baselines/qwen3-embedding-0.6B-6-months"
+  output_dir: "/gpfs/scratch/qc25022/pancreas/experiments/Results/baselines/qwen3-embedding-8B-6-months"
   overwrite_output_dir: true
   epochs: 1
   batch_size: 1
