@@ -5,6 +5,7 @@ model:
   hidden_size: 4096
   num_labels: 2
   head_dropout: 0.1
+  max_length: 1024
 
   # Two options only:
   # - use_lora: false → frozen embedding + trainable linear head only
