@@ -9,28 +9,28 @@ Supports freezing the base model and training only the head (and optional LoRA a
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from typing import Dict, Optional, List
+from typing import Any, Dict, Optional, List
 from torch import Tensor
 
 
-def last_non_pad_pool(last_hidden_states: Tensor, attention_mask: Tensor) -> Tensor:
+def last_non_pad_pool(
+    last_hidden_states: Tensor,
+    sequence_lengths: Tensor,
+) -> Tensor:
     """
-    Pool using the last real token (last index with attention_mask == 1).
+    Pool hidden states at `sequence_lengths` (last non-pad index per row, 0-based).
 
-    With right-padded batches from `ClassificationCollator`, the EOS appended at
-    the end of the trajectory is usually this position — i.e. EOS immediately
-    before padding.
+    With right-padded batches from `ClassificationCollator`, those indices are
+    usually EOS immediately before padding when EOS is the final real token.
 
     Args:
         last_hidden_states: [batch_size, seq_len, hidden_dim]
-        attention_mask: [batch_size, seq_len], 1 = real token, 0 = pad
+        sequence_lengths: [batch_size], each in [0, seq_len - 1]
 
     Returns:
         pooled: [batch_size, hidden_dim]
     """
     batch_size = last_hidden_states.size(0)
-    # Index of last non-padding token per sequence (0-based)
-    sequence_lengths = attention_mask.sum(dim=1).long() - 1
     pooled = last_hidden_states[
         torch.arange(batch_size, device=last_hidden_states.device),
         sequence_lengths,
@@ -55,6 +55,7 @@ class Qwen3EmbeddingClassifier(nn.Module):
         head_dropout: Dropout before classification head.
         freeze_base: If True, freeze all base model parameters; only head (and LoRA if any) trainable.
         trainable_param_keywords: Parameter name substrings to keep trainable (e.g. ["lora_"] for LoRA).
+        tokenizer: Optional tokenizer for one-time debug: verify pooled index is EOS.
     """
     
     def __init__(
@@ -65,12 +66,14 @@ class Qwen3EmbeddingClassifier(nn.Module):
         head_dropout: float = 0.1,
         freeze_base: bool = True,
         trainable_param_keywords: Optional[List[str]] = None,
+        tokenizer: Optional[Any] = None,
     ):
         super().__init__()
         self.base_model = base_model
         self.hidden_size = hidden_size
         self.num_labels = num_labels
         self.trainable_param_keywords = trainable_param_keywords or []
+        self.tokenizer = tokenizer
 
         if freeze_base:
             for param in self.base_model.parameters():
@@ -129,15 +132,35 @@ class Qwen3EmbeddingClassifier(nn.Module):
             return_dict=True,
         )
 
-        # Pool: last non-padded token (typically EOS before right-padding)
-        pooled = last_non_pad_pool(outputs.last_hidden_state, attention_mask)
+        sequence_lengths = attention_mask.sum(dim=1).long() - 1
+        pooled = last_non_pad_pool(outputs.last_hidden_state, sequence_lengths)
 
-        # Debug print (once) to confirm pooling behaviour and shapes
+        # Debug print (once) to confirm pooling behaviour and EOS at pooled index
         if not self._debug_pooled_once:
-            print("\n[Qwen3EmbeddingClassifier] Using last non-pad pooling (EOS before padding).")
+            print("\n[Qwen3EmbeddingClassifier] Using last non-pad pooling (intended: EOS before padding).")
             print(f"  - input_ids shape: {tuple(input_ids.shape)}")
             print(f"  - attention_mask shape: {tuple(attention_mask.shape)}")
             print(f"  - pooled shape: {tuple(pooled.shape)}")
+            eos_id = getattr(self.tokenizer, "eos_token_id", None) if self.tokenizer is not None else None
+            if eos_id is None:
+                print("  - EOS check: no tokenizer or eos_token_id; cannot verify pooled token.")
+            else:
+                batch_size = input_ids.size(0)
+                print(f"  - tokenizer.eos_token_id: {eos_id}")
+                for b in range(batch_size):
+                    li = int(sequence_lengths[b].item())
+                    tid = int(input_ids[b, li].item())
+                    is_eos = tid == eos_id
+                    dec = ""
+                    if self.tokenizer is not None:
+                        try:
+                            dec = repr(self.tokenizer.decode([tid]))
+                        except Exception:
+                            dec = "(decode failed)"
+                    print(
+                        f"  - batch[{b}] last_non_pad_idx={li} token_id={tid} "
+                        f"is_eos_token_id={is_eos} decode={dec}"
+                    )
             self._debug_pooled_once = True
 
         # L2 normalize (per Qwen3-Embedding)

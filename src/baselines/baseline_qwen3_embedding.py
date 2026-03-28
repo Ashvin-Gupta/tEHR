@@ -210,6 +210,7 @@ class Qwen3EmbeddingBaseline(BaseBaseline):
             head_dropout=self.head_dropout,
             freeze_base=True,
             trainable_param_keywords=self.trainable_param_keywords,
+            tokenizer=self.tokenizer,
         )
 
     def build_mlm_model(self):
