@@ -23,8 +23,8 @@ training:
   output_dir: "/gpfs/scratch/qc25022/pancreas/experiments/Results/lora-1-month-logistic-refactored-new-time-mistral-7B-4096"
   overwrite_output_dir: true
   epochs: 1
-  batch_size: 2
-  eval_batch_size: 1
+  batch_size: 4
+  eval_batch_size: 4
   learning_rate: 1e-6
   weight_decay: 0.01
   warmup_steps: 100
