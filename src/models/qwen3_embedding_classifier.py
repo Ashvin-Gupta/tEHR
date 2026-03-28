@@ -2,7 +2,8 @@
 Qwen3-Embedding based classifier.
 
 Wraps Qwen3-Embedding-8B with a classification head for EHR-based prediction.
-Uses CLS-token pooling (first non-padding token) and L2-normalized embeddings.
+Pools the last non-padded position (typically EOS immediately before right-padding)
+and L2-normalizes before the linear head.
 Supports freezing the base model and training only the head (and optional LoRA adapters).
 """
 import torch
@@ -12,14 +13,13 @@ from typing import Dict, Optional, List
 from torch import Tensor
 
 
-def cls_pool(last_hidden_states: Tensor, attention_mask: Tensor) -> Tensor:
+def last_non_pad_pool(last_hidden_states: Tensor, attention_mask: Tensor) -> Tensor:
     """
-    Pool embeddings using the CLS token representation.
+    Pool using the last real token (last index with attention_mask == 1).
 
-    We assume sequences are right-padded (as produced by the collator), so
-    the CLS token is at position 0 for every sequence. As a safety check,
-    we still respect the attention_mask and treat the first non-padding
-    position as CLS if needed.
+    With right-padded batches from `ClassificationCollator`, the EOS appended at
+    the end of the trajectory is usually this position — i.e. EOS immediately
+    before padding.
 
     Args:
         last_hidden_states: [batch_size, seq_len, hidden_dim]
@@ -28,14 +28,12 @@ def cls_pool(last_hidden_states: Tensor, attention_mask: Tensor) -> Tensor:
     Returns:
         pooled: [batch_size, hidden_dim]
     """
-    batch_size, seq_len, _ = last_hidden_states.shape
-
-    # Index of first non-padding token per sequence
-    # (argmax over attention_mask along seq dim gives first 1 when pads are 0s)
-    first_non_pad = attention_mask.float().argmax(dim=1)
+    batch_size = last_hidden_states.size(0)
+    # Index of last non-padding token per sequence (0-based)
+    sequence_lengths = attention_mask.sum(dim=1).long() - 1
     pooled = last_hidden_states[
         torch.arange(batch_size, device=last_hidden_states.device),
-        first_non_pad,
+        sequence_lengths,
     ]
     return pooled
 
@@ -131,15 +129,15 @@ class Qwen3EmbeddingClassifier(nn.Module):
             return_dict=True,
         )
 
-        # Pool: CLS token (first non-padding token)
-        pooled = cls_pool(outputs.last_hidden_state, attention_mask)
+        # Pool: last non-padded token (typically EOS before right-padding)
+        pooled = last_non_pad_pool(outputs.last_hidden_state, attention_mask)
 
-        # Debug print (once) to confirm CLS pooling behaviour and shapes
+        # Debug print (once) to confirm pooling behaviour and shapes
         if not self._debug_pooled_once:
-            print("\n[Qwen3EmbeddingClassifier] Using CLS pooling for classification head.")
+            print("\n[Qwen3EmbeddingClassifier] Using last non-pad pooling (EOS before padding).")
             print(f"  - input_ids shape: {tuple(input_ids.shape)}")
             print(f"  - attention_mask shape: {tuple(attention_mask.shape)}")
-            print(f"  - pooled (CLS) shape: {tuple(pooled.shape)}")
+            print(f"  - pooled shape: {tuple(pooled.shape)}")
             self._debug_pooled_once = True
 
         # L2 normalize (per Qwen3-Embedding)

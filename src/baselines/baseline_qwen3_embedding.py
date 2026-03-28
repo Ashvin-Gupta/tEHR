@@ -9,7 +9,7 @@ Stage 1 (optional):
 
 Stage 2:
     - Frozen (or LoRA-only) Qwen3-Embedding encoder
-    - CLS-pooled embedding → linear head (logistic regression-style) for binary
+    - Last non-pad pooled embedding (typically EOS) → linear head for binary
       classification.
 """
 import os
