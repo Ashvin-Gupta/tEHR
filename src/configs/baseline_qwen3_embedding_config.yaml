@@ -36,10 +36,10 @@ pretrain:
 wandb:
   enabled: true
   project: "Pretrain-Qwen3-8B-Pancreas-classification"
-  run_name: "baseline-qwen3-embedding-8B-1-month"
+  run_name: "baseline-qwen3-embedding-8B-12-months"
 
 training:
-  output_dir: "/gpfs/scratch/qc25022/pancreas/experiments/Results/baselines/qwen3-embedding-8B-1-month"
+  output_dir: "/gpfs/scratch/qc25022/pancreas/experiments/Results/baselines/qwen3-embedding-8B-12-months"
   overwrite_output_dir: true
   epochs: 1
   batch_size: 1
@@ -58,7 +58,7 @@ training:
   dataloader_num_workers: 4
 
 data:
-  cutoff_months: 1
+  cutoff_months: 12
   data_dir: "/gpfs/scratch/qc25022/pancreas/tokenised_data_pancreas_MEDS_new_time/cprd_upgi"
   vocab_filepath: "/gpfs/scratch/qc25022/pancreas/tokenised_data_pancreas_MEDS_new_time/cprd_upgi/vocab.csv"
   labels_filepath: "/data/home/qc25022/cancer-extraction-pipeline/output/pancreas_MEDS/subject_information.csv"
