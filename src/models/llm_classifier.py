@@ -53,14 +53,14 @@ class LLMClassifier(nn.Module):
         self.head_type = head_type
         # Enable gradient checkpointing if available
         if hasattr(self.base_model, "gradient_checkpointing_enable"):
-            logger.info("  - Enabling gradient checkpointing for base model")
+            print("  - Enabling gradient checkpointing for base model")
             self.base_model.gradient_checkpointing_enable()
         
         # Freeze base model if requested
         if freeze_base:
             for param in self.base_model.parameters():
                 param.requires_grad = False
-            logger.info("  - Froze all base model parameters")
+            print("  - Froze all base model parameters")
         
         # Selectively unfreeze parameters matching keywords (e.g., LoRA adapters)
         if self.trainable_param_keywords:
@@ -69,7 +69,7 @@ class LLMClassifier(nn.Module):
                 if any(keyword in name for keyword in self.trainable_param_keywords):
                     param.requires_grad = True
                     reenabled += 1
-            logger.info(f"  - Re-enabled {reenabled} parameters matching: {self.trainable_param_keywords}")
+            print(f"  - Re-enabled {reenabled} parameters matching: {self.trainable_param_keywords}")
         
         # Create classification head based on type
         self.classifier = self._create_classifier_head(
@@ -100,7 +100,7 @@ class LLMClassifier(nn.Module):
         if head_type == 'linear':
             # Simple logistic regression
             head = nn.Linear(hidden_size, num_labels)
-            logger.info(f"  - Added LINEAR classification head: {hidden_size} -> {num_labels}")
+            print(f"  - Added LINEAR classification head: {hidden_size} -> {num_labels}")
         
         else:
             raise ValueError(
@@ -182,8 +182,29 @@ class LLMClassifier(nn.Module):
         Returns:
             Dict with 'loss' and 'logits'.
         """
-        # Get the base model (unwrap if needed)
+        # Get the base model (unwrap if needed).
+        # For PEFT/Unsloth models self.base_model is a PeftModel; .model is the
+        # underlying MistralForCausalLM.  LoRA is injected at the linear-layer
+        # level so it IS applied even when calling the base model directly.
         backbone = getattr(self.base_model, "model", self.base_model)
+
+        # One-time check: verify LoRA adapters exist and are in the call graph.
+        if not self._lora_verified:
+            lora_params = [(n, p) for n, p in self.base_model.named_parameters() if "lora_A" in n]
+            if lora_params:
+                name, param = lora_params[0]
+                print(
+                    f"  [LoRA check] Found {len(lora_params)} lora_A parameters. "
+                    f"Example: '{name}' shape={tuple(param.shape)} "
+                    f"requires_grad={param.requires_grad} "
+                    f"mean={param.float().mean().item():.6f}"
+                )
+            else:
+                logger.warning(
+                    "  [LoRA check] *** No lora_A parameters found in self.base_model! "
+                    "LoRA may not be active. ***"
+                )
+            self._lora_verified = True
 
         # Forward pass
         outputs = backbone(

@@ -1,0 +1,59 @@
+name: "ehrshot_classifier_finetune"
+
+model:
+  # Path to LoRA-adapted checkpoint from pretraining.
+  pretrained_checkpoint: "/gpfs/scratch/qc25022/pancreas/experiments/Pretrain-Mistral-7B-Pancreas-new-time/checkpoint-6000"  # EDIT ME
+  max_length: 12000
+  hidden_size: 4096
+  num_labels: 2
+  freeze_llm: true
+  train_lora: true
+
+  # Classification head architecture
+  head_type: "linear"
+  head_hidden_size: 512
+  head_dropout: 0.1
+
+  # Warm-start: load LoRA adapter weights AND the classifier head from a
+  # previously trained classifier checkpoint.  Training still starts from
+  # step 0 with a clean optimizer/scheduler — only the model weights are
+  # carried over.  Use this when the task is the same (pancreatic cancer
+  # prediction) but the dataset has changed.
+  # Comment out to start from the pretrained_checkpoint LoRA weights only.
+  init_from_checkpoint: "/gpfs/scratch/qc25022/pancreas/experiments/Results/lora-12-month-logistic-refactored-new-time-mistral-7B/seed_3078332855/checkpoint-7372"
+
+wandb:
+  enabled: true
+  project: "EHRSHOT-classification"
+  run_name: "ehrshot-lora-linear-finetune"  # EDIT ME
+
+training:
+  output_dir: "/gpfs/scratch/qc25022/pancreas/experiments/Results/ehrshot-pancreas-classification-finetune"  # EDIT ME
+  overwrite_output_dir: false
+  epochs: 3
+  batch_size: 8
+  eval_batch_size: 8
+  learning_rate: 1e-6
+  weight_decay: 0.01
+  warmup_steps: 100
+  gradient_accumulation_steps: 2
+  fp16: false
+  bf16: true
+  logging_steps: 50
+  eval_steps: 100
+  save_steps: 500
+  save_total_limit: 2
+  load_in_4bit: true
+  multi_label: false
+  save_model: false
+  dataloader_num_workers: 0
+
+data:
+  dataset: "EHRSHOT"
+  csv_filepath: "/data/home/qc25022/TextCancEHR2/src/resources/new_pancan_formatted.csv"  # EDIT ME
+  # Uses EHRSHOT CSV split column:
+  #   train -> supervised training
+  #   val   -> trainer eval split during training
+  #   test  -> held-out split
+  # At final evaluation, metrics are computed on val+test together.
+  combine_eval_splits: true

@@ -19,7 +19,12 @@ from src.models.llm_classifier import LLMClassifier
 from src.data.classification_collator import ClassificationCollator
 from src.training.metrics import compute_classification_metrics
 from src.evaluations.evaluations import compute_baseline_metrics, plot_all_curves, save_results, print_results
-from src.training.model_loader import load_classification_model, load_pretrained_lora_model
+from src.training.model_loader import (
+    load_classification_model,
+    load_pretrained_lora_model,
+    is_qwen3_embedding_baseline_checkpoint,
+    load_qwen3_embedding_classifier_from_checkpoint,
+)
 
 
 class ModelEvaluator:
@@ -46,6 +51,11 @@ class ModelEvaluator:
         self.tokenizer = None
         self.trainer = None
         self.local_rank = int(os.environ.get("LOCAL_RANK", 0))
+
+    def _collator_max_length(self) -> int:
+        """Prefer model.max_length (e.g. Qwen3 baseline) over data when only one is set."""
+        ml = self.model_config.get("max_length") or self.data_config.get("max_length", 12000)
+        return int(ml)
     
     def load_model(self):
         """Load the saved classification model (base LLM + LoRA, not the classifier head)."""
@@ -88,7 +98,17 @@ class ModelEvaluator:
                 )
             return
 
-        # Case 2: Other models (e.g. frozen_llm_linear final_model) - try direct load
+        # Case 2: Qwen3-Embedding baseline — AutoModel + PEFT + linear head (not Unsloth causal LM)
+        if is_qwen3_embedding_baseline_checkpoint(self.model_checkpoint):
+            print(f"  - Qwen3-Embedding baseline save at {self.model_checkpoint}")
+            self.model, self.tokenizer = load_qwen3_embedding_classifier_from_checkpoint(
+                self.model_checkpoint,
+                self.model_config,
+                local_rank=self.local_rank,
+            )
+            return
+
+        # Case 3: Unsloth causal LM checkpoints (e.g. frozen_llm_linear final_model)
         try:
             self.model, self.tokenizer = load_classification_model(
                 model_checkpoint=self.model_checkpoint,
@@ -186,8 +206,10 @@ class ModelEvaluator:
                     if model_state_path.endswith('.safetensors'):
                         from safetensors.torch import load_file
                         state_dict = load_file(model_state_path)
+                        print(f"  - State dict loaded from {model_state_path}")
                     else:
                         state_dict = torch.load(model_state_path, map_location='cpu')
+                        print(f"  - State dict loaded from {model_state_path}")
 
                     # Load the full state dict into the reconstructed LLMClassifier.
                     # Using strict=False allows us to ignore any keys that don't match
@@ -305,7 +327,9 @@ class ModelEvaluator:
 
             collator = ClassificationCollator(
                 tokenizer=self.tokenizer,
-                max_length=self.data_config.get('max_length', 12000),
+                max_length=self._collator_max_length(),
+                binary_classification=not self.training_config.get('multi_label', False),
+                truncation=True,
             )
             self.create_trainer(all_dataset, all_dataset, collator)
 
@@ -330,7 +354,9 @@ class ModelEvaluator:
         # Create collator
         collator = ClassificationCollator(
             tokenizer=self.tokenizer,
-            max_length=self.data_config.get('max_length', 12000),
+            max_length=self._collator_max_length(),
+            binary_classification=not self.training_config.get('multi_label', False),
+            truncation=True,
         )
 
         # Create trainer (uses held_out as eval_dataset for Trainer compatibility)

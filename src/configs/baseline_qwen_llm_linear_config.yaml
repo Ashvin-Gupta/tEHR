@@ -23,10 +23,10 @@ lora:
 wandb:
   enabled: true
   project: "Pretrain-Qwen3-8B-Pancreas-classification"
-  run_name: "qwen-llm-linear-single-stage"
+  run_name: "qwen-llm-linear-single-stage-12months"
 
 training:
-  output_dir: "/gpfs/scratch/qc25022/pancreas/experiments/Results/Baselines/qwen_llm_linear"
+  output_dir: "/gpfs/scratch/qc25022/pancreas/experiments/Results/Baselines/qwen_llm_linear-12months"
   overwrite_output_dir: true
   epochs: 1
   batch_size: 2
@@ -48,7 +48,7 @@ training:
   dataloader_num_workers: 0
 
 data:
-  cutoff_months: 6
+  cutoff_months: 12
   data_dir: "/gpfs/scratch/qc25022/pancreas/tokenised_data_pancreas_MEDS_new_time/cprd_upgi"
   vocab_filepath: "/gpfs/scratch/qc25022/pancreas/tokenised_data_pancreas_MEDS_new_time/cprd_upgi/vocab.csv"
   labels_filepath: "/data/home/qc25022/cancer-extraction-pipeline/output/pancreas_MEDS/subject_information.csv"

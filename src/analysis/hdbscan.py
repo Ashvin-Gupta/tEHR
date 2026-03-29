@@ -16,7 +16,8 @@ import seaborn as sns
 import umap
 import hdbscan
 from collections import defaultdict
-from sklearn.preprocessing import StandardScaler
+from sklearn.preprocessing import StandardScaler, normalize
+import joblib
 
 from src.data.dataset_factory import get_dataset
 
@@ -24,16 +25,16 @@ from src.data.dataset_factory import get_dataset
 # Configuration & Hyperparameters (Fixed for Reproducibility)
 # ---------------------------------------------------------------------------
 CONFIG_PATH = "src/configs/classification_config.yaml"
-EMBEDDINGS_DIR = "/gpfs/scratch/qc25022/pancreas/experiments/Results/lora-12-month-logistic-refactored-new-time-mistral-7B/patient_clustering_heldout"
+EMBEDDINGS_DIR = "/gpfs/scratch/qc25022/pancreas/experiments/Results/lora-1-month-logistic-refactored-new-time-mistral-7B/patient_clustering_heldout"
 OUTPUT_DIR = EMBEDDINGS_DIR + "/journal_clustering_output"
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 RANDOM_SEED = 42
 
 # Fixed HDBSCAN parameters from previous search
-N_NEIGHBORS = 17
-MIN_CLUSTER_SIZE = 52
-MIN_SAMPLES = 13
+N_NEIGHBORS = 42
+MIN_CLUSTER_SIZE = 58
+MIN_SAMPLES = 5
 CLUSTER_SELECTION_METHOD = "eom"
 
 # --- Categorical Terms (Conditions/Events) ---
@@ -164,6 +165,7 @@ LAB_TERMS = [
 # ---------------------------------------------------------------------------
 def load_embeddings(output_dir: str):
     embeddings = np.load(os.path.join(output_dir, "embeddings.npy"))
+    embeddings = normalize(embeddings, norm='l2')
     patient_ids_path = os.path.join(output_dir, "patient_ids.npy")
     if os.path.exists(patient_ids_path):
         patient_ids = np.load(patient_ids_path, allow_pickle=True).tolist()
@@ -198,7 +200,7 @@ def run_fixed_clustering(embeddings: np.ndarray) -> tuple:
     print(f"Running clustering with fixed params: nn={N_NEIGHBORS}, mcs={MIN_CLUSTER_SIZE}, ms={MIN_SAMPLES}")
     
     # 1. 10D Reduction
-    reducer_10d = umap.UMAP(n_components=10, n_neighbors=N_NEIGHBORS, min_dist=0.0, random_state=RANDOM_SEED)
+    reducer_10d = umap.UMAP(n_components=10, n_neighbors=N_NEIGHBORS, min_dist=0.0, random_state=RANDOM_SEED, n_jobs=1)
     emb_10d = reducer_10d.fit_transform(embeddings)
 
     # 2. HDBSCAN
@@ -210,10 +212,10 @@ def run_fixed_clustering(embeddings: np.ndarray) -> tuple:
     ).fit_predict(emb_10d)
 
     # 3. 2D Reduction for visualization
-    reducer_2d = umap.UMAP(n_components=2, n_neighbors=15, min_dist=0.1, random_state=RANDOM_SEED)
+    reducer_2d = umap.UMAP(n_components=2, n_neighbors=15, min_dist=0.1, random_state=RANDOM_SEED, n_jobs=1)
     z_2d = reducer_2d.fit_transform(embeddings)
 
-    return cluster_labels, z_2d
+    return cluster_labels,z_2d, reducer_10d, reducer_2d
 
 # ---------------------------------------------------------------------------
 # Data Analysis
@@ -477,12 +479,16 @@ def main():
     embeddings, patient_ids = load_embeddings(EMBEDDINGS_DIR)
 
     print("2. Running Fixed HDBSCAN Clustering...")
-    cluster_labels, z_2d = run_fixed_clustering(embeddings)
+    cluster_labels, z_2d, reducer_10d, reducer_2d = run_fixed_clustering(embeddings)
+
+    joblib.dump(reducer_10d, os.path.join(OUTPUT_DIR, "umap_10d.joblib"))
+    joblib.dump(reducer_2d, os.path.join(OUTPUT_DIR, "umap_2d.joblib"))
 
     df_clusters = pd.DataFrame({"patient_id": patient_ids, "cluster": cluster_labels, "dim1": z_2d[:, 0], "dim2": z_2d[:, 1]})
     df_clusters["patient_id_str"] = df_clusters["patient_id"].astype(str)
     df_clusters["label_id"] = df_clusters["patient_id_str"].map(subject_to_label)
     df_clusters["case_label"] = df_clusters["label_id"].map(label_to_name).fillna("Control")
+    df_clusters.to_csv(os.path.join(OUTPUT_DIR, "patient_clusters.csv"), index=False)
 
     print("3. Analyzing Differential Features...")
     df_summary = analyse_differential_features(dataset, df_clusters, subject_to_record_idx, OUTPUT_DIR)

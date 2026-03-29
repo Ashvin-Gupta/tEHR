@@ -9,7 +9,7 @@ Stage 1 (optional):
 
 Stage 2:
     - Frozen (or LoRA-only) Qwen3-Embedding encoder
-    - CLS-pooled embedding → linear head (logistic regression-style) for binary
+    - Last non-pad pooled embedding (typically EOS) → linear head for binary
       classification.
 """
 import os
@@ -28,7 +28,7 @@ from src.models.qwen3_embedding_mlm import Qwen3EmbeddingMLMHead
 from src.data.classification_collator import ClassificationCollator
 from src.data.qwen3_mlm_collator import Qwen3MLMCollator
 from src.training.metrics import compute_classification_metrics
-from src.evaluations.evaluations import save_results
+from src.evaluations.evaluations import save_results, compute_baseline_metrics, print_results, plot_all_curves
 from src.training.training_utils import extract_text, pack_and_chunk_texts
 
 
@@ -210,6 +210,7 @@ class Qwen3EmbeddingBaseline(BaseBaseline):
             head_dropout=self.head_dropout,
             freeze_base=True,
             trainable_param_keywords=self.trainable_param_keywords,
+            tokenizer=self.tokenizer,
         )
 
     def build_mlm_model(self):
@@ -484,6 +485,8 @@ class Qwen3EmbeddingBaseline(BaseBaseline):
                 'hidden_size': self.model_config.get('hidden_size', 4096),
                 'num_labels': self.model_config.get('num_labels', 2),
                 'head_dropout': self.model_config.get('head_dropout', 0.1),
+                'use_lora': self.model_config.get('use_lora', False),
+                'lora': self.model_config.get('lora'),
             }, f, indent=2)
         print(f"\n  - Model saved to: {final_model_path}")
 
@@ -509,7 +512,7 @@ class Qwen3EmbeddingBaseline(BaseBaseline):
             self.create_mlm_trainer(mlm_datasets['train'], mlm_datasets['tuning'], run_name)
             self.train_mlm()
         else:
-            print("\nTwo-stage training disabled (no MLM pretraining). Proceeding directly to classification.")
+            print("\nOne-stage mode: MLM disabled. Proceeding directly to classification.")
 
         # Stage 2: supervised classification with logistic regression head
         self.build_classifier_model()

@@ -5,134 +5,13 @@ import os
 import json
 import torch
 from unsloth import FastLanguageModel
-from typing import Tuple, Any, Optional
+from typing import Tuple, Any, Optional, Dict, List
 
+from transformers import AutoModel, AutoTokenizer
+from peft import LoraConfig, get_peft_model, TaskType
 
-# def _load_base_plus_adapter_from_checkpoint(
-#     checkpoint_dir: str,
-#     max_seq_length: int,
-#     load_in_4bit: bool,
-#     local_rank: int,
-# ) -> Tuple[Any, Any]:
-#     """
-#     Load a base model and attach a LoRA adapter from an Unsloth/PEFT checkpoint.
-    
-#     This is used when the checkpoint directory only contains LoRA weights
-#     (e.g. `adapter_model.safetensors` + `adapter_config.json`) but no
-#     `config.json` for a full HF model.
-#     """
-#     adapter_config_path = os.path.join(checkpoint_dir, "adapter_config.json")
-#     if not os.path.exists(adapter_config_path):
-#         raise RuntimeError(
-#             f"Checkpoint at '{checkpoint_dir}' does not contain 'config.json' or "
-#             f"'adapter_config.json'. Cannot infer base model to load."
-#         )
+from src.models.qwen3_embedding_classifier import Qwen3EmbeddingClassifier
 
-#     with open(adapter_config_path, "r") as f:
-#         adapter_cfg = json.load(f)
-
-#     base_model_name = adapter_cfg.get("base_model_name_or_path") or adapter_cfg.get("base_model_name")
-#     if not base_model_name:
-#         raise RuntimeError(
-#             f"'adapter_config.json' at '{adapter_config_path}' does not specify "
-#             f"'base_model_name_or_path'. Available keys: {list(adapter_cfg.keys())}"
-#         )
-
-#     print(f"  - Detected base model from adapter config: {base_model_name}")
-
-#     # 1) Load the base model with Unsloth
-#     model, tokenizer = FastLanguageModel.from_pretrained(
-#         model_name=base_model_name,
-#         max_seq_length=max_seq_length,
-#         dtype=None,
-#         load_in_4bit=load_in_4bit,
-#         device_map={"": local_rank},
-#     )
-
-#     # 2) Attach the LoRA adapter weights
-#     if hasattr(model, "load_adapter"):
-#         # Preferred Unsloth/PEFT API – this reads adapter_config.json and adapter_model.safetensors
-#         print(f"  - Loading LoRA adapter from checkpoint: {checkpoint_dir}")
-#         model.load_adapter(checkpoint_dir)
-#     else:
-#         # Fallback to PEFT directly if needed
-#         try:
-#             from peft import PeftModel  # type: ignore
-#         except ImportError as e:
-#             raise RuntimeError(
-#                 "PEFT is required to load LoRA adapters from checkpoint, but it is "
-#                 "not installed or importable."
-#             ) from e
-
-#         print(f"  - Wrapping base model with PEFT adapter from: {checkpoint_dir}")
-#         model = PeftModel.from_pretrained(model, checkpoint_dir)
-
-#     return model, tokenizer
-
-
-# def load_pretrained_lora_model(
-#     pretrained_checkpoint: str,
-#     max_seq_length: int = 8192,
-#     load_in_4bit: bool = True,
-#     local_rank: int = 0
-# ) -> Tuple[Any, Any]:
-#     """
-#     Load a pretrained model with LoRA adapters.
-    
-#     This function handles two cases:
-#     1) `pretrained_checkpoint` is a full HF/Unsloth model directory containing
-#        `config.json` + weights.
-#     2) `pretrained_checkpoint` is a LoRA-only checkpoint directory containing
-#        `adapter_model.safetensors` + `adapter_config.json`, but no `config.json`.
-    
-#     Args:
-#         pretrained_checkpoint: Path to pretrained model or LoRA checkpoint directory.
-#         max_seq_length: Maximum sequence length.
-#         load_in_4bit: Whether to load model in 4-bit quantization.
-#         local_rank: Local rank for distributed training.
-    
-#     Returns:
-#         Tuple of (model, tokenizer)
-#     """
-#     print(f"\nLoading pretrained model from: {pretrained_checkpoint}")
-
-#     if not os.path.exists(pretrained_checkpoint):
-#         raise ValueError(f"Pretrained checkpoint not found: {pretrained_checkpoint}")
-    
-#     # Check CUDA availability
-#     if torch.cuda.is_available():
-#         print(f"  - CUDA available: {torch.cuda.get_device_name(0)}")
-#         print(f"  - CUDA devices: {torch.cuda.device_count()}")
-#     else:
-#         print("  - CUDA not available, using CPU")
-
-#     config_path = os.path.join(pretrained_checkpoint, "config.json")
-#     adapter_config_path = os.path.join(pretrained_checkpoint, "adapter_config.json")
-
-#     if os.path.exists(config_path):
-#         # Standard HF/Unsloth model directory
-#         print("  - Detected full model directory with 'config.json'")
-#         model, tokenizer = FastLanguageModel.from_pretrained(
-#             model_name=pretrained_checkpoint,
-#             max_seq_length=max_seq_length,
-#             dtype=None,
-#             load_in_4bit=load_in_4bit,
-#             device_map={"": local_rank},
-#         )
-#     else:
-#         # Fall back to adapter-only checkpoint
-#         print("  - No 'config.json' found; attempting to load as LoRA adapter checkpoint")
-#         model, tokenizer = _load_base_plus_adapter_from_checkpoint(
-#             checkpoint_dir=pretrained_checkpoint,
-#             max_seq_length=max_seq_length,
-#             load_in_4bit=load_in_4bit,
-#             local_rank=local_rank,
-#         )
-    
-#     print(f"  - Loaded model and tokenizer (vocab size: {len(tokenizer)})")
-#     print(f"  - Model has LoRA adapters from pretraining")
-    
-#     return model, tokenizer
 
 def load_pretrained_lora_model(
     pretrained_checkpoint: str,
@@ -178,6 +57,125 @@ def load_pretrained_lora_model(
     return model, tokenizer
 
 
+def is_qwen3_embedding_baseline_checkpoint(checkpoint_dir: str) -> bool:
+    """
+    Detect ``final_model`` dirs written by ``baseline_qwen3_embedding.save_model``:
+    minimal JSON (model_name / hidden_size / num_labels), ``pytorch_model.bin`` as
+    ``torch.save(state_dict)``, not an Unsloth causal LM tree.
+    """
+    cfg_path = os.path.join(checkpoint_dir, "config.json")
+    weights_path = os.path.join(checkpoint_dir, "pytorch_model.bin")
+    if not (os.path.exists(cfg_path) and os.path.exists(weights_path)):
+        return False
+    try:
+        with open(cfg_path, "r") as f:
+            d = json.load(f)
+    except (json.JSONDecodeError, OSError):
+        return False
+    if not isinstance(d, dict):
+        return False
+    if any(k not in d for k in ("model_name", "hidden_size", "num_labels")):
+        return False
+    if d.get("model_type") is not None or d.get("architectures"):
+        return False
+    return True
+
+
+def load_qwen3_embedding_classifier_from_checkpoint(
+    checkpoint_dir: str,
+    model_config: Dict[str, Any],
+    local_rank: int = 0,
+) -> Tuple[Any, Any]:
+    """
+    Rebuild ``Qwen3EmbeddingClassifier`` and load weights from a baseline save dir.
+
+    ``use_lora`` and ``lora`` are taken from ``checkpoint_dir/config.json`` when
+    present (newer saves); otherwise from ``model_config`` (training YAML).
+    """
+    print(f"\nLoading Qwen3-Embedding classifier from: {checkpoint_dir}")
+
+    with open(os.path.join(checkpoint_dir, "config.json"), "r") as f:
+        ckpt_meta = json.load(f)
+
+    merged: Dict[str, Any] = dict(model_config)
+    merged.update(ckpt_meta)
+
+    model_name = merged["model_name"]
+    hidden_size = int(merged.get("hidden_size", 4096))
+    num_labels = int(merged.get("num_labels", 2))
+    head_dropout = float(merged.get("head_dropout", 0.1))
+    use_lora = bool(merged.get("use_lora", False))
+
+    tokenizer = AutoTokenizer.from_pretrained(checkpoint_dir)
+    tokenizer.padding_side = "left"
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
+
+    base_model = AutoModel.from_pretrained(
+        model_name,
+        torch_dtype=torch.bfloat16,
+        trust_remote_code=True,
+    )
+    if hasattr(base_model, "resize_token_embeddings"):
+        base_model.resize_token_embeddings(len(tokenizer))
+
+    trainable_param_keywords: List[str]
+    if use_lora:
+        lora_settings = merged.get("lora") or {}
+        target_modules = lora_settings.get(
+            "target_modules",
+            ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
+        )
+        peft_config = LoraConfig(
+            r=int(lora_settings.get("r", 16)),
+            target_modules=target_modules,
+            lora_alpha=int(lora_settings.get("lora_alpha", 16)),
+            lora_dropout=float(lora_settings.get("lora_dropout", 0.05)),
+            bias=str(lora_settings.get("bias", "none")),
+            task_type=TaskType.FEATURE_EXTRACTION,
+            inference_mode=False,
+        )
+        base_model = get_peft_model(base_model, peft_config)
+        trainable_param_keywords = ["lora_"]
+        print(f"  - LoRA enabled (r={peft_config.r}, target_modules={target_modules})")
+    else:
+        trainable_param_keywords = []
+        print("  - LoRA disabled (head-only checkpoint)")
+
+    for p in base_model.parameters():
+        p.requires_grad = False
+    if use_lora:
+        for name, p in base_model.named_parameters():
+            if "lora_" in name:
+                p.requires_grad = True
+
+    full_model = Qwen3EmbeddingClassifier(
+        base_model=base_model,
+        hidden_size=hidden_size,
+        num_labels=num_labels,
+        head_dropout=head_dropout,
+        freeze_base=True,
+        trainable_param_keywords=trainable_param_keywords,
+        tokenizer=tokenizer,
+    )
+
+    weights_path = os.path.join(checkpoint_dir, "pytorch_model.bin")
+    try:
+        state = torch.load(weights_path, map_location="cpu", weights_only=True)
+    except TypeError:
+        state = torch.load(weights_path, map_location="cpu")
+
+    missing, unexpected = full_model.load_state_dict(state, strict=False)
+    if missing:
+        print(f"  - Warning: {len(missing)} missing keys (first 5): {missing[:5]}")
+    if unexpected:
+        print(f"  - Warning: {len(unexpected)} unexpected keys (first 5): {unexpected[:5]}")
+
+    full_model.eval()
+    print("  - Qwen3EmbeddingClassifier weights loaded.")
+    return full_model, tokenizer
+
+
 def load_classification_model(
     model_checkpoint: str,
     max_seq_length: int = 8192,
@@ -191,6 +189,9 @@ def load_classification_model(
     This function can load models saved from:
     - Baseline models (frozen_llm_linear, pretrained_llm_linear, lora_llm_linear)
     - Main classification trainer
+    
+    Does **not** load Qwen3-Embedding baseline saves; use
+    ``load_qwen3_embedding_classifier_from_checkpoint`` for those.
     
     Args:
         model_checkpoint: Path to saved model directory (should contain model files).

@@ -2,40 +2,38 @@
 Qwen3-Embedding based classifier.
 
 Wraps Qwen3-Embedding-8B with a classification head for EHR-based prediction.
-Uses CLS-token pooling (first non-padding token) and L2-normalized embeddings.
+Pools the last non-padded position (typically EOS immediately before right-padding)
+and L2-normalizes before the linear head.
 Supports freezing the base model and training only the head (and optional LoRA adapters).
 """
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from typing import Dict, Optional, List
+from typing import Any, Dict, Optional, List
 from torch import Tensor
 
 
-def cls_pool(last_hidden_states: Tensor, attention_mask: Tensor) -> Tensor:
+def last_non_pad_pool(
+    last_hidden_states: Tensor,
+    sequence_lengths: Tensor,
+) -> Tensor:
     """
-    Pool embeddings using the CLS token representation.
+    Pool hidden states at `sequence_lengths` (last non-pad index per row, 0-based).
 
-    We assume sequences are right-padded (as produced by the collator), so
-    the CLS token is at position 0 for every sequence. As a safety check,
-    we still respect the attention_mask and treat the first non-padding
-    position as CLS if needed.
+    With right-padded batches from `ClassificationCollator`, those indices are
+    usually EOS immediately before padding when EOS is the final real token.
 
     Args:
         last_hidden_states: [batch_size, seq_len, hidden_dim]
-        attention_mask: [batch_size, seq_len], 1 = real token, 0 = pad
+        sequence_lengths: [batch_size], each in [0, seq_len - 1]
 
     Returns:
         pooled: [batch_size, hidden_dim]
     """
-    batch_size, seq_len, _ = last_hidden_states.shape
-
-    # Index of first non-padding token per sequence
-    # (argmax over attention_mask along seq dim gives first 1 when pads are 0s)
-    first_non_pad = attention_mask.float().argmax(dim=1)
+    batch_size = last_hidden_states.size(0)
     pooled = last_hidden_states[
         torch.arange(batch_size, device=last_hidden_states.device),
-        first_non_pad,
+        sequence_lengths,
     ]
     return pooled
 
@@ -57,6 +55,7 @@ class Qwen3EmbeddingClassifier(nn.Module):
         head_dropout: Dropout before classification head.
         freeze_base: If True, freeze all base model parameters; only head (and LoRA if any) trainable.
         trainable_param_keywords: Parameter name substrings to keep trainable (e.g. ["lora_"] for LoRA).
+        tokenizer: Optional tokenizer for one-time debug: verify pooled index is EOS.
     """
     
     def __init__(
@@ -67,12 +66,14 @@ class Qwen3EmbeddingClassifier(nn.Module):
         head_dropout: float = 0.1,
         freeze_base: bool = True,
         trainable_param_keywords: Optional[List[str]] = None,
+        tokenizer: Optional[Any] = None,
     ):
         super().__init__()
         self.base_model = base_model
         self.hidden_size = hidden_size
         self.num_labels = num_labels
         self.trainable_param_keywords = trainable_param_keywords or []
+        self.tokenizer = tokenizer
 
         if freeze_base:
             for param in self.base_model.parameters():
@@ -131,15 +132,35 @@ class Qwen3EmbeddingClassifier(nn.Module):
             return_dict=True,
         )
 
-        # Pool: CLS token (first non-padding token)
-        pooled = cls_pool(outputs.last_hidden_state, attention_mask)
+        sequence_lengths = attention_mask.sum(dim=1).long() - 1
+        pooled = last_non_pad_pool(outputs.last_hidden_state, sequence_lengths)
 
-        # Debug print (once) to confirm CLS pooling behaviour and shapes
+        # Debug print (once) to confirm pooling behaviour and EOS at pooled index
         if not self._debug_pooled_once:
-            print("\n[Qwen3EmbeddingClassifier] Using CLS pooling for classification head.")
+            print("\n[Qwen3EmbeddingClassifier] Using last non-pad pooling (intended: EOS before padding).")
             print(f"  - input_ids shape: {tuple(input_ids.shape)}")
             print(f"  - attention_mask shape: {tuple(attention_mask.shape)}")
-            print(f"  - pooled (CLS) shape: {tuple(pooled.shape)}")
+            print(f"  - pooled shape: {tuple(pooled.shape)}")
+            eos_id = getattr(self.tokenizer, "eos_token_id", None) if self.tokenizer is not None else None
+            if eos_id is None:
+                print("  - EOS check: no tokenizer or eos_token_id; cannot verify pooled token.")
+            else:
+                batch_size = input_ids.size(0)
+                print(f"  - tokenizer.eos_token_id: {eos_id}")
+                for b in range(batch_size):
+                    li = int(sequence_lengths[b].item())
+                    tid = int(input_ids[b, li].item())
+                    is_eos = tid == eos_id
+                    dec = ""
+                    if self.tokenizer is not None:
+                        try:
+                            dec = repr(self.tokenizer.decode([tid]))
+                        except Exception:
+                            dec = "(decode failed)"
+                    print(
+                        f"  - batch[{b}] last_non_pad_idx={li} token_id={tid} "
+                        f"is_eos_token_id={is_eos} decode={dec}"
+                    )
             self._debug_pooled_once = True
 
         # L2 normalize (per Qwen3-Embedding)

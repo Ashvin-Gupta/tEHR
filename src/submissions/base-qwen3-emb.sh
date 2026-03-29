@@ -5,7 +5,7 @@
 #SBATCH -A pilot_andrena
 #SBATCH --gres=gpu:1                    # Request 1 GPU of any type
 #SBATCH --cpus-per-gpu=12              # 12 CPU cores 
-#SBATCH -t 240:0:0                        # 1 hour runtime
+#SBATCH -t 24:0:0                        # 1 hour runtime
 #SBATCH --mem-per-cpu=7500M             # Total memory 90G (approx 12 * 7500M)
 
 set -e 
@@ -25,9 +25,13 @@ export PYTHONPATH="${BASE_DIR}:${PYTHONPATH}"
 # python -m src.pipelines.run_baseline_qwen3_embedding --config_filepath src/configs/baseline_qwen3_embedding_config.yaml 
 # torchrun --nproc_per_node=2 src/pipelines/run_baseline_qwen3_embedding.py --config_filepath src/configs/baseline_qwen3_embedding_config.yaml
 
+# python -m src.pipelines.run_baseline \
+#   --baseline qwen_llm_linear \
+#   --config_filepath src/configs/baseline_qwen_llm_linear_config.yaml
+
 python -m src.pipelines.run_baseline \
-  --baseline qwen_llm_linear \
-  --config_filepath src/configs/baseline_qwen_llm_linear_config.yaml
+  --baseline qwen3_embedding \
+  --config_filepath src/configs/baseline_qwen3_embedding_config.yaml
 
 echo "Pipeline finished."
 deactivate
