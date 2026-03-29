@@ -28,7 +28,7 @@ from src.models.qwen3_embedding_mlm import Qwen3EmbeddingMLMHead
 from src.data.classification_collator import ClassificationCollator
 from src.data.qwen3_mlm_collator import Qwen3MLMCollator
 from src.training.metrics import compute_classification_metrics
-from src.evaluations.evaluations import save_results
+from src.evaluations.evaluations import save_results, compute_baseline_metrics, print_results, plot_all_curves
 from src.training.training_utils import extract_text, pack_and_chunk_texts
 
 

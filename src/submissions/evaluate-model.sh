@@ -16,7 +16,6 @@ BASE_DIR="/data/home/qc25022/TextCancEHR2"
 export WANDB_API_KEY="REDACTED"
 
 # --- Environment Setup ---
-module load intel intel-mpi python
 source /data/home/qc25022/CancEHR-Training/venv/bin/activate
 
 # --- Execute from Project Root ---
@@ -48,7 +47,8 @@ export PYTHONPATH="${BASE_DIR}:${PYTHONPATH}"
 
 python -m src.pipelines.evaluate_model \
   --config_filepath src/configs/baseline_qwen3_embedding_config.yaml \
-  --model_checkpoint //data/scratch/qc25022/pancreas_MEDS/experiments/baselines/qwen3_embedding_6_month/checkpoints/checkpoint-4000
+  --model_checkpoint /gpfs/scratch/qc25022/pancreas/experiments/Results/baselines/qwen3-embedding-8B-12-months/final_model
+  
 echo "Model evaluation finished."
 deactivate
 
