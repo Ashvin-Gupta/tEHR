@@ -327,7 +327,9 @@ class EHRClassificationTrainer:
                 lbl = item.get('label') if isinstance(item, dict) else None
                 if lbl is None:
                     continue
-                labels.append(int(lbl.item()) if hasattr(lbl, 'item') else int(lbl))
+                value = int(lbl.item()) if hasattr(lbl, 'item') else int(lbl)
+                # Everything that's not 0 is positive
+                labels.append(1 if value != 0 else 0)
             if not labels:
                 return
             import collections

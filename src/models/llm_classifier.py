@@ -51,6 +51,7 @@ class LLMClassifier(nn.Module):
         self.trainable_param_keywords = trainable_param_keywords or []
         self.tokenizer = tokenizer
         self.head_type = head_type
+        self._lora_verified = False
         # Enable gradient checkpointing if available
         if hasattr(self.base_model, "gradient_checkpointing_enable"):
             print("  - Enabling gradient checkpointing for base model")
