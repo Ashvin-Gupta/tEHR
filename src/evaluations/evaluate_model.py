@@ -186,8 +186,10 @@ class ModelEvaluator:
                     if model_state_path.endswith('.safetensors'):
                         from safetensors.torch import load_file
                         state_dict = load_file(model_state_path)
+                        print(f"  - State dict loaded from {model_state_path}")
                     else:
                         state_dict = torch.load(model_state_path, map_location='cpu')
+                        print(f"  - State dict loaded from {model_state_path}")
 
                     # Load the full state dict into the reconstructed LLMClassifier.
                     # Using strict=False allows us to ignore any keys that don't match

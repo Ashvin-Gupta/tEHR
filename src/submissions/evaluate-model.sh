@@ -27,25 +27,25 @@ export PYTHONPATH="${BASE_DIR}:${PYTHONPATH}"
 # Example usage for different baselines:
 # 
 # For frozen_llm_linear:
-# python -m src.pipelines.evaluate_model \
+# python -m src.evaluations.evaluate_model \
 #   --config_filepath src/configs/baseline_frozen_llm_linear_config.yaml \
 #   --model_checkpoint /data/scratch/qc25022/pancreas_MEDS/experiments/baselines/frozen_llm_linear/final_model
 #
 # For pretrained_llm_linear:
-# python -m src.pipelines.evaluate_model \
+# python -m src.evaluations.evaluate_model \
 #   --config_filepath src/configs/baseline_pretrained_llm_linear_config.yaml \
 #   --model_checkpoint /data/scratch/qc25022/pancreas_MEDS/experiments/baselines/pretrained_llm_linear/final_model
 #
 # For lora_llm_linear:
-# python -m src.pipelines.evaluate_model \
+# python -m src.evaluations.evaluate_model \
 #   --config_filepath src/configs/baseline_lora_llm_linear_config.yaml \
 #   --model_checkpoint /data/scratch/qc25022/pancreas_MEDS/experiments/baselines/lora_llm_linear/final_model
 
-# python -m src.pipelines.evaluate_model \
+# python -m src.evaluations.evaluate_model \
 #   --config_filepath src/configs/classification_config.yaml \
 #   --model_checkpoint /data/scratch/qc25022/pancreas_MEDS/experiments/lora-3-month-logistic-refactored/final_model
 
-python -m src.pipelines.evaluate_model \
+python -m src.evaluations.evaluate_model \
   --config_filepath src/configs/baseline_qwen3_embedding_config.yaml \
   --model_checkpoint /gpfs/scratch/qc25022/pancreas/experiments/Results/baselines/qwen3-embedding-8B-12-months/final_model
   
