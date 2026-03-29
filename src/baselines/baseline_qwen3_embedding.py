@@ -485,6 +485,8 @@ class Qwen3EmbeddingBaseline(BaseBaseline):
                 'hidden_size': self.model_config.get('hidden_size', 4096),
                 'num_labels': self.model_config.get('num_labels', 2),
                 'head_dropout': self.model_config.get('head_dropout', 0.1),
+                'use_lora': self.model_config.get('use_lora', False),
+                'lora': self.model_config.get('lora'),
             }, f, indent=2)
         print(f"\n  - Model saved to: {final_model_path}")
 
