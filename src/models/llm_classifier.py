@@ -51,12 +51,6 @@ class LLMClassifier(nn.Module):
         self.trainable_param_keywords = trainable_param_keywords or []
         self.tokenizer = tokenizer
         self.head_type = head_type
-        
-        # Debugging flags for EOS token verification
-        self._eos_check_count = 0          # How many batches we've checked
-        self._max_eos_checks = 1           # Max batches to print debug info for
-        self._lora_verified = False        # Whether LoRA forward-pass check has run
-
         # Enable gradient checkpointing if available
         if hasattr(self.base_model, "gradient_checkpointing_enable"):
             print("  - Enabling gradient checkpointing for base model")
@@ -226,13 +220,13 @@ class LLMClassifier(nn.Module):
         else:
             hidden_states = outputs.hidden_states[-1]
         
-        # Get the last non-padding token's hidden state (usually EOS token)
+        # Get the last non-padding token's hidden state (intended to be EOS)
         sequence_lengths = attention_mask.sum(dim=1) - 1  # -1 for 0-indexing
         batch_size = hidden_states.size(0)
-        last_token_indices = sequence_lengths
-        last_hidden_states = hidden_states[range(batch_size), last_token_indices]
-
-        # Pass through classification head
+        last_hidden_states = hidden_states[range(batch_size), sequence_lengths]
+        
+        
+        # Pass through classification head (logistic regression head by default)
         logits = self.classifier(last_hidden_states)
         
         # Calculate loss if labels provided

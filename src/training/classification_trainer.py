@@ -131,11 +131,13 @@ class EHRClassificationTrainer:
         reuse the same cache. Uses a lock file so only one process computes when
         multiple ranks start together.
         """
+        print("Sorting dataset with cache...")
         if not self.data_config.get('sort_by_length', False):
             return dataset
 
         dataset_name = self.data_config.get("dataset", "CPRD")
         tokenizer_id = getattr(self.tokenizer, "name_or_path", "tokenizer")
+        tokenizer_id_basename = os.path.basename(str(tokenizer_id))
         # Use shared cache root when set (base output dir), so all seeds share one cache
         cache_base = self.training_config.get(
             "data_cache_dir", self.training_config["output_dir"]
@@ -143,9 +145,95 @@ class EHRClassificationTrainer:
         cache_root = os.path.join(cache_base, "data_cache", "length_sorted")
         os.makedirs(cache_root, exist_ok=True)
 
-        cache_filename = f"{dataset_name}_{split}_sorted_{os.path.basename(str(tokenizer_id))}.pt"
+        cache_filename = f"{dataset_name}_{split}_sorted_{tokenizer_id_basename}.pt"
         cache_path = os.path.join(cache_root, cache_filename)
         lock_path = cache_path + ".lock"
+
+        # Robustness: tokenizer_id_basename can change depending on what checkpoint
+        # directory you point Unsloth at (e.g. `checkpoint-4000` vs the original
+        # base model id). If the exact cache filename doesn't exist, but there is
+        # another `*_sorted_*.pt` for the same dataset+split in `cache_root`,
+        # reuse the closest match and update the expected cache naming.
+        if not os.path.exists(cache_path):
+            prefix = f"{dataset_name}_{split}_sorted_"
+            candidates = [
+                f
+                for f in os.listdir(cache_root)
+                if f.endswith(".pt") and f.startswith(prefix)
+            ]
+
+            if candidates:
+                # Optional override (for future experiments). If not provided we
+                # prefer the Mistral tokenizer basename used when building caches.
+                preferred_exact = self.training_config.get("data_cache_tokenizer_basename")
+                preferred_substrings = self.training_config.get(
+                    "data_cache_tokenizer_preferred_substrings",
+                    ["mistral-7b-v0.3-bnb-4bit"],
+                )
+                preferred_substrings = [str(s).lower() for s in preferred_substrings]
+
+                def _extract_tok_basename(fname: str) -> str | None:
+                    if not (fname.startswith(prefix) and fname.endswith(".pt")):
+                        return None
+                    return fname[len(prefix) : -len(".pt")]
+
+                # 1) exact match if explicitly configured
+                if preferred_exact:
+                    preferred_exact = str(preferred_exact)
+                    exact = [
+                        f
+                        for f in candidates
+                        if _extract_tok_basename(f) == preferred_exact
+                    ]
+                    if exact:
+                        chosen = sorted(exact)[0]
+                    else:
+                        chosen = None
+                else:
+                    chosen = None
+
+                # 2) prefer one containing a known substring
+                if chosen is None and preferred_substrings:
+                    lowered = [f for f in candidates]
+                    scored = []
+                    for f in lowered:
+                        tok_base = (_extract_tok_basename(f) or "").lower()
+                        score = 0
+                        for i, s in enumerate(preferred_substrings):
+                            if s in tok_base:
+                                # earlier items in preferred_substrings are higher priority
+                                score = 1000 - i
+                                break
+                        scored.append((score, f))
+                    scored.sort(reverse=True, key=lambda x: x[0])
+                    if scored and scored[0][0] > 0:
+                        chosen = scored[0][1]
+
+                # 3) otherwise, use the newest candidate
+                if chosen is None:
+                    candidates.sort(key=lambda f: os.path.getmtime(os.path.join(cache_root, f)), reverse=True)
+                    chosen = candidates[0]
+
+                chosen_tok_basename = _extract_tok_basename(chosen)
+                chosen_cache_path = os.path.join(cache_root, chosen)
+
+                if self.local_rank == 0:
+                    print(
+                        "  - Cache miss for expected filename, but reusing existing cache "
+                        f"file: {chosen_cache_path}"
+                    )
+                    print(
+                        "  - Updating tokenizer_id_basename used for cache naming to: "
+                        f"{chosen_tok_basename}"
+                    )
+
+                # Update naming variables to point at the reused cache file.
+                # This makes subsequent runs look for the same stable filename.
+                if chosen_tok_basename:
+                    tokenizer_id_basename = chosen_tok_basename
+                    cache_filename = f"{dataset_name}_{split}_sorted_{tokenizer_id_basename}.pt"
+                    cache_path = os.path.join(cache_root, cache_filename)
+                    lock_path = cache_path + ".lock"
 
         def _load_indices(path):
             try:
@@ -644,7 +732,7 @@ class EHRClassificationTrainer:
         
         # Create plots
         plot_output_dir = os.path.join(self.training_config['output_dir'], plot_dir_name)
-        plot_classification_performance(labels, probs, plot_output_dir)
+        plot_all_curves(labels, probs, plot_output_dir)
         print(f"  - Plots saved to: {plot_output_dir}")
     
     def run_full_pipeline(self, resume_from_checkpoint: str | None = None):
