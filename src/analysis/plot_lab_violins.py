@@ -108,6 +108,28 @@ def extract_lab_values(dataset, subject_to_record_idx, clusters_df: pd.DataFrame
     return pd.DataFrame(rows)
 
 
+def filter_extreme_high_values(df: pd.DataFrame, upper_threshold_multiplier: float) -> pd.DataFrame:
+    """
+    Remove extreme high values using lab-specific normal ranges.
+
+    A value is kept when:
+      value <= normal_upper * upper_threshold_multiplier
+    """
+    if df.empty:
+        return df
+
+    keep_mask = pd.Series(True, index=df.index)
+    for idx, row in df.iterrows():
+        ref = LAB_REFERENCE_RANGES.get(row["lab"])
+        if ref is None:
+            continue
+        _, upper = ref
+        upper_threshold = upper * upper_threshold_multiplier
+        if row["value"] > upper_threshold:
+            keep_mask.at[idx] = False
+    return df.loc[keep_mask].copy()
+
+
 def plot_violin(df: pd.DataFrame, output_path: str, highlight_cluster: int):
     if df.empty:
         raise ValueError("No matching lab values were found for the requested labs.")
@@ -192,6 +214,12 @@ def parse_args():
         action="store_true",
         help="Exclude HDBSCAN noise cluster (-1) before plotting.",
     )
+    parser.add_argument(
+        "--upper-threshold-multiplier",
+        type=float,
+        default=3.0,
+        help="Drop values above (normal_upper * multiplier). Default: 3.0",
+    )
     return parser.parse_args()
 
 
@@ -209,7 +237,11 @@ def main():
 
     dataset, subject_to_record_idx = load_dataset(args.config_path, args.split)
     lab_df = extract_lab_values(dataset, subject_to_record_idx, clusters_df)
+    original_n = len(lab_df)
+    lab_df = filter_extreme_high_values(lab_df, args.upper_threshold_multiplier)
+    removed_n = original_n - len(lab_df)
     plot_violin(lab_df, args.output_path, highlight_cluster=args.highlight_cluster)
+    print(f"Filtered {removed_n} extreme high values using multiplier={args.upper_threshold_multiplier}")
     print(f"Saved violin plot to: {args.output_path}")
 
 
