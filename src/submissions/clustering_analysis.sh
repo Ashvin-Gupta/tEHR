@@ -20,7 +20,7 @@ echo "Environment setup complete."
 # Change to the base directory before running the python command
 cd "${BASE_DIR}"
 
-echo "Starting experiment from directory: $(pwd)
+echo "Starting experiment from directory: $(pwd)"
 export PYTHONPATH="${BASE_DIR}:${PYTHONPATH}"
 
 # python -m src.analysis.cluster_hdbscan_search
