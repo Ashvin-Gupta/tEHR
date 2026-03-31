@@ -16,13 +16,12 @@ import seaborn as sns
 import umap
 import hdbscan
 from collections import defaultdict
-from sklearn.preprocessing import normalize
+from sklearn.preprocessing import StandardScaler, normalize
 import joblib
 
 from src.data.dataset_factory import get_dataset
 from src.resources.my_terms import MY_TERMS
 from src.resources.lab_terms import LAB_TERMS
-from src.resources.lab_reference_ranges import LAB_REFERENCE_RANGES
 
 # ---------------------------------------------------------------------------
 # Configuration & Hyperparameters (Fixed for Reproducibility)
@@ -299,7 +298,7 @@ def plot_stacked_composition(df_clusters: pd.DataFrame, output_dir: str):
     plt.close()
 
 def plot_lab_zscore_heatmap(heatmap_lab: pd.DataFrame, output_dir: str):
-    """Heatmap of lab medians colored by deviation from reference ranges."""
+    """Row-standardized heatmap of median lab values."""
     if heatmap_lab is None or heatmap_lab.empty: return
     if -1 in heatmap_lab.columns:
         heatmap_lab = heatmap_lab.drop(columns=[-1])
@@ -310,42 +309,14 @@ def plot_lab_zscore_heatmap(heatmap_lab: pd.DataFrame, output_dir: str):
     # Rename columns to "Cluster N" for readability
     heatmap_lab = heatmap_lab.rename(columns={c: f"Cluster {c}" for c in heatmap_lab.columns})
 
-    # Signed deviation from reference ranges:
-    #   0   => within normal range (neutral color)
-    #   >0  => above upper bound (red gradient)
-    #   <0  => below lower bound (blue gradient)
-    # We scale by (high - low) so intensities are comparable across labs.
-    deviation_df = pd.DataFrame(0.0, index=heatmap_lab.index, columns=heatmap_lab.columns)
-    for lab_name in heatmap_lab.index:
-        ref = LAB_REFERENCE_RANGES.get(lab_name)
-        if ref is None:
-            continue
-        low, high = ref
-        span = max(high - low, 1e-8)
-        row_vals = heatmap_lab.loc[lab_name]
+    # Z-Score scale by row (Lab type)
+    scaler = StandardScaler()
+    z_scored_data = scaler.fit_transform(heatmap_lab.T).T
+    z_scored_df = pd.DataFrame(z_scored_data, index=heatmap_lab.index, columns=heatmap_lab.columns)
 
-        below_mask = row_vals < low
-        above_mask = row_vals > high
-
-        deviation_df.loc[lab_name, below_mask] = (row_vals[below_mask] - low) / span
-        deviation_df.loc[lab_name, above_mask] = (row_vals[above_mask] - high) / span
-
-    max_abs_dev = np.nanmax(np.abs(deviation_df.to_numpy()))
-    if not np.isfinite(max_abs_dev) or max_abs_dev == 0:
-        max_abs_dev = 1.0
-
-    plt.figure(figsize=(8, max(6, len(deviation_df) * 0.3)))
-    sns.heatmap(
-        deviation_df,
-        cmap="coolwarm",
-        center=0,
-        vmin=-max_abs_dev,
-        vmax=max_abs_dev,
-        annot=heatmap_lab,
-        fmt=".1f",
-        cbar_kws={'label': 'Deviation from Normal Range (scaled by range width)'},
-        annot_kws={"size": 9}
-    )
+    plt.figure(figsize=(8, max(6, len(z_scored_df) * 0.3)))
+    sns.heatmap(z_scored_df, cmap="coolwarm", center=0, annot=heatmap_lab, fmt=".1f",
+                cbar_kws={'label': 'Row Z-Score (Std Dev from Mean)'}, annot_kws={"size": 9})
     plt.title("Lab Value Signatures (Median)", weight='bold')
     plt.ylabel("")
     plt.xlabel("")

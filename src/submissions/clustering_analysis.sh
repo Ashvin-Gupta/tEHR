@@ -24,7 +24,17 @@ echo "Starting experiment from directory: $(pwd)"
 export PYTHONPATH="${BASE_DIR}:${PYTHONPATH}"
 
 # python -m src.analysis.cluster_hdbscan_search
-python -m src.analysis.hdbscan
+# python -m src.analysis.hdbscan
+
+python src/analysis/plot_lab_violins.py \
+  --clusters-csv "/path/to/journal_clustering_output/patient_clusters.csv" \
+  --config-path "src/configs/classification_config.yaml" \
+  --split "held_out" \
+  --output-path "/path/to/journal_clustering_output/fig5_lab_violins.png" \
+  --highlight-cluster 1 \
+  --exclude-noise
+
+  
 
 echo "Pipeline finished."
 deactivate
