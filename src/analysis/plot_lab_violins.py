@@ -148,35 +148,58 @@ def plot_violin(df: pd.DataFrame, output_path: str, highlight_cluster: int):
     df["lab"] = pd.Categorical(df["lab"], categories=lab_order, ordered=True)
     df["lab_display"] = pd.Categorical(df["lab_display"], categories=display_order, ordered=True)
 
-    plt.figure(figsize=(16, 7))
-    ax = sns.violinplot(
-        data=df,
-        x="lab_display",
-        y="value",
-        hue="cluster",
-        hue_order=cluster_order,
-        palette=palette,
-        cut=0,
-        dodge=True,
-        inner="quartile",
-        linewidth=0.9,
-        saturation=1.0,
-    )
+    fig, axes = plt.subplots(2, 4, figsize=(20, 12), sharex=False, sharey=False)
+    axes_flat = axes.flatten()
 
-    # Add red dotted normal range lines per lab (lower + upper bound).
-    for x_idx, lab in enumerate(lab_order):
-        if lab not in LAB_REFERENCE_RANGES:
+    for i, lab in enumerate(lab_order):
+        ax = axes_flat[i]
+        lab_df = df[df["lab"] == lab].copy()
+
+        if lab_df.empty:
+            ax.set_title(f"{LAB_DISPLAY_NAMES[lab]} (no data)")
+            ax.axis("off")
             continue
-        low, high = LAB_REFERENCE_RANGES[lab]
-        ax.hlines(low, x_idx - 0.45, x_idx + 0.45, colors="red", linestyles="dotted", linewidth=1.6)
-        ax.hlines(high, x_idx - 0.45, x_idx + 0.45, colors="red", linestyles="dotted", linewidth=1.6)
 
-    ax.set_xlabel("")
-    ax.set_ylabel("Lab value")
-    ax.set_title("Lab Value Distributions by Cluster", weight="bold")
-    ax.legend(title="Cluster", loc="upper right")
-    plt.xticks(rotation=20, ha="right")
-    plt.tight_layout()
+        sns.violinplot(
+            data=lab_df,
+            x="cluster",
+            y="value",
+            hue="cluster",
+            hue_order=cluster_order,
+            order=cluster_order,
+            palette=palette,
+            cut=0,
+            dodge=False,
+            inner="quartile",
+            linewidth=0.9,
+            saturation=1.0,
+            ax=ax,
+            legend=False,
+        )
+
+        if lab in LAB_REFERENCE_RANGES:
+            low, high = LAB_REFERENCE_RANGES[lab]
+            ax.axhline(low, color="red", linestyle="dotted", linewidth=1.4)
+            ax.axhline(high, color="red", linestyle="dotted", linewidth=1.4)
+
+        ax.set_title(LAB_DISPLAY_NAMES[lab], weight="bold")
+        ax.set_xlabel("Cluster")
+        ax.set_ylabel("Value")
+
+    # Hide the 8th subplot since we currently have 7 labs.
+    for j in range(len(lab_order), len(axes_flat)):
+        axes_flat[j].axis("off")
+
+    handles = []
+    labels = []
+    for c in cluster_order:
+        line = plt.Line2D([0], [0], color=palette[c], lw=8)
+        handles.append(line)
+        labels.append(f"Cluster {c}")
+    fig.legend(handles, labels, title="Cluster", loc="upper right")
+
+    fig.suptitle("Lab Value Distributions by Cluster", weight="bold", y=0.98)
+    plt.tight_layout(rect=[0, 0, 0.95, 0.96])
     plt.savefig(output_path, dpi=300, bbox_inches="tight")
     plt.close()
 
@@ -239,9 +262,15 @@ def main():
     lab_df = extract_lab_values(dataset, subject_to_record_idx, clusters_df)
     original_n = len(lab_df)
     lab_df = filter_extreme_high_values(lab_df, args.upper_threshold_multiplier)
+    after_high_filter_n = len(lab_df)
+    lab_df = lab_df[lab_df["value"] != 0].copy()
     removed_n = original_n - len(lab_df)
+    removed_high_n = original_n - after_high_filter_n
+    removed_zero_n = after_high_filter_n - len(lab_df)
     plot_violin(lab_df, args.output_path, highlight_cluster=args.highlight_cluster)
-    print(f"Filtered {removed_n} extreme high values using multiplier={args.upper_threshold_multiplier}")
+    print(f"Filtered {removed_high_n} extreme high values using multiplier={args.upper_threshold_multiplier}")
+    print(f"Filtered {removed_zero_n} zero values")
+    print(f"Total filtered values: {removed_n}")
     print(f"Saved violin plot to: {args.output_path}")
 
 

@@ -32,7 +32,8 @@ python src/analysis/plot_lab_violins.py \
   --split "held_out" \
   --output-path "/gpfs/scratch/qc25022/pancreas/experiments/Results/lora-1-month-logistic-refactored-new-time-mistral-7B/patient_clustering_heldout/journal_clustering_output/fig5_lab_violins.png" \
   --highlight-cluster 1 \
-  --exclude-noise
+  --exclude-noise \
+  --upper-threshold-multiplier 2
 
 
 
