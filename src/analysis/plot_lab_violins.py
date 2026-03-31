@@ -140,23 +140,6 @@ def filter_extreme_high_values(df: pd.DataFrame, upper_threshold_multiplier: flo
     return df.loc[keep_mask].copy()
 
 
-def convert_hba1c_percent_to_mmol(df: pd.DataFrame) -> tuple[pd.DataFrame, int]:
-    """
-    Convert HbA1c values likely recorded as percent into mmol/mol.
-
-    Rule: for Lab HbA1c values < 20, assume % and convert using:
-      IFCC (mmol/mol) = (NGSP (%) - 2.15) * 10.929
-    """
-    if df.empty:
-        return df, 0
-
-    out = df.copy()
-    mask = (out["lab"] == "Lab HbA1c") & (out["value"] < 20)
-    converted_n = int(mask.sum())
-    out.loc[mask, "value"] = (out.loc[mask, "value"] - 2.15) * 10.929
-    return out, converted_n
-
-
 def plot_violin(df: pd.DataFrame, output_path: str, highlight_cluster: int):
     if df.empty:
         raise ValueError("No matching lab values were found for the requested labs.")
@@ -289,16 +272,21 @@ def main():
 
     dataset, subject_to_record_idx = load_dataset(args.config_path, args.split)
     lab_df = extract_lab_values(dataset, subject_to_record_idx, clusters_df)
-    lab_df, converted_hba1c_n = convert_hba1c_percent_to_mmol(lab_df)
     original_n = len(lab_df)
+
+    above_min_n = len(lab_df)
+    lab_df = lab_df[lab_df["value"] >= 18].copy()
+    removed_below_18_n = above_min_n - len(lab_df)
+
+    before_high_filter_n = len(lab_df)
     lab_df = filter_extreme_high_values(lab_df, args.upper_threshold_multiplier)
     after_high_filter_n = len(lab_df)
     lab_df = lab_df[lab_df["value"] != 0].copy()
     removed_n = original_n - len(lab_df)
-    removed_high_n = original_n - after_high_filter_n
+    removed_high_n = before_high_filter_n - after_high_filter_n
     removed_zero_n = after_high_filter_n - len(lab_df)
     plot_violin(lab_df, args.output_path, highlight_cluster=args.highlight_cluster)
-    print(f"Converted {converted_hba1c_n} HbA1c values from % to mmol/mol")
+    print(f"Filtered {removed_below_18_n} values below 18")
     print(f"Filtered {removed_high_n} extreme high values using multiplier={args.upper_threshold_multiplier}")
     print(f"Filtered {removed_zero_n} zero values")
     print(f"Total filtered values: {removed_n}")
