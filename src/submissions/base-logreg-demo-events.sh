@@ -10,7 +10,6 @@ set -e
 BASE_DIR="/data/home/qc25022/TextCancEHR2"
 export WANDB_API_KEY="REDACTED"
 
-module load intel intel-mpi python
 source /data/home/qc25022/CancEHR-Training/venv/bin/activate
 
 cd "${BASE_DIR}"
