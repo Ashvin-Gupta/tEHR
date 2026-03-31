@@ -22,7 +22,7 @@ from src.resources.lab_reference_ranges import LAB_REFERENCE_RANGES
 
 
 TARGET_LABS = [
-    "Lab Ferritin",
+    # "Lab Ferritin",
     "Lab ALP",
     "Lab HbA1c",
     "Lab GGT",
@@ -32,13 +32,23 @@ TARGET_LABS = [
 ]
 
 LAB_DISPLAY_NAMES = {
-    "Lab Ferritin": "Ferritin",
+    # "Lab Ferritin": "Ferritin",
     "Lab ALP": "ALP",
     "Lab HbA1c": "HbA1c",
     "Lab GGT": "GGT",
     "Lab Glucose": "Glucose",
     "Lab Amylase": "Amylase",
     "Lab ALT": "ALT",
+}
+
+LAB_UNITS = {
+    # "Lab Ferritin": "ug/L",
+    "Lab ALP": "U/L",
+    "Lab HbA1c": "mmol/mol",
+    "Lab GGT": "U/L",
+    "Lab Glucose": "mmol/L",
+    "Lab Amylase": "U/L",
+    "Lab ALT": "U/L",
 }
 
 
@@ -130,6 +140,23 @@ def filter_extreme_high_values(df: pd.DataFrame, upper_threshold_multiplier: flo
     return df.loc[keep_mask].copy()
 
 
+def convert_hba1c_percent_to_mmol(df: pd.DataFrame) -> tuple[pd.DataFrame, int]:
+    """
+    Convert HbA1c values likely recorded as percent into mmol/mol.
+
+    Rule: for Lab HbA1c values < 20, assume % and convert using:
+      IFCC (mmol/mol) = (NGSP (%) - 2.15) * 10.929
+    """
+    if df.empty:
+        return df, 0
+
+    out = df.copy()
+    mask = (out["lab"] == "Lab HbA1c") & (out["value"] < 20)
+    converted_n = int(mask.sum())
+    out.loc[mask, "value"] = (out.loc[mask, "value"] - 2.15) * 10.929
+    return out, converted_n
+
+
 def plot_violin(df: pd.DataFrame, output_path: str, highlight_cluster: int):
     if df.empty:
         raise ValueError("No matching lab values were found for the requested labs.")
@@ -182,7 +209,9 @@ def plot_violin(df: pd.DataFrame, output_path: str, highlight_cluster: int):
             ax.axhline(low, color="red", linestyle="dotted", linewidth=1.4)
             ax.axhline(high, color="red", linestyle="dotted", linewidth=1.4)
 
-        ax.set_title(LAB_DISPLAY_NAMES[lab], weight="bold")
+        unit = LAB_UNITS.get(lab, "")
+        title = f"{LAB_DISPLAY_NAMES[lab]} ({unit})" if unit else LAB_DISPLAY_NAMES[lab]
+        ax.set_title(title, weight="bold")
         ax.set_xlabel("Cluster")
         ax.set_ylabel("Value")
 
@@ -260,6 +289,7 @@ def main():
 
     dataset, subject_to_record_idx = load_dataset(args.config_path, args.split)
     lab_df = extract_lab_values(dataset, subject_to_record_idx, clusters_df)
+    lab_df, converted_hba1c_n = convert_hba1c_percent_to_mmol(lab_df)
     original_n = len(lab_df)
     lab_df = filter_extreme_high_values(lab_df, args.upper_threshold_multiplier)
     after_high_filter_n = len(lab_df)
@@ -268,6 +298,7 @@ def main():
     removed_high_n = original_n - after_high_filter_n
     removed_zero_n = after_high_filter_n - len(lab_df)
     plot_violin(lab_df, args.output_path, highlight_cluster=args.highlight_cluster)
+    print(f"Converted {converted_hba1c_n} HbA1c values from % to mmol/mol")
     print(f"Filtered {removed_high_n} extreme high values using multiplier={args.upper_threshold_multiplier}")
     print(f"Filtered {removed_zero_n} zero values")
     print(f"Total filtered values: {removed_n}")
