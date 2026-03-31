@@ -360,9 +360,9 @@ print("\\label{tab:cprd_stats}")
 print("\\resizebox{\\textwidth}{!}{")
 print("\\begin{tabular}{lcccccc}")
 print("\\toprule")
-print("& \\multicolumn{2}{c}{\\textbf{Train}} & \\multicolumn{2}{c}{\\textbf{Validation}} & \\multicolumn{2}{c}{\\textbf{Test}} \\\")
+print("\\multicolumn{2}{c}{\\textbf{Train}} & \\multicolumn{2}{c}{\\textbf{Validation}} & \\multicolumn{2}{c}{\\textbf{Test}} \\\\")
 print("\\cmidrule(lr){2-3} \\cmidrule(lr){4-5} \\cmidrule(lr){6-7}")
-print("\\textbf{Feature} & \\textbf{Case} & \\textbf{Control} & \\textbf{Case} & \\textbf{Control} & \\textbf{Case} & \\textbf{Control} \\\")
+print("\\textbf{Feature} & \\textbf{Case} & \\textbf{Control} & \\textbf{Case} & \\textbf{Control} & \\textbf{Case} & \\textbf{Control} \\\\")
 print("\\midrule")
 
 # Total patients (these should match previously printed counts)
@@ -370,21 +370,21 @@ print(
     "Total Patients ($N$) & "
     f"{cell('total_patients', 'Train', 'Case')} & {cell('total_patients', 'Train', 'Control')} & "
     f"{cell('total_patients', 'Validation', 'Case')} & {cell('total_patients', 'Validation', 'Control')} & "
-    f"{cell('total_patients', 'Test', 'Case')} & {cell('total_patients', 'Test', 'Control')} \\\")
+    f"{cell('total_patients', 'Test', 'Case')} & {cell('total_patients', 'Test', 'Control')} \\\\")
 print("\\midrule")
 
 # Gender rows
-print("\\textbf{Gender} & & & & & & \\\")
+print("\\textbf{Gender} & & & & & & \\\\")
 print(
     "\\quad Male & "
     f"{cell('gender_male', 'Train', 'Case')} & {cell('gender_male', 'Train', 'Control')} & "
     f"{cell('gender_male', 'Validation', 'Case')} & {cell('gender_male', 'Validation', 'Control')} & "
-    f"{cell('gender_male', 'Test', 'Case')} & {cell('gender_male', 'Test', 'Control')} \\\")
+    f"{cell('gender_male', 'Test', 'Case')} & {cell('gender_male', 'Test', 'Control')} \\\\")
 print(
     "\\quad Female & "
     f"{cell('gender_female', 'Train', 'Case')} & {cell('gender_female', 'Train', 'Control')} & "
     f"{cell('gender_female', 'Validation', 'Case')} & {cell('gender_female', 'Validation', 'Control')} & "
-    f"{cell('gender_female', 'Test', 'Case')} & {cell('gender_female', 'Test', 'Control')} \\\")
+    f"{cell('gender_female', 'Test', 'Case')} & {cell('gender_female', 'Test', 'Control')} \\\\")
 print("\\midrule")
 
 # Age at index
@@ -392,21 +392,21 @@ print(
     "\\textbf{Age at Index (Years)} & "
     f"{cell('age', 'Train', 'Case')} & {cell('age', 'Train', 'Control')} & "
     f"{cell('age', 'Validation', 'Case')} & {cell('age', 'Validation', 'Control')} & "
-    f"{cell('age', 'Test', 'Case')} & {cell('age', 'Test', 'Control')} \\\")
+    f"{cell('age', 'Test', 'Case')} & {cell('age', 'Test', 'Control')} \\\\")
 print("\\midrule")
 
 # Clinical events
-print("\\textbf{Clinical Events (Count)} & & & & & & \\\")
+print("\\textbf{Clinical Events (Count)} & & & & & & \\\\")
 print(
     "\\quad Total MedCodes & "
     f"{cell('medcodes', 'Train', 'Case')} & {cell('medcodes', 'Train', 'Control')} & "
     f"{cell('medcodes', 'Validation', 'Case')} & {cell('medcodes', 'Validation', 'Control')} & "
-    f"{cell('medcodes', 'Test', 'Case')} & {cell('medcodes', 'Test', 'Control')} \\\")
+    f"{cell('medcodes', 'Test', 'Case')} & {cell('medcodes', 'Test', 'Control')} \\\\")
 print(
     "\\quad Lab Observations & "
     f"{cell('labs', 'Train', 'Case')} & {cell('labs', 'Train', 'Control')} & "
     f"{cell('labs', 'Validation', 'Case')} & {cell('labs', 'Validation', 'Control')} & "
-    f"{cell('labs', 'Test', 'Case')} & {cell('labs', 'Test', 'Control')} \\\")
+    f"{cell('labs', 'Test', 'Case')} & {cell('labs', 'Test', 'Control')} \\\\")
 print("\\midrule")
 
 # Trajectory length
@@ -414,7 +414,7 @@ print(
     "\\textbf{Trajectory Length} & "
     f"{cell('trajectory_len', 'Train', 'Case')} & {cell('trajectory_len', 'Train', 'Control')} & "
     f"{cell('trajectory_len', 'Validation', 'Case')} & {cell('trajectory_len', 'Validation', 'Control')} & "
-    f"{cell('trajectory_len', 'Test', 'Case')} & {cell('trajectory_len', 'Test', 'Control')} \\\")
+    f"{cell('trajectory_len', 'Test', 'Case')} & {cell('trajectory_len', 'Test', 'Control')} \\\\")
 print("\\bottomrule")
 print("\\end{tabular}")
 print("}")
