@@ -16,7 +16,7 @@ import seaborn as sns
 import umap
 import hdbscan
 from collections import defaultdict
-from sklearn.preprocessing import StandardScaler, normalize
+from sklearn.preprocessing import normalize
 import joblib
 
 from src.data.dataset_factory import get_dataset
@@ -159,6 +159,54 @@ LAB_TERMS = [
     "Lab Urea serum", "Lab CA125", "Lab Creatinine serum", "Lab Albumin serum", 
     "Lab WBC", "Lab Creatinine urine", "Lab Iron"
 ]
+
+LAB_REFERENCE_RANGES = {
+    "Lab MCV": (80.0, 100.0),             # fL
+    "Lab CRP": (0.0, 5.0),                # mg/L (Anything > 5 is clinically elevated)
+    "Lab Hemoglobin": (120.0, 160.0),     # g/L (Compromise range; females 120-150, males 130-170)
+    "Lab TIBC": (45.0, 85.0),             # µmol/L
+    "Lab HbA1c": (20.0, 42.0),            # mmol/mol (<42 is normal, 42-47 pre-diabetic, >48 diabetic)
+    "Lab Plasma viscosity": (1.50, 1.72), # mPa.s
+    "Lab ESR": (0.0, 20.0),               # mm/hr (Highly age/sex dependent, but 20 is a safe general upper limit)
+    "Lab GGT": (0.0, 50.0),               # U/L
+    "Lab Lymphocytes": (1.0, 4.0),        # 10^9/L
+    "Lab Platelets": (150.0, 400.0),      # 10^9/L
+    "Lab AST": (0.0, 40.0),               # U/L
+    "Lab ALP": (30.0, 130.0),             # U/L
+    "Lab Ferritin": (15.0, 300.0),        # µg/L
+    "Lab MCH": (27.0, 32.0),              # pg
+    "Lab Calcium serum": (2.20, 2.60),    # mmol/L
+    "Lab Neutrophils": (2.0, 7.5),        # 10^9/L
+    
+    # Fasting glucose normally 4.0-5.9. Random glucose normal < 7.8.
+    "Lab Glucose": (4.0, 5.9),            # mmol/L 
+    
+    # Assuming "Cholesterol triglycerides" refers specifically to triglycerides
+    "Lab Cholesterol triglycerides": (0.0, 1.7), # mmol/L (Fasting)
+    
+    "Lab Bilirubin": (0.0, 21.0),         # µmol/L
+    "Lab Anti-ttg": (0.0, 14.9),          # U/mL (Assay dependent, usually <15 is negative)
+    "Lab Plasma proteins": (60.0, 80.0),  # g/L (Total protein)
+    "Lab Amylase": (0.0, 100.0),          # U/L
+    "Lab ALT": (0.0, 40.0),               # U/L
+    "Lab Urea serum": (2.5, 7.8),         # mmol/L
+    "Lab CA125": (0.0, 35.0),             # U/mL
+    "Lab Creatinine serum": (60.0, 110.0),# µmol/L (Compromise; females 60-90, males 70-110)
+    "Lab Albumin serum": (35.0, 50.0),    # g/L
+    "Lab WBC": (4.0, 11.0),               # 10^9/L
+    "Lab Creatinine urine": (2.0, 20.0),  # mmol/L (For a random sample; highly variable)
+    "Lab Iron": (10.0, 30.0),             # µmol/L (Serum iron)
+    
+    # --- SPECIAL CASES ---
+    # Blood pressure is usually recorded as two separate features (Systolic and Diastolic). 
+    # If your dataset has averaged them into Mean Arterial Pressure (MAP), normal is ~ 70-100.
+    # If it is tracking Systolic only, normal is 90-120. I've set it to Systolic defaults:
+    "Lab Blood pressure": (90.0, 120.0),  # mmHg 
+    
+    # H. Pylori is usually a qualitative positive/negative (1 or 0) rather than a continuous lab.
+    # If your model outputs a probability or titer, < 0.9 is typically "negative".
+    "Lab H_pylori": (0.0, 0.99)           
+}
 
 # ---------------------------------------------------------------------------
 # Data Loading & Base Functions
@@ -419,7 +467,7 @@ def plot_stacked_composition(df_clusters: pd.DataFrame, output_dir: str):
     plt.close()
 
 def plot_lab_zscore_heatmap(heatmap_lab: pd.DataFrame, output_dir: str):
-    """Row-standardized heatmap of median lab values."""
+    """Heatmap of lab medians colored by deviation from reference ranges."""
     if heatmap_lab is None or heatmap_lab.empty: return
     if -1 in heatmap_lab.columns:
         heatmap_lab = heatmap_lab.drop(columns=[-1])
@@ -430,14 +478,42 @@ def plot_lab_zscore_heatmap(heatmap_lab: pd.DataFrame, output_dir: str):
     # Rename columns to "Cluster N" for readability
     heatmap_lab = heatmap_lab.rename(columns={c: f"Cluster {c}" for c in heatmap_lab.columns})
 
-    # Z-Score scale by row (Lab type)
-    scaler = StandardScaler()
-    z_scored_data = scaler.fit_transform(heatmap_lab.T).T
-    z_scored_df = pd.DataFrame(z_scored_data, index=heatmap_lab.index, columns=heatmap_lab.columns)
+    # Signed deviation from reference ranges:
+    #   0   => within normal range (neutral color)
+    #   >0  => above upper bound (red gradient)
+    #   <0  => below lower bound (blue gradient)
+    # We scale by (high - low) so intensities are comparable across labs.
+    deviation_df = pd.DataFrame(0.0, index=heatmap_lab.index, columns=heatmap_lab.columns)
+    for lab_name in heatmap_lab.index:
+        ref = LAB_REFERENCE_RANGES.get(lab_name)
+        if ref is None:
+            continue
+        low, high = ref
+        span = max(high - low, 1e-8)
+        row_vals = heatmap_lab.loc[lab_name]
 
-    plt.figure(figsize=(8, max(6, len(z_scored_df) * 0.3)))
-    sns.heatmap(z_scored_df, cmap="coolwarm", center=0, annot=heatmap_lab, fmt=".1f",
-                cbar_kws={'label': 'Row Z-Score (Std Dev from Mean)'}, annot_kws={"size": 9})
+        below_mask = row_vals < low
+        above_mask = row_vals > high
+
+        deviation_df.loc[lab_name, below_mask] = (row_vals[below_mask] - low) / span
+        deviation_df.loc[lab_name, above_mask] = (row_vals[above_mask] - high) / span
+
+    max_abs_dev = np.nanmax(np.abs(deviation_df.to_numpy()))
+    if not np.isfinite(max_abs_dev) or max_abs_dev == 0:
+        max_abs_dev = 1.0
+
+    plt.figure(figsize=(8, max(6, len(deviation_df) * 0.3)))
+    sns.heatmap(
+        deviation_df,
+        cmap="coolwarm",
+        center=0,
+        vmin=-max_abs_dev,
+        vmax=max_abs_dev,
+        annot=heatmap_lab,
+        fmt=".1f",
+        cbar_kws={'label': 'Deviation from Normal Range (scaled by range width)'},
+        annot_kws={"size": 9}
+    )
     plt.title("Lab Value Signatures (Median)", weight='bold')
     plt.ylabel("")
     plt.xlabel("")
