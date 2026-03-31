@@ -4,7 +4,7 @@ name: "llm_classifier"
 model:
   pretrained_checkpoint: "/gpfs/scratch/qc25022/pancreas/experiments/Pretrain-Qwen3-0.6B-Pancreas-new-time/final_model"
   max_length: 12000
-  hidden_size: 4096
+  hidden_size: 1024
   num_labels: 2
   freeze_llm: true            # Keep base model frozen, only LoRA + classifier train
   train_lora: true            # Re-enable LoRA adapter parameters for training
