@@ -271,36 +271,65 @@ def fmt_med_iqr(series):
 # Build a working DataFrame keyed by (split, is_case)
 # We will join demographics and trajectory statistics.
 
-# Demographics per split / case-control
-# `demographics_combined` already has one row per patient with:
-#   split, is_case, gender, age, num_tokens, etc.
+# Build a patient-level analysis frame directly from loaded records.
+# This keeps the script standalone (no notebook globals required).
+analysis_rows = []
+for split in SPLITS:
+    for record in patient_records[split]:
+        subject_id = record["subject_id"]
+        token_ids = record["tokens"]
+        token_strings = [id_to_token_map.get(tid, "") for tid in token_ids]
 
-# Trajectory-level token type counts
-# `trajectory_combined` has num_medical, num_lab, etc. per (subject, split, is_case)
+        label_id = subject_to_label.get(subject_id, -1)
+        is_case = 1 if label_id > 0 else 0
 
-# Ensure key uniqueness (one row per subject per split) in both
-_demo = demographics_combined.copy()
-_traj = trajectory_combined.copy()
+        age = None
+        gender = None
+        for i, token in enumerate(token_strings):
+            if not isinstance(token, str):
+                continue
+
+            if token.startswith("GENDER//") and gender is None:
+                gender = token.split("//")[-1]
+
+            if age is None and (token == "AGE" or token.startswith("AGE:") or token.startswith("AGE ")):
+                if ":" in token:
+                    age_str = token.split(":")[-1].strip()
+                    try:
+                        age = float(age_str)
+                    except ValueError:
+                        pass
+                elif token.startswith("AGE "):
+                    age_str = token.replace("AGE", "").strip()
+                    try:
+                        age = float(age_str)
+                    except ValueError:
+                        pass
+                elif i + 1 < len(token_strings):
+                    next_token = str(token_strings[i + 1])
+                    if next_token.replace(".", "", 1).replace("-", "", 1).isdigit():
+                        age = float(next_token)
+
+        num_medical = sum(1 for t in token_strings if isinstance(t, str) and t.startswith("MEDICAL//"))
+        num_lab = sum(1 for t in token_strings if isinstance(t, str) and t.startswith("LAB//"))
+
+        analysis_rows.append(
+            {
+                "subject_id": subject_id,
+                "split": split,
+                "is_case": is_case,
+                "gender": gender,
+                "age": age,
+                "num_medical": num_medical,
+                "num_lab": num_lab,
+                "trajectory_length_tokens": len(token_ids),
+            }
+        )
+
+merged = pd.DataFrame(analysis_rows)
 
 # Sanity check: subject/split combinations should line up
 # (we won't enforce strict equality here, but will use left joins by subject+split)
-
-# Merge demographics and trajectory info
-merged = pd.merge(
-    _demo,
-    _traj[[
-        "subject_id",
-        "split",
-        "is_case",
-        "num_medical",
-        "num_lab",
-        "total_tokens",
-    ]].rename(columns={
-        "total_tokens": "trajectory_length_tokens",
-    }),
-    on=["subject_id", "split", "is_case"],
-    how="left",
-)
 
 # Convenience: harmonise split names
 merged["split_label"] = merged["split"].map(split_label_map)
