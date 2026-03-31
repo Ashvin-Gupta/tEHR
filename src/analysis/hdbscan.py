@@ -35,9 +35,9 @@ os.makedirs(OUTPUT_DIR, exist_ok=True)
 RANDOM_SEED = 42
 
 # Fixed HDBSCAN parameters from previous search
-N_NEIGHBORS = 42
-MIN_CLUSTER_SIZE = 58
-MIN_SAMPLES = 5
+N_NEIGHBORS = 22
+MIN_CLUSTER_SIZE = 127
+MIN_SAMPLES = 12
 CLUSTER_SELECTION_METHOD = "eom"
 
 # ---------------------------------------------------------------------------
