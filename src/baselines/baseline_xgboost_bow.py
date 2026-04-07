@@ -619,9 +619,9 @@ class XGBoostBOWBaseline(BaseBaseline):
         X_test, y_test = self.extract_features_from_dataset(datasets["held_out"], self.token_to_idx, subject_to_is_case)
         
         print(f"\nFeature extraction complete:")
-        print(f"  - Train: {len(X_train)} samples, {X_train.shape[1]:,} features")
-        print(f"  - Validation: {len(X_val)} samples")
-        print(f"  - Test: {len(X_test)} samples")
+        print(f"  - Train: {X_train.shape[0]} samples, {X_train.shape[1]:,} features")
+        print(f"  - Validation: {X_val.shape[0]} samples")
+        print(f"  - Test: {X_test.shape[0]} samples")
         
         search_cfg = self.config.get("hyperparameter_search", {})
         if search_cfg.get("enabled", False):
