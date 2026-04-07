@@ -7,6 +7,7 @@ Features:
     - Generates publication-ready figures (Annotated UMAP, Z-Score Lab Heatmaps, Composition Bars).
 """
 
+import argparse
 import os
 import yaml
 import numpy as np
@@ -252,7 +253,7 @@ def cluster_priority_row_order(heatmap_data: pd.DataFrame) -> list:
 def plot_annotated_umap(df_clusters: pd.DataFrame, output_dir: str):
     """UMAP with Cluster Centroid labels."""
     sns.set(style="white", context="paper", font_scale=1.2)
-    fig, axes = plt.subplots(1, 2, figsize=(14, 6))
+    fig, axes = plt.subplots(2, 1, figsize=(8, 12))
 
     df_clusters["plot_label"] = df_clusters["case_label"].apply(lambda x: "Control" if str(x).lower() == "control" else "Case")
 
@@ -352,7 +353,67 @@ def plot_clinical_heatmap(heatmap_cat: pd.DataFrame, output_dir: str):
 # ---------------------------------------------------------------------------
 # Main Execution
 # ---------------------------------------------------------------------------
+def generate_plots_from_saved_outputs(output_dir: str, clusters_csv: str = None, summary_csv: str = None):
+    """Generate plots from precomputed CSV outputs (no clustering run)."""
+    clusters_csv = clusters_csv or os.path.join(output_dir, "patient_clusters.csv")
+    summary_csv = summary_csv or os.path.join(output_dir, "full_differential_analysis.csv")
+
+    if not os.path.exists(clusters_csv):
+        raise FileNotFoundError(f"Missing clusters CSV: {clusters_csv}")
+    if not os.path.exists(summary_csv):
+        raise FileNotFoundError(f"Missing summary CSV: {summary_csv}")
+
+    print(f"Loading clusters from: {clusters_csv}")
+    df_clusters = pd.read_csv(clusters_csv)
+    print(f"Loading differential summary from: {summary_csv}")
+    df_summary = pd.read_csv(summary_csv)
+
+    print("Generating journal tables from loaded summary...")
+    heatmap_cat, heatmap_lab = generate_journal_reports(df_summary, output_dir)
+
+    print("Generating figures...")
+    plot_annotated_umap(df_clusters, output_dir)
+    plot_stacked_composition(df_clusters, output_dir)
+    plot_clinical_heatmap(heatmap_cat, output_dir)
+    plot_lab_zscore_heatmap(heatmap_lab, output_dir)
+    print(f"Plot-only run complete. Check {output_dir}")
+
+
 def main():
+    parser = argparse.ArgumentParser(description="HDBSCAN pipeline + plotting utilities.")
+    parser.add_argument(
+        "--plot-only",
+        action="store_true",
+        help="Skip clustering/analysis and only generate figures from saved CSV files.",
+    )
+    parser.add_argument(
+        "--output-dir",
+        default=OUTPUT_DIR,
+        help="Output directory for generated artifacts (default: pipeline OUTPUT_DIR).",
+    )
+    parser.add_argument(
+        "--clusters-csv",
+        default=None,
+        help="Optional path to patient_clusters.csv (used with --plot-only).",
+    )
+    parser.add_argument(
+        "--summary-csv",
+        default=None,
+        help="Optional path to full_differential_analysis.csv (used with --plot-only).",
+    )
+    args = parser.parse_args()
+
+    output_dir = args.output_dir
+    os.makedirs(output_dir, exist_ok=True)
+
+    if args.plot_only:
+        generate_plots_from_saved_outputs(
+            output_dir=output_dir,
+            clusters_csv=args.clusters_csv,
+            summary_csv=args.summary_csv,
+        )
+        return
+
     print("1. Loading dataset and embeddings...")
     dataset, subject_to_label, label_to_name, subject_to_record_idx = load_dataset(CONFIG_PATH, "held_out")
     embeddings, patient_ids = load_embeddings(EMBEDDINGS_DIR)
@@ -360,28 +421,28 @@ def main():
     print("2. Running Fixed HDBSCAN Clustering...")
     cluster_labels, z_2d, reducer_10d, reducer_2d = run_fixed_clustering(embeddings)
 
-    joblib.dump(reducer_10d, os.path.join(OUTPUT_DIR, "umap_10d.joblib"))
-    joblib.dump(reducer_2d, os.path.join(OUTPUT_DIR, "umap_2d.joblib"))
+    joblib.dump(reducer_10d, os.path.join(output_dir, "umap_10d.joblib"))
+    joblib.dump(reducer_2d, os.path.join(output_dir, "umap_2d.joblib"))
 
     df_clusters = pd.DataFrame({"patient_id": patient_ids, "cluster": cluster_labels, "dim1": z_2d[:, 0], "dim2": z_2d[:, 1]})
     df_clusters["patient_id_str"] = df_clusters["patient_id"].astype(str)
     df_clusters["label_id"] = df_clusters["patient_id_str"].map(subject_to_label)
     df_clusters["case_label"] = df_clusters["label_id"].map(label_to_name).fillna("Control")
-    df_clusters.to_csv(os.path.join(OUTPUT_DIR, "patient_clusters.csv"), index=False)
+    df_clusters.to_csv(os.path.join(output_dir, "patient_clusters.csv"), index=False)
 
     print("3. Analyzing Differential Features...")
-    df_summary = analyse_differential_features(dataset, df_clusters, subject_to_record_idx, OUTPUT_DIR)
+    df_summary = analyse_differential_features(dataset, df_clusters, subject_to_record_idx, output_dir)
 
     print("4. Generating Journal Tables (Categorical vs Continuous)...")
-    heatmap_cat, heatmap_lab = generate_journal_reports(df_summary, OUTPUT_DIR)
+    heatmap_cat, heatmap_lab = generate_journal_reports(df_summary, output_dir)
 
     print("5. Generating High-Res Journal Plots...")
-    plot_annotated_umap(df_clusters, OUTPUT_DIR)
-    plot_stacked_composition(df_clusters, OUTPUT_DIR)
-    plot_clinical_heatmap(heatmap_cat, OUTPUT_DIR)
-    plot_lab_zscore_heatmap(heatmap_lab, OUTPUT_DIR)
+    plot_annotated_umap(df_clusters, output_dir)
+    plot_stacked_composition(df_clusters, output_dir)
+    plot_clinical_heatmap(heatmap_cat, output_dir)
+    plot_lab_zscore_heatmap(heatmap_lab, output_dir)
 
-    print(f"Pipeline Complete! Check {OUTPUT_DIR} for publication-ready figures.")
+    print(f"Pipeline Complete! Check {output_dir} for publication-ready figures.")
 
 if __name__ == "__main__":
     main()

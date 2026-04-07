@@ -26,9 +26,15 @@ export PYTHONPATH="${BASE_DIR}:${PYTHONPATH}"
 # python -m src.analysis.cluster_hdbscan_search
 # python -m src.analysis.dataset_analysis
 
-python src/analysis/clinical_heatmap_terms.py \
-  --summary-csv /gpfs/scratch/qc25022/pancreas/experiments/Results/lora-1-month-logistic-refactored-new-time-mistral-7B/patient_clustering_heldout/journal_clustering_output/full_differential_analysis.csv \
+# python src/analysis/clinical_heatmap_terms.py \
+#   --summary-csv /gpfs/scratch/qc25022/pancreas/experiments/Results/lora-1-month-logistic-refactored-new-time-mistral-7B/patient_clustering_heldout/journal_clustering_output/full_differential_analysis.csv \
+#   --output-dir /gpfs/scratch/qc25022/pancreas/experiments/Results/lora-1-month-logistic-refactored-new-time-mistral-7B/patient_clustering_heldout/journal_clustering_output \
+
+python src/analysis/hdbscan.py \
+  --plot-only \
   --output-dir /gpfs/scratch/qc25022/pancreas/experiments/Results/lora-1-month-logistic-refactored-new-time-mistral-7B/patient_clustering_heldout/journal_clustering_output \
+  --clusters-csv /gpfs/scratch/qc25022/pancreas/experiments/Results/lora-1-month-logistic-refactored-new-time-mistral-7B/patient_clustering_heldout/journal_clustering_output/patient_clusters.csv \
+  --summary-csv /gpfs/scratch/qc25022/pancreas/experiments/Results/lora-1-month-logistic-refactored-new-time-mistral-7B/patient_clustering_heldout/journal_clustering_output/full_differential_analysis.csv
 
 echo "Pipeline finished."
 deactivate
