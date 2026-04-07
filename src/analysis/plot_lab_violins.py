@@ -25,6 +25,7 @@ TARGET_LABS = [
     # "Lab Ferritin",
     "Lab ALP",
     "Lab HbA1c",
+    "Lab CA125",
     "Lab Creatinine serum",
     "Lab GGT",
     "Lab Glucose",
@@ -36,6 +37,7 @@ LAB_DISPLAY_NAMES = {
     # "Lab Ferritin": "Ferritin",
     "Lab ALP": "ALP",
     "Lab HbA1c": "HbA1c",
+    "Lab CA125": "CA125",
     "Lab Creatinine serum": "Creatinine",
     "Lab GGT": "GGT",
     "Lab Glucose": "Glucose",
@@ -47,6 +49,7 @@ LAB_UNITS = {
     # "Lab Ferritin": "ug/L",
     "Lab ALP": "U/L",
     "Lab HbA1c": "mmol/mol",
+    "Lab CA125": "U/mL",
     "Lab Creatinine serum": "umol/L",
     "Lab GGT": "U/L",
     "Lab Glucose": "mmol/L",
@@ -156,7 +159,7 @@ def convert_hba1c_percent_to_mmol_mol(df: pd.DataFrame) -> tuple[pd.DataFrame, i
 
     out = df.copy()
     hba1c_mask = out["lab"] == "Lab HbA1c"
-    convert_mask = hba1c_mask & (out["value"] < 18)
+    convert_mask = hba1c_mask & (out["value"] < 15)
     converted_n = int(convert_mask.sum())
 
     out.loc[convert_mask, "value"] = (out.loc[convert_mask, "value"] - 2.15) * 10.929
@@ -299,16 +302,23 @@ def main():
 
     lab_df, converted_hba1c_n = convert_hba1c_percent_to_mmol_mol(lab_df)
 
+    before_negative_filter_n = len(lab_df)
+    lab_df = lab_df[lab_df["value"] >= 0].copy()
+    after_negative_filter_n = len(lab_df)
+
     before_high_filter_n = len(lab_df)
-    lab_df = filter_extreme_high_values(lab_df, args.upper_threshold_multiplier)
+    lab_df = filter_extreme_high_values(lab_df, threshold_multiplier=3.0)
     after_high_filter_n = len(lab_df)
     lab_df = lab_df[lab_df["value"] != 0].copy()
     removed_n = original_n - len(lab_df)
+    removed_negative_n = before_negative_filter_n - after_negative_filter_n
     removed_high_n = before_high_filter_n - after_high_filter_n
     removed_zero_n = after_high_filter_n - len(lab_df)
     plot_violin(lab_df, args.output_path, highlight_cluster=args.highlight_cluster)
     print(f"Converted {converted_hba1c_n} HbA1c values below 18 from % to mmol/mol")
-    print(f"Filtered {removed_high_n} extreme high values using multiplier={args.upper_threshold_multiplier}")
+    print(f"Filtered {removed_negative_n} values below 0")
+    print("Filtered extreme highs above 3 * (mean + SD) per lab")
+    print(f"Filtered {removed_high_n} extreme high values")
     print(f"Filtered {removed_zero_n} zero values")
     print(f"Total filtered values: {removed_n}")
     print(f"Saved violin plot to: {args.output_path}")
