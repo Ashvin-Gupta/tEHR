@@ -24,7 +24,11 @@ echo "Starting experiment from directory: $(pwd)"
 export PYTHONPATH="${BASE_DIR}:${PYTHONPATH}"
 
 # python -m src.analysis.cluster_hdbscan_search
-python -m src.analysis.dataset_analysis
+# python -m src.analysis.dataset_analysis
+
+python src/analysis/clinical_heatmap_terms.py \
+  --summary-csv /gpfs/scratch/qc25022/pancreas/experiments/Results/lora-1-month-logistic-refactored-new-time-mistral-7B/patient_clustering_heldout/journal_clustering_output/full_differential_analysis.csv \
+  --output-dir /gpfs/scratch/qc25022/pancreas/experiments/Results/lora-1-month-logistic-refactored-new-time-mistral-7B/patient_clustering_heldout/journal_clustering_output \
 
 echo "Pipeline finished."
 deactivate
