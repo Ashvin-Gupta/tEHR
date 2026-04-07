@@ -8,7 +8,7 @@ model:
   max_vocab_tokens: 5000
 
 training:
-  output_dir: "/data/private/ag619/experiments/Results/CPRD/encoder_transformer_hparam_search"
+  output_dir: "/gpfs/scratch/qc25022/pancreas/experiments/Results/baselines/encoder_transformer_hparam_search"
   epochs: 30
   batch_size: 32
   learning_rate: 1e-4
@@ -36,11 +36,11 @@ hyperparameter_search:
 
 data:
   cutoff_months: 1
-  data_dir: "/data/private/ag619/CPRD_tokenisation"
-  vocab_filepath: "/data/private/ag619/CPRD_tokenisation/vocab.csv"
-  labels_filepath: "/home/ag619/TextCancEHR2/src/resources/subject_information.csv"
-  medical_lookup_filepath: "/home/ag619/TextCancEHR2/src/resources/MedicalDictTranslation2.csv"
-  lab_lookup_filepath: "/home/ag619/TextCancEHR2/src/resources/LabLookUP.csv"
-  region_lookup_filepath: "/home/ag619/TextCancEHR2/src/resources/RegionLookUp.csv"
-  time_lookup_filepath: "/home/ag619/TextCancEHR2/src/resources/TimeLookUp.csv"
+  data_dir: "/gpfs/scratch/qc25022/pancreas/tokenised_data_pancreas_MEDS_new_time/cprd_upgi"
+  vocab_filepath: "/gpfs/scratch/qc25022/pancreas/tokenised_data_pancreas_MEDS_new_time/cprd_upgi/vocab.csv"
+  labels_filepath: "/data/home/qc25022/cancer-extraction-pipeline/output/pancreas_MEDS/subject_information.csv"
+  medical_lookup_filepath: "/data/home/qc25022/TextCancEHR2/src/resources/MedicalDictTranslation2.csv"
+  lab_lookup_filepath: "/data/home/qc25022/TextCancEHR2/src/resources/LabLookUP.csv"
+  region_lookup_filepath: "/data/home/qc25022/TextCancEHR2/src/resources/RegionLookUp.csv"
+  time_lookup_filepath: "/data/home/qc25022/TextCancEHR2/src/resources/TimeLookUp.csv"
   dataset: "CPRD"
