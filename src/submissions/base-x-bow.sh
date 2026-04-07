@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH -n 4
-#SBATCH -t 1:0:0
-#SBATCH --mem-per-cpu=1G
+#SBATCH -t 24:0:0
+#SBATCH --mem-per-cpu=2G
 #SBATCH -o /data/home/qc25022/TextCancEHR2/HPC_Base/logo/%x.o%j
 #SBATCH -e /data/home/qc25022/TextCancEHR2/HPC_Base/loge/%x.e%j
 
@@ -13,7 +13,7 @@ BASE_DIR="/data/home/qc25022/TextCancEHR2"
 export WANDB_API_KEY="REDACTED"
 
 # --- Environment Setup ---
-module load intel intel-mpi python
+# module load intel intel-mpi python
 source /data/home/qc25022/CancEHR-Training/venv/bin/activate
 
 # --- Execute from Project Root ---

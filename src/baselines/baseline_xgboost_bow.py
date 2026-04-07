@@ -19,6 +19,7 @@ Excludes:
 - Quantile values (Q1, Q2, Q3, Q4)
 """
 import os
+import json
 import numpy as np
 import pandas as pd
 from typing import Dict, Any, List
@@ -194,6 +195,37 @@ class XGBoostBOWBaseline(BaseBaseline):
         self.idx_to_token = None
         self.vocab_size = None
 
+    def _build_model_params(self, overrides: Dict[str, Any] = None) -> Dict[str, Any]:
+        """Build XGBoost model parameters from config, optionally overridden."""
+        params = {
+            'objective': 'binary:logistic',
+            'eval_metric': 'auc',
+            'max_depth': self.model_config.get('max_depth', 6),
+            'learning_rate': self.model_config.get('learning_rate', 0.1),
+            'n_estimators': self.model_config.get('n_estimators', 100),
+            'subsample': self.model_config.get('subsample', 0.8),
+            'colsample_bytree': self.model_config.get('colsample_bytree', 0.8),
+            'min_child_weight': self.model_config.get('min_child_weight', 1),
+            'gamma': self.model_config.get('gamma', 0),
+            'reg_alpha': self.model_config.get('reg_alpha', 0),
+            'reg_lambda': self.model_config.get('reg_lambda', 1),
+            'random_state': 42,
+            'n_jobs': self.training_config.get('n_jobs', -1),
+            'early_stopping_rounds': self.training_config.get('early_stopping_rounds', 10),
+            'tree_method': 'hist'  # Use histogram method for faster training with many features
+        }
+        if overrides:
+            params.update(overrides)
+        return params
+
+    def _sample_log_uniform(self, low: float, high: float, n_samples: int, seed: int) -> np.ndarray:
+        """Sample n values from a log-uniform distribution in [low, high]."""
+        if low <= 0 or high <= 0:
+            raise ValueError("Log-uniform bounds must be > 0.")
+        rng = np.random.default_rng(seed)
+        samples = np.exp(rng.uniform(np.log(low), np.log(high), size=n_samples))
+        return np.sort(samples)
+
     def _load_binary_labels(self) -> Dict[int, int]:
         labels_df = pd.read_csv(self.data_config["labels_filepath"])
         return pd.Series(labels_df["is_case"].values, index=labels_df["subject_id"]).to_dict()
@@ -326,24 +358,7 @@ class XGBoostBOWBaseline(BaseBaseline):
         print("Creating XGBoost classifier (Bag-of-Words)...")
         print("=" * 80)
         
-        # Get hyperparameters from config
-        params = {
-            'objective': 'binary:logistic',
-            'eval_metric': 'auc',
-            'max_depth': self.model_config.get('max_depth', 6),
-            'learning_rate': self.model_config.get('learning_rate', 0.1),
-            'n_estimators': self.model_config.get('n_estimators', 100),
-            'subsample': self.model_config.get('subsample', 0.8),
-            'colsample_bytree': self.model_config.get('colsample_bytree', 0.8),
-            'min_child_weight': self.model_config.get('min_child_weight', 1),
-            'gamma': self.model_config.get('gamma', 0),
-            'reg_alpha': self.model_config.get('reg_alpha', 0),
-            'reg_lambda': self.model_config.get('reg_lambda', 1),
-            'random_state': 42,
-            'n_jobs': self.training_config.get('n_jobs', -1),
-            'early_stopping_rounds': self.training_config.get('early_stopping_rounds', 10),
-            'tree_method': 'hist'  # Use histogram method for faster training with many features
-        }
+        params = self._build_model_params()
         
         self.model = xgb.XGBClassifier(**params)
         
@@ -353,6 +368,102 @@ class XGBoostBOWBaseline(BaseBaseline):
                 print(f"    {key}: {value}")
         print(f"    early_stopping_rounds: {params['early_stopping_rounds']}")
         print(f"    Vocabulary size: {self.vocab_size:,} features")
+
+    def _run_hyperparameter_search(self, X_train, y_train, X_val, y_val) -> Dict[str, Any]:
+        """
+        Search over model hyperparameters using train split for fitting
+        and tuning split for model selection.
+        """
+        search_cfg = self.config.get("hyperparameter_search", {})
+        metric_name = search_cfg.get("selection_metric", "auroc")
+
+        if metric_name not in {"auroc", "aupr", "ece"}:
+            raise ValueError(f"Unsupported selection metric: {metric_name}")
+
+        max_depth_values = search_cfg.get("max_depth_values", list(range(5, 11)))
+        learning_rate_values = search_cfg.get("learning_rate_values", [0.01, 0.05, 0.1, 0.2])
+        subsample_values = search_cfg.get("subsample_values", [0.6, 0.8, 1.0])
+
+        gamma_cfg = search_cfg.get("gamma_log_uniform", {})
+        gamma_min = gamma_cfg.get("min", 0.1)
+        gamma_max = gamma_cfg.get("max", 5.0)
+        gamma_samples_count = search_cfg.get("gamma_samples", 8)
+        gamma_seed = search_cfg.get("random_seed", 42)
+        gamma_values = self._sample_log_uniform(gamma_min, gamma_max, gamma_samples_count, gamma_seed)
+
+        print("\n" + "=" * 80)
+        print("Running hyperparameter search (train -> tuning)...")
+        print("=" * 80)
+        print(f"Selection metric: {metric_name}")
+        print(f"max_depth values: {max_depth_values}")
+        print(f"learning_rate values: {learning_rate_values}")
+        print(f"subsample values: {subsample_values}")
+        print(f"gamma log-uniform range: [{gamma_min}, {gamma_max}], samples: {gamma_samples_count}")
+
+        trials = []
+        best_idx = -1
+        best_score = -np.inf if metric_name != "ece" else np.inf
+        best_model = None
+        trial_num = 0
+        total_trials = len(max_depth_values) * len(learning_rate_values) * len(subsample_values) * len(gamma_values)
+
+        for max_depth in max_depth_values:
+            for learning_rate in learning_rate_values:
+                for subsample in subsample_values:
+                    for gamma in gamma_values:
+                        trial_num += 1
+                        trial_params = {
+                            "max_depth": int(max_depth),
+                            "learning_rate": float(learning_rate),
+                            "subsample": float(subsample),
+                            "gamma": float(gamma),
+                        }
+                        print(f"\nTrial {trial_num}/{total_trials}: {trial_params}")
+                        params = self._build_model_params(trial_params)
+                        model = xgb.XGBClassifier(**params)
+                        model.fit(
+                            X_train,
+                            y_train,
+                            eval_set=[(X_val, y_val)],
+                            verbose=False
+                        )
+
+                        val_probs = model.predict_proba(X_val)[:, 1]
+                        val_metrics = compute_baseline_metrics(y_val, val_probs)
+                        score = val_metrics[metric_name]
+
+                        print(f"  tuning metrics: {val_metrics}")
+                        is_better = score > best_score if metric_name != "ece" else score < best_score
+                        if is_better:
+                            best_score = score
+                            best_model = model
+                            best_idx = len(trials)
+                            print(f"  -> new best {metric_name}: {best_score:.6f}")
+
+                        trials.append({
+                            "trial": trial_num,
+                            "params": trial_params,
+                            "tuning_metrics": {k: float(v) for k, v in val_metrics.items()}
+                        })
+
+        if best_model is None:
+            raise RuntimeError("Hyperparameter search failed: no valid trial completed.")
+
+        self.model = best_model
+        best_trial = trials[best_idx]
+
+        search_results = {
+            "selection_metric": metric_name,
+            "best_score": float(best_score),
+            "best_params": best_trial["params"],
+            "best_trial": int(best_trial["trial"]),
+            "num_trials": len(trials),
+            "trials": trials
+        }
+        save_results(search_results, os.path.join(self.output_dir, "results"), "hyperparameter_search_results.json")
+        print("\nBest hyperparameters found:")
+        print(best_trial["params"])
+        return search_results
     
     def train(self, X_train, y_train, X_val, y_val):
         """Train XGBoost model."""
@@ -462,7 +573,6 @@ class XGBoostBOWBaseline(BaseBaseline):
         
         # Also save vocabulary mapping
         vocab_path = os.path.join(self.output_dir, 'models', 'vocabulary.json')
-        import json
         with open(vocab_path, 'w') as f:
             json.dump({
                 'token_to_idx': self.token_to_idx,
@@ -498,11 +608,16 @@ class XGBoostBOWBaseline(BaseBaseline):
         print(f"  - Validation: {len(X_val)} samples")
         print(f"  - Test: {len(X_test)} samples")
         
-        # Create model
-        self.load_model()
-        
-        # Train
-        self.train(X_train, y_train, X_val, y_val)
+        search_cfg = self.config.get("hyperparameter_search", {})
+        if search_cfg.get("enabled", False):
+            search_results = self._run_hyperparameter_search(X_train, y_train, X_val, y_val)
+            best_params = search_results["best_params"]
+            self.model_config.update(best_params)
+        else:
+            # Create model
+            self.load_model()
+            # Train
+            self.train(X_train, y_train, X_val, y_val)
         
         # Save model
         self.save_model()
@@ -515,7 +630,13 @@ class XGBoostBOWBaseline(BaseBaseline):
         summary = {
             'validation': {k: float(v) for k, v in val_metrics.items()},
             'test': {k: float(v) for k, v in test_metrics.items()},
-            'vocab_size': self.vocab_size
+            'vocab_size': self.vocab_size,
+            'best_params': {
+                'max_depth': int(self.model.get_params().get('max_depth')),
+                'learning_rate': float(self.model.get_params().get('learning_rate')),
+                'subsample': float(self.model.get_params().get('subsample')),
+                'gamma': float(self.model.get_params().get('gamma')),
+            }
         }
         save_results(summary, self.output_dir, 'summary.json')
         
