@@ -23,7 +23,7 @@ cd "${BASE_DIR}"
 echo "Starting experiment from directory: $(pwd)"
 export PYTHONPATH="${BASE_DIR}:${PYTHONPATH}"
 
-python -m src.pipelines.run_baseline_xgboost_bow --config_filepath src/configs/baseline_xgboost_bow_config.yaml 
+python -m src.pipelines.run_baseline --baseline xgboost_bow --config_filepath src/configs/baseline_xgboost_bow_config.yaml 
 
 echo "Pipeline finished."
 deactivate
