@@ -12,10 +12,10 @@ model:
 wandb:
   enabled: true
   project: "Pretrain-Qwen3-8B-Pancreas-classification"
-  run_name: "baseline-frozen-llm-linear-mistral-7B-12months"
+  run_name: "baseline-frozen-llm-linear-mistral-7B-6months"
 
 training:
-  output_dir: "/gpfs/scratch/qc25022/pancreas/experiments/Results/Baselines/frozen_llm_linear_mistral-7B-12months"
+  output_dir: "/gpfs/scratch/qc25022/pancreas/experiments/Results/Baselines/frozen_llm_linear_mistral-7B-6months"
   overwrite_output_dir: true
   epochs: 1
   batch_size: 8
@@ -35,7 +35,7 @@ training:
   dataloader_num_workers: 2
 
 data:
-  cutoff_months: 12
+  cutoff_months: 6  
   data_dir: "/gpfs/scratch/qc25022/pancreas/tokenised_data_pancreas_MEDS_new_time/cprd_upgi"
   vocab_filepath: "/gpfs/scratch/qc25022/pancreas/tokenised_data_pancreas_MEDS_new_time/cprd_upgi/vocab.csv"
   labels_filepath: "/data/home/qc25022/cancer-extraction-pipeline/output/pancreas_MEDS/subject_information.csv"
