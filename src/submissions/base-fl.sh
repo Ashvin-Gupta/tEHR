@@ -16,7 +16,6 @@ BASE_DIR="/data/home/qc25022/TextCancEHR2"
 export WANDB_API_KEY="REDACTED"
 
 # --- Environment Setup ---
-module load intel intel-mpi python
 source /data/home/qc25022/CancEHR-Training/venv/bin/activate
 
 # --- Execute from Project Root ---
@@ -26,7 +25,7 @@ cd "${BASE_DIR}"
 echo "Starting experiment from directory: $(pwd)"
 export PYTHONPATH="${BASE_DIR}:${PYTHONPATH}"
 
-python -m src.pipelines.run_baseline_frozen_llm_linear --config_filepath src/configs/baseline_frozen_llm_linear_config.yaml 
+python -m src.pipelines.run_baseline --baseline frozen_llm_linear --config_filepath src/configs/baseline_frozen_llm_linear_config.yaml 
 
 echo "Pipeline finished."
 deactivate
