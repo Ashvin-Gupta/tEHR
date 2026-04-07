@@ -1,7 +1,7 @@
 name: "frozen_llm_linear_baseline"
 
 model:
-  model_name: "unsloth/Mistral-7B-Base-unsloth-bnb-4bit"
+  model_name: "unsloth/mistral-7b-v0.3-bnb-4bit"
   max_length: 12000
   hidden_size: 4096
   num_labels: 2
