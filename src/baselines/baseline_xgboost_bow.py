@@ -26,6 +26,7 @@ from typing import Dict, Any, List
 from tqdm import tqdm
 import xgboost as xgb
 from collections import Counter
+from scipy import sparse
 
 from src.baselines.base_baselines import BaseBaseline
 from src.baselines.baseline_utils import setup_output_dir
@@ -296,7 +297,9 @@ class XGBoostBOWBaseline(BaseBaseline):
         Returns:
             Tuple of (features_array, labels_array)
         """
-        features_list = []
+        row_indices = []
+        col_indices = []
+        values = []
         labels_list = []
         
         print("Extracting bag-of-words features from dataset...")
@@ -327,25 +330,37 @@ class XGBoostBOWBaseline(BaseBaseline):
                     continue
                 token_strings.append(tok)
             
-            # Create sample dict with tokens
-            sample = {'tokens': token_strings}
-            
-            # Extract bag-of-words features
-            features = extract_bow_features(sample, token_to_idx)
-            features_list.append(features)
+            # Build sparse bag-of-words entries for this sample
+            filtered_tokens = [str(token) for token in token_strings if should_include_token(str(token))]
+            token_counts = Counter(filtered_tokens)
+            current_row = len(labels_list)
+            for token, count in token_counts.items():
+                col_idx = token_to_idx.get(token)
+                if col_idx is not None:
+                    row_indices.append(current_row)
+                    col_indices.append(col_idx)
+                    values.append(float(count))
             
             # Use is_case directly (already binary: 0 = Control, 1 = Pancreatic Cancer)
             labels_list.append(int(label))
         
-        # Convert to numpy arrays
-        features_array = np.array(features_list)
+        # Convert to sparse matrix and labels array
+        num_samples = len(labels_list)
+        num_features = len(token_to_idx)
+        features_array = sparse.csr_matrix(
+            (np.array(values, dtype=np.float32), (np.array(row_indices), np.array(col_indices))),
+            shape=(num_samples, num_features),
+            dtype=np.float32
+        )
         labels_array = np.array(labels_list)
         
         # Verify binary labels
         unique_labels = np.unique(labels_array)
         print(f"  - Unique labels from is_case: {unique_labels}")
         print(f"  - Feature matrix shape: {features_array.shape}")
-        print(f"  - Sparsity: {(features_array == 0).sum() / features_array.size * 100:.2f}% zeros")
+        total_entries = features_array.shape[0] * features_array.shape[1]
+        sparsity = (1.0 - (features_array.nnz / total_entries)) * 100 if total_entries > 0 else 100.0
+        print(f"  - Sparsity: {sparsity:.2f}% zeros")
         
         if len(unique_labels) > 2 or not all(l in [0, 1] for l in unique_labels):
             raise ValueError(f"Expected binary labels [0, 1] from is_case, got {unique_labels}")
