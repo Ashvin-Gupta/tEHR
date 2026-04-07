@@ -1,9 +1,9 @@
 name: "frozen_llm_linear_baseline"
 
 model:
-  model_name: "unsloth/Qwen3-0.6B-Base-unsloth-bnb-4bit"
-  max_length: 1024
-  hidden_size: 1024
+  model_name: "unsloth/Mistral-7B-Base-unsloth-bnb-4bit"
+  max_length: 12000
+  hidden_size: 4096
   num_labels: 2
   head_type: "linear"
   head_hidden_size: 512
@@ -12,14 +12,14 @@ model:
 wandb:
   enabled: true
   project: "Pretrain-Qwen3-8B-Pancreas-classification"
-  run_name: "baseline-frozen-llm-linear-debug"
+  run_name: "baseline-frozen-llm-linear-mistral-7B-12months"
 
 training:
-  output_dir: "/data/private/ag619/experiments/Results/CPRD/frozen_llm_linear"
+  output_dir: "/gpfs/scratch/qc25022/pancreas/experiments/Results/Baselines/frozen_llm_linear_mistral-7B-12months"
   overwrite_output_dir: true
   epochs: 1
-  batch_size: 1
-  eval_batch_size: 1
+  batch_size: 4
+  eval_batch_size: 4
   learning_rate: 1e-5
   weight_decay: 0.01
   warmup_steps: 100
@@ -35,14 +35,14 @@ training:
   dataloader_num_workers: 2
 
 data:
-  cutoff_months: 6
-  data_dir: "/data/private/ag619/CPRD_tokenisation"
-  vocab_filepath: "/data/private/ag619/CPRD_tokenisation/vocab.csv"
-  labels_filepath: "/home/ag619/TextCancEHR2/src/resources/subject_information.csv"
-  medical_lookup_filepath: "/home/ag619/TextCancEHR2/src/resources/MedicalDictTranslation2.csv"
-  lab_lookup_filepath: "/home/ag619/TextCancEHR2/src/resources/LabLookUP.csv"
-  region_lookup_filepath: "/home/ag619/TextCancEHR2/src/resources/RegionLookUp.csv"
-  time_lookup_filepath: "/home/ag619/TextCancEHR2/src/resources/TimeLookUp.csv"  
+  cutoff_months: 12
+  data_dir: "/gpfs/scratch/qc25022/pancreas/tokenised_data_pancreas_MEDS_new_time/cprd_upgi"
+  vocab_filepath: "/gpfs/scratch/qc25022/pancreas/tokenised_data_pancreas_MEDS_new_time/cprd_upgi/vocab.csv"
+  labels_filepath: "/data/home/qc25022/cancer-extraction-pipeline/output/pancreas_MEDS/subject_information.csv"
+  medical_lookup_filepath: "/data/home/qc25022/TextCancEHR2/src/resources/MedicalDictTranslation2.csv"
+  lab_lookup_filepath: "/data/home/qc25022/TextCancEHR2/src/resources/LabLookUP.csv"
+  region_lookup_filepath: "/data/home/qc25022/TextCancEHR2/src/resources/RegionLookUp.csv"
+  time_lookup_filepath: "/data/home/qc25022/TextCancEHR2/src/resources/TimeLookUp.csv"  
   dataset: "CPRD"
 
 
