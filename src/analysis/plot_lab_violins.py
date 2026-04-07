@@ -307,7 +307,7 @@ def main():
     after_negative_filter_n = len(lab_df)
 
     before_high_filter_n = len(lab_df)
-    lab_df = filter_extreme_high_values(lab_df, threshold_multiplier=3.0)
+    lab_df = filter_extreme_high_values(lab_df, upper_threshold_multiplier=args.upper_threshold_multiplier)
     after_high_filter_n = len(lab_df)
     lab_df = lab_df[lab_df["value"] != 0].copy()
     removed_n = original_n - len(lab_df)
