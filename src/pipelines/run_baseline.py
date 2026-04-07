@@ -11,6 +11,7 @@ BASELINE_REGISTRY = {
     "xgboost":               "src.baselines.baseline_xgboost.XGBoostBaseline",
     "xgboost_bow":           "src.baselines.baseline_xgboost_bow.XGBoostBOWBaseline",
     "encoder_transformer":   "src.baselines.baseline_encoder_transformer.EncoderTransformerBaseline",
+    "encoder_transformer_hparam_search": "src.baselines.baseline_encoder_transformer_hparam_search.EncoderTransformerHyperparamSearchBaseline",
     "qwen3_embedding":       "src.baselines.baseline_qwen3_embedding.Qwen3EmbeddingBaseline",
     "qwen_llm_linear":       "src.baselines.baseline_qwen_llm_linear.QwenLLMLinearBaseline",
     "logreg_demo_events":    "src.baselines.baseline_logreg_demo_events.LogRegDemoEventsBaseline",
