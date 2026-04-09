@@ -69,12 +69,12 @@ def plot_clinical_heatmap_terms(
         annot=True,
         fmt=".1f",
         cmap="YlOrRd",
-        cbar_kws={"label": "Enrichment Score (x-fold)"},
+        cbar_kws={"label": "Relative Risk (x-fold)"},
     )
     plt.title("Clinical Phenotypes (Selected Terms)", weight="bold")
     plt.ylabel("")
     plt.xlabel("")
-    plt.xticks(rotation=30, ha="right")
+    plt.xticks(rotation=0, ha="right")
     plt.tight_layout()
 
     os.makedirs(output_dir, exist_ok=True)
