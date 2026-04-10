@@ -457,6 +457,139 @@ def plot_prediction_correctness_umap(
 
 
 # ---------------------------------------------------------------------------
+# Cluster + probability stacked figure
+# ---------------------------------------------------------------------------
+def plot_cluster_and_probability_umap(
+    df_clusters: pd.DataFrame,
+    df_preds: pd.DataFrame | None,
+    output_dir: str,
+) -> None:
+    """
+    Two-panel stacked figure sharing the same 2D UMAP space.
+
+    Top panel   — coloured by HDBSCAN cluster; cases shown as crosses (×),
+                  controls as circles (○).
+    Bottom panel — coloured by model-predicted probability (continuous heatmap).
+                  Requires df_preds; skipped with a warning if None.
+    """
+    has_probs = df_preds is not None
+
+    fig, axes = plt.subplots(
+        2 if has_probs else 1, 1,
+        figsize=(9, 16 if has_probs else 8),
+        constrained_layout=True,
+    )
+    ax_top = axes[0] if has_probs else axes
+    ax_bot = axes[1] if has_probs else None
+
+    # Derive is_case flag
+    df_clusters = df_clusters.copy()
+    df_clusters["_is_case"] = df_clusters["case_label"].apply(
+        lambda x: str(x).lower() != "control"
+    )
+
+    real_clusters = sorted(c for c in df_clusters["cluster"].unique() if c != -1)
+    cmap = plt.cm.get_cmap("tab10", max(len(real_clusters), 1))
+
+    # ── Top panel: cluster colour, marker by case/control ──────────────────
+    # Noise first so real clusters render on top
+    noise = df_clusters[df_clusters["cluster"] == -1]
+    if not noise.empty:
+        ax_top.scatter(
+            noise["dim1"], noise["dim2"],
+            s=6, alpha=0.25, color="lightgrey",
+            marker="o", label="Noise", rasterized=True,
+        )
+
+    for i, cid in enumerate(real_clusters):
+        sub = df_clusters[df_clusters["cluster"] == cid]
+        colour = cmap(i)
+        controls = sub[~sub["_is_case"]]
+        cases    = sub[sub["_is_case"]]
+
+        if not controls.empty:
+            ax_top.scatter(
+                controls["dim1"], controls["dim2"],
+                s=10, alpha=0.55, color=colour,
+                marker="o", label=f"Cluster {cid} – control" if i == 0 else f"Cluster {cid}",
+                rasterized=True,
+            )
+        if not cases.empty:
+            ax_top.scatter(
+                cases["dim1"], cases["dim2"],
+                s=35, alpha=0.8, color=colour,
+                marker="x", linewidths=0.9,
+                label=f"Cluster {cid} – case" if i == 0 else "_nolegend_",
+                rasterized=True,
+            )
+        # Centroid annotation
+        cx = float(sub["dim1"].median())
+        cy = float(sub["dim2"].median())
+        ax_top.text(
+            cx, cy, str(cid),
+            fontsize=10, weight="bold", ha="center", va="center",
+            bbox=dict(facecolor="white", alpha=0.7, edgecolor="none", boxstyle="round,pad=0.2"),
+        )
+
+    ax_top.set_title("HDBSCAN Clusters\n(× = case, ○ = control)", weight="bold")
+    ax_top.axis("off")
+
+    # Compact legend: one entry per cluster + a marker-shape key
+    handles, labels_ = ax_top.get_legend_handles_labels()
+    # Add shape-only legend entries
+    from matplotlib.lines import Line2D
+    handles += [
+        Line2D([0], [0], marker="o", color="grey", linestyle="None", markersize=6, label="Control"),
+        Line2D([0], [0], marker="x", color="grey", linestyle="None", markersize=8,
+               markeredgewidth=1.2, label="Case"),
+    ]
+    ax_top.legend(
+        handles=handles,
+        loc="lower right", fontsize=7, markerscale=1.2,
+        framealpha=0.6, ncol=2,
+    )
+
+    # ── Bottom panel: predicted probability heatmap ─────────────────────────
+    if has_probs and ax_bot is not None:
+        merged = df_clusters.merge(
+            df_preds[["patient_id", "prob"]].astype({"patient_id": str}),
+            left_on="patient_id_str", right_on="patient_id", how="left",
+        )
+
+        # Points without a prediction rendered in light grey
+        no_pred = merged[merged["prob"].isna()]
+        has_pred = merged[merged["prob"].notna()].copy()
+
+        if not no_pred.empty:
+            ax_bot.scatter(
+                no_pred["dim1"], no_pred["dim2"],
+                s=6, alpha=0.2, color="lightgrey", rasterized=True,
+            )
+
+        sc = ax_bot.scatter(
+            has_pred["dim1"], has_pred["dim2"],
+            c=has_pred["prob"],
+            cmap="RdBu_r",
+            vmin=0.0, vmax=1.0,
+            s=10, alpha=0.7,
+            rasterized=True,
+        )
+        cbar = fig.colorbar(sc, ax=ax_bot, fraction=0.03, pad=0.02)
+        cbar.set_label("P(Cancer)", fontsize=9)
+        cbar.ax.tick_params(labelsize=8)
+
+        ax_bot.set_title("Predicted Probability", weight="bold")
+        ax_bot.axis("off")
+
+    plt.savefig(
+        os.path.join(output_dir, "fig6_cluster_and_probability_umap.png"),
+        dpi=300, bbox_inches="tight",
+    )
+    plt.close()
+    print("  Saved fig6_cluster_and_probability_umap.png")
+
+
+# ---------------------------------------------------------------------------
 # Main Execution
 # ---------------------------------------------------------------------------
 def generate_plots_from_saved_outputs(output_dir: str, clusters_csv: str = None, summary_csv: str = None):
@@ -474,6 +607,11 @@ def generate_plots_from_saved_outputs(output_dir: str, clusters_csv: str = None,
     print(f"Loading differential summary from: {summary_csv}")
     df_summary = pd.read_csv(summary_csv)
 
+    # INSERT_YOUR_CODE
+    # Make the output directory output_dir + "/testing"
+    output_dir = os.path.join(output_dir, "testing")
+    os.makedirs(output_dir, exist_ok=True)
+
     print("Generating journal tables from loaded summary...")
     heatmap_cat, heatmap_lab = generate_journal_reports(df_summary, output_dir)
 
@@ -486,6 +624,7 @@ def generate_plots_from_saved_outputs(output_dir: str, clusters_csv: str = None,
     df_preds = load_predictions(PREDICTIONS_JSON)
     if df_preds is not None:
         plot_prediction_correctness_umap(df_clusters, df_preds, output_dir)
+    plot_cluster_and_probability_umap(df_clusters, df_preds, output_dir)
 
     print(f"Plot-only run complete. Check {output_dir}")
 
@@ -553,10 +692,11 @@ def main():
     plot_clinical_heatmap(heatmap_cat, output_dir)
     plot_lab_zscore_heatmap(heatmap_lab, output_dir)
 
-    print("6. Generating prediction-correctness UMAP (if evaluation results exist)...")
+    print("6. Generating prediction figures (if evaluation results exist)...")
     df_preds = load_predictions(PREDICTIONS_JSON)
     if df_preds is not None:
         plot_prediction_correctness_umap(df_clusters, df_preds, output_dir)
+    plot_cluster_and_probability_umap(df_clusters, df_preds, output_dir)
 
     print(f"Pipeline Complete! Check {output_dir} for publication-ready figures.")
 
