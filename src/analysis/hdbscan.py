@@ -32,8 +32,8 @@ CONFIG_PATH = "src/configs/classification_config.yaml"
 EMBEDDINGS_DIR = "/gpfs/scratch/qc25022/pancreas/experiments/Results/lora-1-month-logistic-refactored-new-time-mistral-7B/patient_clustering_heldout"
 OUTPUT_DIR = EMBEDDINGS_DIR + "/journal_clustering_output"
 # Path to the per-patient prediction JSON produced by evaluate_model.py.
-# Update this to point at the evaluation output_dir for the same experiment.
-EVAL_RESULTS_DIR = "/gpfs/scratch/qc25022/pancreas/experiments/Results/lora-1-month-logistic-refactored-new-time-mistral-7B/evaluation"
+# Matches training.output_dir in classification_config.yaml.
+EVAL_RESULTS_DIR = "/gpfs/scratch/qc25022/pancreas/experiments/Results/lora-1-month-logistic-refactored-new-time-mistral-7B"
 PREDICTIONS_JSON = os.path.join(EVAL_RESULTS_DIR, "results", "test_results.json")
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
