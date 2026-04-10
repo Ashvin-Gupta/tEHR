@@ -43,7 +43,7 @@ export PYTHONPATH="${BASE_DIR}:${PYTHONPATH}"
 
 python -m src.evaluations.evaluate_model \
   --config_filepath src/configs/classification_config.yaml \
-  --model_checkpoint /gpfs/scratch/qc25022/pancreas/experiments/Results/lora-1-month-logistic-refactored-new-time-mistral-7B/final_model
+  --model_checkpoint /gpfs/scratch/qc25022/pancreas/experiments/Results/lora-1-month-logistic-refactored-new-time-mistral-7B/checkpoint-7000
 
 # python -m src.evaluations.evaluate_model \
 #   --config_filepath src/configs/baseline_qwen3_embedding_config.yaml \
