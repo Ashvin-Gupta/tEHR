@@ -8,6 +8,7 @@ Features:
 """
 
 import argparse
+import json
 import os
 import yaml
 import numpy as np
@@ -30,6 +31,10 @@ from src.resources.lab_terms import LAB_TERMS
 CONFIG_PATH = "src/configs/classification_config.yaml"
 EMBEDDINGS_DIR = "/gpfs/scratch/qc25022/pancreas/experiments/Results/lora-1-month-logistic-refactored-new-time-mistral-7B/patient_clustering_heldout"
 OUTPUT_DIR = EMBEDDINGS_DIR + "/journal_clustering_output"
+# Path to the per-patient prediction JSON produced by evaluate_model.py.
+# Update this to point at the evaluation output_dir for the same experiment.
+EVAL_RESULTS_DIR = "/gpfs/scratch/qc25022/pancreas/experiments/Results/lora-1-month-logistic-refactored-new-time-mistral-7B/evaluation"
+PREDICTIONS_JSON = os.path.join(EVAL_RESULTS_DIR, "results", "test_results.json")
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 RANDOM_SEED = 42
@@ -351,6 +356,107 @@ def plot_clinical_heatmap(heatmap_cat: pd.DataFrame, output_dir: str):
     plt.close()
 
 # ---------------------------------------------------------------------------
+# Prediction-correctness helpers
+# ---------------------------------------------------------------------------
+def load_predictions(results_json_path: str) -> pd.DataFrame | None:
+    """
+    Load per-patient predictions saved by evaluate_model.py.
+
+    Returns a DataFrame with columns:
+        patient_id, true_label, pred_label, prob, predicted_correctly
+    Returns None (with a warning) if the file is missing or has no patient_ids.
+    """
+    if not os.path.exists(results_json_path):
+        print(f"  [pred plot] Results JSON not found: {results_json_path}. Skipping.")
+        return None
+
+    with open(results_json_path) as f:
+        data = json.load(f)
+
+    if "patient_ids" not in data:
+        print("  [pred plot] No patient_ids in results JSON — re-run evaluate_model.py first.")
+        return None
+
+    df = pd.DataFrame({
+        "patient_id": [str(p) for p in data["patient_ids"]],
+        "true_label": data["labels"],
+        "prob": data["probs"],
+    })
+    df["pred_label"] = (df["prob"] >= 0.5).astype(int)
+    df["predicted_correctly"] = (df["pred_label"] == df["true_label"])
+    return df
+
+
+def plot_prediction_correctness_umap(
+    df_clusters: pd.DataFrame,
+    df_preds: pd.DataFrame,
+    output_dir: str,
+) -> None:
+    """
+    UMAP scatter coloured by prediction outcome (TP / TN / FP / FN / Noise).
+
+    df_clusters must have columns: patient_id_str, dim1, dim2, cluster.
+    df_preds    must have columns: patient_id, true_label, pred_label, predicted_correctly.
+    """
+    merged = df_clusters.merge(
+        df_preds.rename(columns={"patient_id": "patient_id_str"}),
+        on="patient_id_str",
+        how="left",
+    )
+
+    OUTCOME_COLOURS = {
+        "TP": "#e74c3c",   # red    — case correctly identified
+        "TN": "#3498db",   # blue   — control correctly dismissed
+        "FN": "#e67e22",   # orange — case missed by model
+        "FP": "#9b59b6",   # purple — control wrongly flagged
+        "Noise": "#cccccc",
+    }
+
+    def outcome(row):
+        if row["cluster"] == -1:
+            return "Noise"
+        if pd.isna(row.get("true_label")):
+            return "Noise"
+        tl, pl = int(row["true_label"]), int(row["pred_label"])
+        if tl == 1 and pl == 1:
+            return "TP"
+        if tl == 0 and pl == 0:
+            return "TN"
+        if tl == 1 and pl == 0:
+            return "FN"
+        return "FP"
+
+    merged["outcome"] = merged.apply(outcome, axis=1)
+
+    sns.set(style="white", context="paper", font_scale=1.2)
+    fig, ax = plt.subplots(figsize=(9, 7))
+
+    order = ["TN", "TP", "FN", "FP", "Noise"]
+    for cat in order:
+        sub = merged[merged["outcome"] == cat]
+        if sub.empty:
+            continue
+        alpha = 0.25 if cat == "Noise" else 0.65
+        size = 6 if cat == "Noise" else 10
+        ax.scatter(
+            sub["dim1"], sub["dim2"],
+            s=size, alpha=alpha,
+            color=OUTCOME_COLOURS[cat],
+            label=f"{cat} ({len(sub)})",
+            rasterized=True,
+        )
+
+    ax.set_title("UMAP: Prediction Outcomes", weight="bold")
+    ax.axis("off")
+    ax.legend(title="Outcome", loc="upper right", fontsize=9, markerscale=1.8)
+
+    plt.tight_layout()
+    plt.savefig(os.path.join(output_dir, "fig5_prediction_correctness_umap.png"), dpi=300, bbox_inches="tight")
+    plt.close()
+    print("  Saved fig5_prediction_correctness_umap.png")
+
+
+# ---------------------------------------------------------------------------
 # Main Execution
 # ---------------------------------------------------------------------------
 def generate_plots_from_saved_outputs(output_dir: str, clusters_csv: str = None, summary_csv: str = None):
@@ -376,6 +482,11 @@ def generate_plots_from_saved_outputs(output_dir: str, clusters_csv: str = None,
     plot_stacked_composition(df_clusters, output_dir)
     plot_clinical_heatmap(heatmap_cat, output_dir)
     plot_lab_zscore_heatmap(heatmap_lab, output_dir)
+
+    df_preds = load_predictions(PREDICTIONS_JSON)
+    if df_preds is not None:
+        plot_prediction_correctness_umap(df_clusters, df_preds, output_dir)
+
     print(f"Plot-only run complete. Check {output_dir}")
 
 
@@ -441,6 +552,11 @@ def main():
     plot_stacked_composition(df_clusters, output_dir)
     plot_clinical_heatmap(heatmap_cat, output_dir)
     plot_lab_zscore_heatmap(heatmap_lab, output_dir)
+
+    print("6. Generating prediction-correctness UMAP (if evaluation results exist)...")
+    df_preds = load_predictions(PREDICTIONS_JSON)
+    if df_preds is not None:
+        plot_prediction_correctness_umap(df_clusters, df_preds, output_dir)
 
     print(f"Pipeline Complete! Check {output_dir} for publication-ready figures.")
 

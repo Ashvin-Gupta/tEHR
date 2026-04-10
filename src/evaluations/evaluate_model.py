@@ -281,6 +281,13 @@ class ModelEvaluator:
         # Convert to probabilities
         probs = torch.softmax(torch.tensor(logits), dim=1).numpy()[:, 1]
         labels = pred_output.label_ids
+
+        # Extract patient IDs in dataset iteration order so predictions can be
+        # joined back to embeddings / cluster files downstream.
+        patient_ids = [
+            str(dataset.patient_records[i].get("subject_id", i))
+            for i in range(len(dataset))
+        ]
         
         # Compute metrics
         metrics = compute_baseline_metrics(labels, probs)
@@ -295,6 +302,7 @@ class ModelEvaluator:
         # Save predictions
         results = {
             'metrics': metrics,
+            'patient_ids': patient_ids,
             'labels': labels.tolist(),
             'probs': probs.tolist()
         }
