@@ -398,10 +398,16 @@ def plot_prediction_correctness_umap(
     df_clusters must have columns: patient_id_str, dim1, dim2, cluster.
     df_preds    must have columns: patient_id, true_label, pred_label, predicted_correctly.
     """
-    merged = df_clusters.merge(
-        df_preds.rename(columns={"patient_id": "patient_id_str"}),
-        on="patient_id_str",
-        how="left",
+    # CSV reload can make patient_id_str int64; JSON preds use str — align dtypes for merge.
+    merged = (
+        df_clusters.assign(patient_id_str=df_clusters["patient_id_str"].astype(str))
+        .merge(
+            df_preds.rename(columns={"patient_id": "patient_id_str"}).assign(
+                patient_id_str=lambda d: d["patient_id_str"].astype(str)
+            ),
+            on="patient_id_str",
+            how="left",
+        )
     )
 
     OUTCOME_COLOURS = {
@@ -551,9 +557,16 @@ def plot_cluster_and_probability_umap(
 
     # ── Bottom panel: predicted probability heatmap ─────────────────────────
     if has_probs and ax_bot is not None:
-        merged = df_clusters.merge(
-            df_preds[["patient_id", "prob"]].astype({"patient_id": str}),
-            left_on="patient_id_str", right_on="patient_id", how="left",
+        merged = (
+            df_clusters.assign(patient_id_str=df_clusters["patient_id_str"].astype(str))
+            .merge(
+                df_preds[["patient_id", "prob"]].assign(
+                    patient_id=lambda d: d["patient_id"].astype(str)
+                ),
+                left_on="patient_id_str",
+                right_on="patient_id",
+                how="left",
+            )
         )
 
         # Points without a prediction rendered in light grey
