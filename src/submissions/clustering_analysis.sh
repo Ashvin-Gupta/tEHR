@@ -26,7 +26,7 @@ export PYTHONPATH="${BASE_DIR}:${PYTHONPATH}"
 # python -m src.analysis.cluster_hdbscan_search
 # python -m src.analysis.hdbscan
 python -m src.analysis.plot_hdbscan_figures \
-    --output-dir /gpfs/scratch/qc25022/pancreas/experiments/Results/lora-1-month-logistic-refactored-new-time-mistral-7B/patient_clustering_heldout/journal_clustering_output/testing
+    --output-dir /gpfs/scratch/qc25022/pancreas/experiments/Results/lora-1-month-logistic-refactored-new-time-mistral-7B/patient_clustering_heldout/journal_clustering_output
     --clusters-csv /gpfs/scratch/qc25022/pancreas/experiments/Results/lora-1-month-logistic-refactored-new-time-mistral-7B/patient_clustering_heldout/journal_clustering_output/patient_clusters.csv
     --summary-csv /gpfs/scratch/qc25022/pancreas/experiments/Results/lora-1-month-logistic-refactored-new-time-mistral-7B/patient_clustering_heldout/journal_clustering_output/full_differential_analysis.csv
 

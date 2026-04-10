@@ -282,7 +282,7 @@ def plot_annotated_umap(df_clusters: pd.DataFrame, output_dir: str):
     axes[1].legend(title="", loc="upper right")
 
     plt.tight_layout()
-    plt.savefig(os.path.join(output_dir, "fig1_annotated_umap.png"), dpi=300, bbox_inches='tight')
+    plt.savefig(os.path.join(output_dir, "fig12_annotated_umap.png"), dpi=300, bbox_inches='tight')
     plt.close()
 
 def plot_stacked_composition(df_clusters: pd.DataFrame, output_dir: str):
@@ -300,7 +300,7 @@ def plot_stacked_composition(df_clusters: pd.DataFrame, output_dir: str):
     sns.despine(left=True)
     
     plt.tight_layout()
-    plt.savefig(os.path.join(output_dir, "fig2_cluster_composition.png"), dpi=300, bbox_inches='tight')
+    plt.savefig(os.path.join(output_dir, "fig11_cluster_composition.png"), dpi=300, bbox_inches='tight')
     plt.close()
 
 def plot_lab_zscore_heatmap(heatmap_lab: pd.DataFrame, output_dir: str):
@@ -328,7 +328,7 @@ def plot_lab_zscore_heatmap(heatmap_lab: pd.DataFrame, output_dir: str):
     plt.xlabel("")
     plt.xticks(rotation=30, ha='right')
     plt.tight_layout()
-    plt.savefig(os.path.join(output_dir, "fig3_lab_zscore_heatmap.png"), dpi=300)
+    plt.savefig(os.path.join(output_dir, "fig10_lab_zscore_heatmap.png"), dpi=300)
     plt.close()
 
 def plot_clinical_heatmap(heatmap_cat: pd.DataFrame, output_dir: str):
@@ -352,7 +352,7 @@ def plot_clinical_heatmap(heatmap_cat: pd.DataFrame, output_dir: str):
     plt.xlabel("")
     plt.xticks(rotation=30, ha='right')
     plt.tight_layout()
-    plt.savefig(os.path.join(output_dir, "fig4_clinical_fingerprint_heatmap.png"), dpi=300)
+    plt.savefig(os.path.join(output_dir, "fig9_clinical_fingerprint_heatmap.png"), dpi=300)
     plt.close()
 
 # ---------------------------------------------------------------------------
@@ -451,9 +451,9 @@ def plot_prediction_correctness_umap(
     ax.legend(title="Outcome", loc="upper right", fontsize=9, markerscale=1.8)
 
     plt.tight_layout()
-    plt.savefig(os.path.join(output_dir, "fig5_prediction_correctness_umap.png"), dpi=300, bbox_inches="tight")
+    plt.savefig(os.path.join(output_dir, "fig8_prediction_correctness_umap.png"), dpi=300, bbox_inches="tight")
     plt.close()
-    print("  Saved fig5_prediction_correctness_umap.png")
+    print("  Saved fig8_prediction_correctness_umap.png")
 
 
 # ---------------------------------------------------------------------------
@@ -582,11 +582,11 @@ def plot_cluster_and_probability_umap(
         ax_bot.axis("off")
 
     plt.savefig(
-        os.path.join(output_dir, "fig6_cluster_and_probability_umap.png"),
+        os.path.join(output_dir, "fig7_cluster_and_probability_umap.png"),
         dpi=300, bbox_inches="tight",
     )
     plt.close()
-    print("  Saved fig6_cluster_and_probability_umap.png")
+    print("  Saved fig7_cluster_and_probability_umap.png")
 
 
 # ---------------------------------------------------------------------------
