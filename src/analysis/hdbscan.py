@@ -515,14 +515,18 @@ def plot_case_control_cluster_annotated_and_probability_umap(
     """
     has_probs = df_preds is not None
     title_fs = 18
+    title_pad = 4
 
-    fig, axes = plt.subplots(
-        2 if has_probs else 1, 1,
-        figsize=(9, 16 if has_probs else 8),
-        constrained_layout=True,
-    )
-    ax_top = axes[0] if has_probs else axes
-    ax_bot = axes[1] if has_probs else None
+    if has_probs:
+        fig, (ax_top, ax_bot) = plt.subplots(
+            2,
+            1,
+            figsize=(9, 15),
+            gridspec_kw={"hspace": 0.02, "height_ratios": [1, 1]},
+        )
+    else:
+        fig, ax_top = plt.subplots(1, 1, figsize=(9, 8))
+        ax_bot = None
 
     df = df_clusters.copy()
     df["_is_case"] = df["case_label"].apply(lambda x: str(x).lower() != "control")
@@ -541,6 +545,8 @@ def plot_case_control_cluster_annotated_and_probability_umap(
         )
 
     for cluster_id in sorted(df["cluster"].unique()):
+        if cluster_id == -1:
+            continue
         subset = df[df["cluster"] == cluster_id]
         ax_top.text(
             float(subset["dim1"].median()),
@@ -557,14 +563,27 @@ def plot_case_control_cluster_annotated_and_probability_umap(
         "Case vs. control (cluster ID at centroid)",
         weight="bold",
         fontsize=title_fs,
+        pad=title_pad,
     )
     ax_top.axis("off")
     ax_top.legend(loc="upper right", fontsize=10)
 
     if has_probs and ax_bot is not None:
         _scatter_predicted_probability_umap(ax_bot, fig, df_clusters, df_preds)
-        ax_bot.set_title("Predicted probability", weight="bold", fontsize=title_fs)
+        ax_bot.set_title("Predicted probability", weight="bold", fontsize=title_fs, pad=title_pad)
         ax_bot.axis("off")
+        span_x = float(df_clusters["dim1"].max() - df_clusters["dim1"].min())
+        span_y = float(df_clusters["dim2"].max() - df_clusters["dim2"].min())
+        px = 0.02 * span_x if span_x > 0 else 0.1
+        py = 0.02 * span_y if span_y > 0 else 0.1
+        xlim = (float(df_clusters["dim1"].min()) - px, float(df_clusters["dim1"].max()) + px)
+        ylim = (float(df_clusters["dim2"].min()) - py, float(df_clusters["dim2"].max()) + py)
+        ax_top.set_xlim(xlim)
+        ax_top.set_ylim(ylim)
+        ax_bot.set_xlim(xlim)
+        ax_bot.set_ylim(ylim)
+
+    fig.subplots_adjust(left=0.03, right=0.91, top=0.97, bottom=0.02)
 
     out_name = "fig13_case_control_cluster_annotated_and_probability_umap.png"
     plt.savefig(os.path.join(output_dir, out_name), dpi=300, bbox_inches="tight")
@@ -586,14 +605,18 @@ def plot_cluster_and_probability_umap(
                   Requires df_preds; skipped with a warning if None.
     """
     has_probs = df_preds is not None
+    title_pad = 4
 
-    fig, axes = plt.subplots(
-        2 if has_probs else 1, 1,
-        figsize=(9, 16 if has_probs else 8),
-        constrained_layout=True,
-    )
-    ax_top = axes[0] if has_probs else axes
-    ax_bot = axes[1] if has_probs else None
+    if has_probs:
+        fig, (ax_top, ax_bot) = plt.subplots(
+            2,
+            1,
+            figsize=(9, 15),
+            gridspec_kw={"hspace": 0.02, "height_ratios": [1, 1]},
+        )
+    else:
+        fig, ax_top = plt.subplots(1, 1, figsize=(9, 8))
+        ax_bot = None
 
     # Derive is_case flag
     df_clusters = df_clusters.copy()
@@ -611,7 +634,7 @@ def plot_cluster_and_probability_umap(
         ax_top.scatter(
             noise["dim1"], noise["dim2"],
             s=6, alpha=0.25, color="lightgrey",
-            marker="o", label="Noise", rasterized=True,
+            marker="o", label="_nolegend_", rasterized=True,
         )
 
     for i, cid in enumerate(real_clusters):
@@ -644,7 +667,12 @@ def plot_cluster_and_probability_umap(
             bbox=dict(facecolor="white", alpha=0.7, edgecolor="none", boxstyle="round,pad=0.2"),
         )
 
-    ax_top.set_title("HDBSCAN Clusters\n(× = case, ○ = control)", weight="bold", fontsize=18)
+    ax_top.set_title(
+        "HDBSCAN Clusters\n(× = case, ○ = control)",
+        weight="bold",
+        fontsize=18,
+        pad=title_pad,
+    )
     ax_top.axis("off")
 
     # Compact legend: one entry per cluster + a marker-shape key
@@ -665,8 +693,20 @@ def plot_cluster_and_probability_umap(
     # ── Bottom panel: predicted probability heatmap ─────────────────────────
     if has_probs and ax_bot is not None:
         _scatter_predicted_probability_umap(ax_bot, fig, df_clusters, df_preds)
-        ax_bot.set_title("Predicted Probability", weight="bold", fontsize=18)
+        ax_bot.set_title("Predicted Probability", weight="bold", fontsize=18, pad=title_pad)
         ax_bot.axis("off")
+        span_x = float(df_clusters["dim1"].max() - df_clusters["dim1"].min())
+        span_y = float(df_clusters["dim2"].max() - df_clusters["dim2"].min())
+        px = 0.02 * span_x if span_x > 0 else 0.1
+        py = 0.02 * span_y if span_y > 0 else 0.1
+        xlim = (float(df_clusters["dim1"].min()) - px, float(df_clusters["dim1"].max()) + px)
+        ylim = (float(df_clusters["dim2"].min()) - py, float(df_clusters["dim2"].max()) + py)
+        ax_top.set_xlim(xlim)
+        ax_top.set_ylim(ylim)
+        ax_bot.set_xlim(xlim)
+        ax_bot.set_ylim(ylim)
+
+    fig.subplots_adjust(left=0.03, right=0.91, top=0.97, bottom=0.02)
 
     plt.savefig(
         os.path.join(output_dir, "fig7_cluster_and_probability_umap.png"),
