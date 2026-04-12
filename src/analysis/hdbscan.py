@@ -593,12 +593,12 @@ def plot_predicted_probability_umap_case_control_markers(
             bbox=dict(facecolor="white", alpha=0.75, edgecolor="none", boxstyle="round,pad=0.2"),
         )
 
-    ax.set_title(
-        "Case (red) vs control (blue); opacity = predicted P(cancer)\n(cluster ID at centroid)",
-        weight="bold",
-        fontsize=16,
-        pad=6,
-    )
+    # ax.set_title(
+    #     "Case (red) vs control (blue); opacity = predicted P(cancer)\n(cluster ID at centroid)",
+    #     weight="bold",
+    #     fontsize=16,
+    #     pad=6,
+    # )
     ax.axis("off")
     ax.legend(
         handles=[
@@ -612,15 +612,15 @@ def plot_predicted_probability_umap_case_control_markers(
     )
 
     fig.subplots_adjust(left=0.03, right=0.98, top=0.92, bottom=0.06)
-    fig.text(
-        0.5,
-        0.02,
-        "Opacity increases with predicted probability (more opaque = higher P(cancer)).",
-        ha="center",
-        fontsize=9,
-        style="italic",
-        color="0.35",
-    )
+    # fig.text(
+    #     0.5,
+    #     0.02,
+    #     "Opacity increases with predicted probability (more opaque = higher P(cancer)).",
+    #     ha="center",
+    #     fontsize=9,
+    #     style="italic",
+    #     color="0.35",
+    # )
 
     out_name = "fig14_predicted_probability_umap_case_control_markers.png"
     plt.savefig(os.path.join(output_dir, out_name), dpi=300, bbox_inches="tight")
