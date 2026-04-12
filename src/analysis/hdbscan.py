@@ -14,6 +14,8 @@ import yaml
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+from matplotlib.colors import to_rgba
+from matplotlib.patches import Patch
 import seaborn as sns
 import umap
 import hdbscan
@@ -503,21 +505,28 @@ def _scatter_predicted_probability_umap(
     cbar.ax.tick_params(labelsize=9)
 
 
+def _prob_to_face_alpha(probs: np.ndarray, alpha_floor: float = 0.08, alpha_cap: float = 0.95) -> np.ndarray:
+    """Higher predicted probability → higher alpha (more opaque); lower → more transparent."""
+    p = np.clip(probs.astype(float), 0.0, 1.0)
+    return alpha_floor + (alpha_cap - alpha_floor) * p
+
+
 def plot_predicted_probability_umap_case_control_markers(
     df_clusters: pd.DataFrame,
     df_preds: pd.DataFrame | None,
     output_dir: str,
 ) -> None:
     """
-    Single UMAP: point colour = predicted P(cancer); marker shape encodes true case vs control
-    (○ control, × case). HDBSCAN cluster IDs at spatial medians (noise cluster omitted). No second panel.
+    Single UMAP: all circles; true case = dark red, control = blue; alpha (opacity) encodes
+    predicted P(cancer) (higher prob → more opaque). HDBSCAN cluster IDs at spatial medians
+    (noise omitted). No second panel.
     """
     if df_preds is None:
         print("  [prob + marker shape] No predictions JSON — skipping.")
         return
 
-    from matplotlib.cm import ScalarMappable
-    from matplotlib.lines import Line2D
+    case_rgb = to_rgba("#8b1538")[:3]
+    ctrl_rgb = to_rgba("#1565c0")[:3]
 
     df = df_clusters.copy()
     df["_is_case"] = df["case_label"].apply(lambda x: str(x).lower() != "control")
@@ -542,34 +551,29 @@ def plot_predicted_probability_umap_case_control_markers(
             s=6, alpha=0.2, color="lightgrey", rasterized=True,
         )
 
-    cmap = plt.cm.RdBu_r
-    norm = plt.Normalize(vmin=0.0, vmax=1.0)
     controls = has_pred[~has_pred["_is_case"]]
     cases = has_pred[has_pred["_is_case"]]
 
     if not controls.empty:
+        a = _prob_to_face_alpha(controls["prob"].values)
+        colors = [(*ctrl_rgb, ai) for ai in a]
         ax.scatter(
             controls["dim1"], controls["dim2"],
-            c=controls["prob"],
-            cmap=cmap,
-            norm=norm,
+            c=colors,
             marker="o",
-            s=14,
-            alpha=0.78,
-            edgecolors="face",
-            linewidths=0.35,
+            s=22,
+            edgecolors="none",
             rasterized=True,
         )
     if not cases.empty:
+        a = _prob_to_face_alpha(cases["prob"].values)
+        colors = [(*case_rgb, ai) for ai in a]
         ax.scatter(
             cases["dim1"], cases["dim2"],
-            c=cases["prob"],
-            cmap=cmap,
-            norm=norm,
-            marker="x",
-            s=45,
-            alpha=0.88,
-            linewidths=1.0,
+            c=colors,
+            marker="o",
+            s=22,
+            edgecolors="none",
             rasterized=True,
         )
 
@@ -589,14 +593,8 @@ def plot_predicted_probability_umap_case_control_markers(
             bbox=dict(facecolor="white", alpha=0.75, edgecolor="none", boxstyle="round,pad=0.2"),
         )
 
-    sm = ScalarMappable(cmap=cmap, norm=norm)
-    sm.set_array([])
-    cbar = fig.colorbar(sm, ax=ax, fraction=0.035, pad=0.02)
-    cbar.set_label("P(Cancer)", fontsize=11)
-    cbar.ax.tick_params(labelsize=9)
-
     ax.set_title(
-        "Predicted probability (○ = control, × = case; cluster ID at centroid)",
+        "Case (red) vs control (blue); opacity = predicted P(cancer)\n(cluster ID at centroid)",
         weight="bold",
         fontsize=16,
         pad=6,
@@ -604,14 +602,8 @@ def plot_predicted_probability_umap_case_control_markers(
     ax.axis("off")
     ax.legend(
         handles=[
-            Line2D(
-                [0], [0], marker="o", color="grey", linestyle="None",
-                markersize=7, label="Control",
-            ),
-            Line2D(
-                [0], [0], marker="x", color="grey", linestyle="None",
-                markersize=9, markeredgewidth=1.1, label="Case",
-            ),
+            Patch(facecolor="#8b1538", edgecolor="none", label="Case"),
+            Patch(facecolor="#1565c0", edgecolor="none", label="Control"),
         ],
         loc="upper right",
         fontsize=10,
@@ -619,7 +611,16 @@ def plot_predicted_probability_umap_case_control_markers(
         title_fontsize=9,
     )
 
-    fig.subplots_adjust(left=0.03, right=0.92, top=0.94, bottom=0.03)
+    fig.subplots_adjust(left=0.03, right=0.98, top=0.92, bottom=0.06)
+    fig.text(
+        0.5,
+        0.02,
+        "Opacity increases with predicted probability (more opaque = higher P(cancer)).",
+        ha="center",
+        fontsize=9,
+        style="italic",
+        color="0.35",
+    )
 
     out_name = "fig14_predicted_probability_umap_case_control_markers.png"
     plt.savefig(os.path.join(output_dir, out_name), dpi=300, bbox_inches="tight")
