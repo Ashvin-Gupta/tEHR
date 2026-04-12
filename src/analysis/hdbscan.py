@@ -503,6 +503,130 @@ def _scatter_predicted_probability_umap(
     cbar.ax.tick_params(labelsize=9)
 
 
+def plot_predicted_probability_umap_case_control_markers(
+    df_clusters: pd.DataFrame,
+    df_preds: pd.DataFrame | None,
+    output_dir: str,
+) -> None:
+    """
+    Single UMAP: point colour = predicted P(cancer); marker shape encodes true case vs control
+    (○ control, × case). HDBSCAN cluster IDs at spatial medians (noise cluster omitted). No second panel.
+    """
+    if df_preds is None:
+        print("  [prob + marker shape] No predictions JSON — skipping.")
+        return
+
+    from matplotlib.cm import ScalarMappable
+    from matplotlib.lines import Line2D
+
+    df = df_clusters.copy()
+    df["_is_case"] = df["case_label"].apply(lambda x: str(x).lower() != "control")
+    merged = (
+        df.assign(patient_id_str=df["patient_id_str"].astype(str))
+        .merge(
+            df_preds[["patient_id", "prob"]].assign(
+                patient_id=lambda d: d["patient_id"].astype(str)
+            ),
+            left_on="patient_id_str",
+            right_on="patient_id",
+            how="left",
+        )
+    )
+    no_pred = merged[merged["prob"].isna()]
+    has_pred = merged[merged["prob"].notna()]
+
+    fig, ax = plt.subplots(figsize=(9, 8))
+    if not no_pred.empty:
+        ax.scatter(
+            no_pred["dim1"], no_pred["dim2"],
+            s=6, alpha=0.2, color="lightgrey", rasterized=True,
+        )
+
+    cmap = plt.cm.RdBu_r
+    norm = plt.Normalize(vmin=0.0, vmax=1.0)
+    controls = has_pred[~has_pred["_is_case"]]
+    cases = has_pred[has_pred["_is_case"]]
+
+    if not controls.empty:
+        ax.scatter(
+            controls["dim1"], controls["dim2"],
+            c=controls["prob"],
+            cmap=cmap,
+            norm=norm,
+            marker="o",
+            s=14,
+            alpha=0.78,
+            edgecolors="face",
+            linewidths=0.35,
+            rasterized=True,
+        )
+    if not cases.empty:
+        ax.scatter(
+            cases["dim1"], cases["dim2"],
+            c=cases["prob"],
+            cmap=cmap,
+            norm=norm,
+            marker="x",
+            s=45,
+            alpha=0.88,
+            linewidths=1.0,
+            rasterized=True,
+        )
+
+    for cluster_id in sorted(df["cluster"].unique()):
+        if cluster_id == -1:
+            continue
+        subset = df[df["cluster"] == cluster_id]
+        ax.text(
+            float(subset["dim1"].median()),
+            float(subset["dim2"].median()),
+            str(cluster_id),
+            fontsize=12,
+            weight="bold",
+            ha="center",
+            va="center",
+            zorder=5,
+            bbox=dict(facecolor="white", alpha=0.75, edgecolor="none", boxstyle="round,pad=0.2"),
+        )
+
+    sm = ScalarMappable(cmap=cmap, norm=norm)
+    sm.set_array([])
+    cbar = fig.colorbar(sm, ax=ax, fraction=0.035, pad=0.02)
+    cbar.set_label("P(Cancer)", fontsize=11)
+    cbar.ax.tick_params(labelsize=9)
+
+    ax.set_title(
+        "Predicted probability (○ = control, × = case; cluster ID at centroid)",
+        weight="bold",
+        fontsize=16,
+        pad=6,
+    )
+    ax.axis("off")
+    ax.legend(
+        handles=[
+            Line2D(
+                [0], [0], marker="o", color="grey", linestyle="None",
+                markersize=7, label="Control",
+            ),
+            Line2D(
+                [0], [0], marker="x", color="grey", linestyle="None",
+                markersize=9, markeredgewidth=1.1, label="Case",
+            ),
+        ],
+        loc="upper right",
+        fontsize=10,
+        title="True label",
+        title_fontsize=9,
+    )
+
+    fig.subplots_adjust(left=0.03, right=0.92, top=0.94, bottom=0.03)
+
+    out_name = "fig14_predicted_probability_umap_case_control_markers.png"
+    plt.savefig(os.path.join(output_dir, out_name), dpi=300, bbox_inches="tight")
+    plt.close()
+    print(f"  Saved {out_name}")
+
+
 def plot_case_control_cluster_annotated_and_probability_umap(
     df_clusters: pd.DataFrame,
     df_preds: pd.DataFrame | None,
@@ -751,6 +875,7 @@ def generate_plots_from_saved_outputs(output_dir: str, clusters_csv: str = None,
     df_preds = load_predictions(PREDICTIONS_JSON)
     if df_preds is not None:
         plot_prediction_correctness_umap(df_clusters, df_preds, output_dir)
+        plot_predicted_probability_umap_case_control_markers(df_clusters, df_preds, output_dir)
     plot_cluster_and_probability_umap(df_clusters, df_preds, output_dir)
     plot_case_control_cluster_annotated_and_probability_umap(df_clusters, df_preds, output_dir)
 
@@ -824,6 +949,7 @@ def main():
     df_preds = load_predictions(PREDICTIONS_JSON)
     if df_preds is not None:
         plot_prediction_correctness_umap(df_clusters, df_preds, output_dir)
+        plot_predicted_probability_umap_case_control_markers(df_clusters, df_preds, output_dir)
     plot_cluster_and_probability_umap(df_clusters, df_preds, output_dir)
     plot_case_control_cluster_annotated_and_probability_umap(df_clusters, df_preds, output_dir)
 
