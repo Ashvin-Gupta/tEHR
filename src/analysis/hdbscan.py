@@ -511,6 +511,42 @@ def _prob_to_face_alpha(probs: np.ndarray, alpha_floor: float = 0.08, alpha_cap:
     return alpha_floor + (alpha_cap - alpha_floor) * p
 
 
+def _add_opacity_key_below_legend(fig: plt.Figure, legend) -> None:
+    """
+    Horizontal strip under the true-label legend: neutral grey fill with alpha following
+    _prob_to_face_alpha, so the mapping matches the scatter points.
+    """
+    fig.canvas.draw()
+    renderer = fig.canvas.get_renderer()
+    bbox = legend.get_window_extent(renderer=renderer).transformed(fig.transFigure.inverted())
+    gap = 0.012
+    h_bar = 0.032
+    left = float(bbox.x0)
+    width = float(bbox.width)
+    bottom = float(bbox.y0) - gap - h_bar
+    bottom = max(bottom, 0.02)
+
+    op_ax = fig.add_axes([left, bottom, width, h_bar])
+    w = 256
+    probs = np.linspace(0.0, 1.0, w)
+    alphas = _prob_to_face_alpha(probs)
+    rgba = np.zeros((1, w, 4), dtype=float)
+    rgba[0, :, 0] = 0.33
+    rgba[0, :, 1] = 0.33
+    rgba[0, :, 2] = 0.33
+    rgba[0, :, 3] = alphas
+    op_ax.imshow(rgba, aspect="auto", interpolation="nearest", origin="lower")
+    op_ax.set_xlim(-0.5, w - 0.5)
+    op_ax.set_xticks([0, w // 2, w - 1])
+    op_ax.set_xticklabels(["0", "0.5", "1"], fontsize=8)
+    op_ax.set_yticks([])
+    op_ax.set_xlabel("Predicted P(cancer) → marker opacity", fontsize=8, labelpad=2)
+    op_ax.tick_params(axis="x", length=2, pad=1)
+    for spine in op_ax.spines.values():
+        spine.set_linewidth(0.4)
+        spine.set_edgecolor("0.55")
+
+
 def plot_predicted_probability_umap_case_control_markers(
     df_clusters: pd.DataFrame,
     df_preds: pd.DataFrame | None,
@@ -593,14 +629,15 @@ def plot_predicted_probability_umap_case_control_markers(
             bbox=dict(facecolor="white", alpha=0.75, edgecolor="none", boxstyle="round,pad=0.2"),
         )
 
-    # ax.set_title(
-    #     "Case (red) vs control (blue); opacity = predicted P(cancer)\n(cluster ID at centroid)",
-    #     weight="bold",
-    #     fontsize=16,
-    #     pad=6,
-    # )
+    ax.set_title(
+        "Case (red) vs control (blue); opacity = predicted P(cancer)\n(cluster ID at centroid)",
+        weight="bold",
+        fontsize=16,
+        pad=6,
+    )
     ax.axis("off")
-    ax.legend(
+    fig.subplots_adjust(left=0.03, right=0.98, top=0.92, bottom=0.08)
+    legend = ax.legend(
         handles=[
             Patch(facecolor="#8b1538", edgecolor="none", label="Case"),
             Patch(facecolor="#1565c0", edgecolor="none", label="Control"),
@@ -610,17 +647,7 @@ def plot_predicted_probability_umap_case_control_markers(
         title="True label",
         title_fontsize=9,
     )
-
-    fig.subplots_adjust(left=0.03, right=0.98, top=0.92, bottom=0.06)
-    # fig.text(
-    #     0.5,
-    #     0.02,
-    #     "Opacity increases with predicted probability (more opaque = higher P(cancer)).",
-    #     ha="center",
-    #     fontsize=9,
-    #     style="italic",
-    #     color="0.35",
-    # )
+    _add_opacity_key_below_legend(fig, legend)
 
     out_name = "fig14_predicted_probability_umap_case_control_markers.png"
     plt.savefig(os.path.join(output_dir, out_name), dpi=300, bbox_inches="tight")
