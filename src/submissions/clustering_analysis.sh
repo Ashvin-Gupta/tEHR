@@ -30,16 +30,19 @@ export PYTHONPATH="${BASE_DIR}:${PYTHONPATH}"
 #     --clusters-csv /gpfs/scratch/qc25022/pancreas/experiments/Results/lora-1-month-logistic-refactored-new-time-mistral-7B/patient_clustering_heldout/journal_clustering_output/patient_clusters.csv \
 #     --summary-csv /gpfs/scratch/qc25022/pancreas/experiments/Results/lora-1-month-logistic-refactored-new-time-mistral-7B/patient_clustering_heldout/journal_clustering_output/full_differential_analysis.csv
 
-python src/analysis/plot_lab_violins.py \
-  --clusters-csv "/gpfs/scratch/qc25022/pancreas/experiments/Results/lora-1-month-logistic-refactored-new-time-mistral-7B/patient_clustering_heldout/journal_clustering_output/patient_clusters.csv" \
-  --config-path "src/configs/classification_config.yaml" \
-  --split "held_out" \
-  --output-path "/gpfs/scratch/qc25022/pancreas/experiments/Results/lora-1-month-logistic-refactored-new-time-mistral-7B/patient_clustering_heldout/journal_clustering_output/fig5_lab_violins.png" \
-  --highlight-cluster 1 \
-  --exclude-noise \
-  --upper-threshold-multiplier 3
+# python src/analysis/plot_lab_violins.py \
+#   --clusters-csv "/gpfs/scratch/qc25022/pancreas/experiments/Results/lora-1-month-logistic-refactored-new-time-mistral-7B/patient_clustering_heldout/journal_clustering_output/patient_clusters.csv" \
+#   --config-path "src/configs/classification_config.yaml" \
+#   --split "held_out" \
+#   --output-path "/gpfs/scratch/qc25022/pancreas/experiments/Results/lora-1-month-logistic-refactored-new-time-mistral-7B/patient_clustering_heldout/journal_clustering_output/fig5_lab_violins.png" \
+#   --highlight-cluster 1 \
+#   --exclude-noise \
+#   --upper-threshold-multiplier 3
 
-
+python src/analysis/clinical_heatmap_terms.py \
+  --summary-csv /gpfs/scratch/qc25022/pancreas/experiments/Results/lora-1-month-logistic-refactored-new-time-mistral-7B/patient_clustering_heldout/journal_clustering_output/full_differential_analysis.csv \
+  --output-dir /gpfs/scratch/qc25022/pancreas/experiments/Results/lora-1-month-logistic-refactored-new-time-mistral-7B/patient_clustering_heldout/journal_clustering_output 
+#   --term Gastrectomy Steatorrhea Ankylosing spondylitus Pancreatitis Jaundice Abdominal mass Obesity Lupus erythematosus Liver failure GIT bleed Dysmenorrhoea Male infertility Leiomyoma
 
 echo "Pipeline finished."
 deactivate
