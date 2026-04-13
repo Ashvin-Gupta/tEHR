@@ -24,24 +24,28 @@ from src.resources.lab_reference_ranges import LAB_REFERENCE_RANGES
 TARGET_LABS = [
     "Lab ALP",
     "Lab HbA1c",
-    "Lab CA125",
-    "Lab Creatinine serum",
-    "Lab GGT",
     "Lab Glucose",
+    "Lab CA125",
+    "Lab Ferritin",
+    "Lab GGT",
     "Lab Amylase",
     "Lab ALT",
     "Lab ESR",
     "Lab AST",
     "Lab Urea serum",
+    "Lab Creatinine serum",
+
+    
 ]
 
 LAB_DISPLAY_NAMES = {
     "Lab ALP": "ALP",
     "Lab HbA1c": "HbA1c",
+    "Lab Glucose": "Glucose",
     "Lab CA125": "CA125",
+    "Lab Ferritin": "Ferritin",
     "Lab Creatinine serum": "Creatinine",
     "Lab GGT": "GGT",
-    "Lab Glucose": "Glucose",
     "Lab Amylase": "Amylase",
     "Lab ALT": "ALT",
     "Lab ESR": "ESR",
@@ -52,10 +56,11 @@ LAB_DISPLAY_NAMES = {
 LAB_UNITS = {
     "Lab ALP": "U/L",
     "Lab HbA1c": "mmol/mol",
+    "Lab Glucose": "mmol/L",
     "Lab CA125": "U/mL",
+    "Lab Ferritin": "ug/L",
     "Lab Creatinine serum": "umol/L",
     "Lab GGT": "U/L",
-    "Lab Glucose": "mmol/L",
     "Lab Amylase": "U/L",
     "Lab ALT": "U/L",
     "Lab ESR": "mm/hr",
