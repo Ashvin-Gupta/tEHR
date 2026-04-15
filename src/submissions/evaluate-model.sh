@@ -5,8 +5,8 @@
 #SBATCH --gres=gpu:1                    # Request 1 GPU of any type
 #SBATCH --cpus-per-task=12              # 12 CPU cores 
 #SBATCH -t 4:0:0                        # 1 hour runtime
-#SBATCH -o /data/home/qc25022/TextCancEHR2/HPC_Classifier/logo/%x.o%j
-#SBATCH -e /data/home/qc25022/TextCancEHR2/HPC_Classifier/loge/%x.e%j
+#SBATCH -o /data/home/qc25022/TextCancEHR2/HPC_Eval/logo/%x.o%j
+#SBATCH -e /data/home/qc25022/TextCancEHR2/HPC_Eval/loge/%x.e%j
 
 set -e 
 
@@ -43,7 +43,7 @@ export PYTHONPATH="${BASE_DIR}:${PYTHONPATH}"
 
 python -m src.evaluations.evaluate_model \
   --config_filepath src/configs/classification_config.yaml \
-  --model_checkpoint /gpfs/scratch/qc25022/pancreas/experiments/Results/lora-1-month-logistic-refactored-new-time-mistral-7B/final_model
+  --model_checkpoint /gpfs/scratch/qc25022/pancreas/experiments/Results/lora-3-month-logistic-refactored-new-time-mistral-7B/final_model
 
 # python -m src.evaluations.evaluate_model \
 #   --config_filepath src/configs/baseline_qwen3_embedding_config.yaml \
