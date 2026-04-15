@@ -125,6 +125,13 @@ class CPRDDataset(BaseDataset):
 
         return kept
 
+    def _filter_cancer_tokens(self, token_ids: List[int]) -> List[int]:
+        """Remove any token whose string representation contains the word 'cancer'."""
+        return [
+            tid for tid in token_ids
+            if "cancer" not in str(self.id_to_token.get(tid, "")).lower()
+        ]
+
     def __len__(self) -> int:
         return len(self.patient_records)
 
@@ -144,6 +151,7 @@ class CPRDDataset(BaseDataset):
         timestamps = record['timestamps']
 
         token_ids = self._apply_time_cutoff(token_ids, timestamps, subject_id, label)
+        token_ids = self._filter_cancer_tokens(token_ids)
 
         if self.format == 'tokens':
             return {
