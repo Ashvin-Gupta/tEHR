@@ -58,7 +58,7 @@ class ModelEvaluator:
         return int(ml)
     
     def load_model(self):
-        """Load the saved classification model (base LLM + LoRA, not the classifier head)."""
+        """Load the saved classification model base (prefer checkpoint over config pretrained base)."""
         print("\n" + "=" * 80)
         print("Loading saved base model for classification...")
         print("=" * 80)
@@ -66,39 +66,7 @@ class ModelEvaluator:
         max_length = self.model_config.get('max_length', 12000)
         load_in_4bit = self.training_config.get('load_in_4bit', True)
         
-        # Case 1: Baselines that use a pretrained checkpoint (e.g. pretrained_llm_linear)
-        # In these cases we should load the *pretrained* LLM (with LoRA) as the base,
-        # and then separately load the classifier head from the classification checkpoint.
-        pretrained_ckpt = self.model_config.get('pretrained_checkpoint')
-        if pretrained_ckpt:
-            print(f"  - Detected pretrained_checkpoint in config: {pretrained_ckpt}")
-            print(f"  - max_length={max_length}, load_in_4bit={load_in_4bit}")
-            try:
-                self.model, self.tokenizer = load_pretrained_lora_model(
-                    pretrained_checkpoint=pretrained_ckpt,
-                    max_seq_length=max_length,
-                    load_in_4bit=load_in_4bit,
-                    local_rank=self.local_rank,
-                )
-                # If pretrained_ckpt is a HF model ID (base model), we need to apply LoRA
-                # to match the checkpoint structure. Classification checkpoints from pretrain
-                # already have LoRA; baseline lora_llm_linear trains LoRA from base.
-                lora_config = self.config.get('lora')
-                if lora_config is not None:
-                    has_lora = any('lora' in n.lower() for n, _ in self.model.named_parameters())
-                    if not has_lora:
-                        print(f"  - Base model loaded; applying LoRA from config...")
-                        self.model = self._apply_lora(self.model, lora_config)
-                print(f"  - Base model loaded (classifier weights from {self.model_checkpoint})")
-            except Exception as e:
-                raise RuntimeError(
-                    f"Failed to load base model from pretrained_checkpoint={pretrained_ckpt}. "
-                    f"Error: {e}\n"
-                    f"Make sure this path points to a valid model or checkpoint."
-                )
-            return
-
-        # Case 2: Qwen3-Embedding baseline — AutoModel + PEFT + linear head (not Unsloth causal LM)
+        # Case 1: Qwen3-Embedding baseline — AutoModel + PEFT + linear head (not Unsloth causal LM)
         if is_qwen3_embedding_baseline_checkpoint(self.model_checkpoint):
             print(f"  - Qwen3-Embedding baseline save at {self.model_checkpoint}")
             self.model, self.tokenizer = load_qwen3_embedding_classifier_from_checkpoint(
@@ -108,7 +76,8 @@ class ModelEvaluator:
             )
             return
 
-        # Case 3: Unsloth causal LM checkpoints (e.g. frozen_llm_linear final_model)
+        # Case 2: Prefer loading base+adapters directly from classification checkpoint.
+        # This avoids accidentally evaluating pretraining LoRA when state_dict replay is partial.
         try:
             self.model, self.tokenizer = load_classification_model(
                 model_checkpoint=self.model_checkpoint,
@@ -119,11 +88,45 @@ class ModelEvaluator:
             print(f"  - Model loaded from classification checkpoint: {self.model_checkpoint}")
             print(f"  - Max length: {max_length}")
             print(f"  - 4-bit quantization: {load_in_4bit}")
+            return
+        except Exception as e:
+            print(
+                "  - Could not load base model directly from classification checkpoint; "
+                f"will try pretrained_checkpoint fallback. Error: {e}"
+            )
+
+        # Case 3: Fallback for baselines that intentionally reconstruct from pretrained base.
+        pretrained_ckpt = self.model_config.get('pretrained_checkpoint')
+        if not pretrained_ckpt:
+            raise RuntimeError(
+                f"Failed to load model from {self.model_checkpoint}, and no pretrained_checkpoint "
+                "is available for fallback."
+            )
+
+        print(f"  - Fallback: loading base from pretrained_checkpoint: {pretrained_ckpt}")
+        print(f"  - max_length={max_length}, load_in_4bit={load_in_4bit}")
+        try:
+            self.model, self.tokenizer = load_pretrained_lora_model(
+                pretrained_checkpoint=pretrained_ckpt,
+                max_seq_length=max_length,
+                load_in_4bit=load_in_4bit,
+                local_rank=self.local_rank,
+            )
+            # If pretrained_ckpt is a HF model ID (base model), we need to apply LoRA
+            # to match the checkpoint structure. Classification checkpoints from pretrain
+            # already have LoRA; baseline lora_llm_linear trains LoRA from base.
+            lora_config = self.config.get('lora')
+            if lora_config is not None:
+                has_lora = any('lora' in n.lower() for n, _ in self.model.named_parameters())
+                if not has_lora:
+                    print(f"  - Base model loaded; applying LoRA from config...")
+                    self.model = self._apply_lora(self.model, lora_config)
+            print(f"  - Base model loaded via pretrained_checkpoint fallback")
         except Exception as e:
             raise RuntimeError(
-                f"Failed to load model from {self.model_checkpoint}. "
+                f"Failed to load base model from pretrained_checkpoint={pretrained_ckpt}. "
                 f"Error: {e}\n"
-                f"Make sure the checkpoint path is correct and contains valid model files."
+                f"Make sure this path points to a valid model or checkpoint."
             )
     
     def _apply_lora(self, model, lora_config: Dict[str, Any]):
@@ -216,10 +219,25 @@ class ModelEvaluator:
                     # exactly (e.g. if the base model checkpoint differs slightly),
                     # while still restoring the trained classifier head weights.
                     missing, unexpected = classifier_model.load_state_dict(state_dict, strict=False)
+                    matched_keys = set(state_dict.keys()) - set(unexpected)
+                    classifier_keys_in_ckpt = [k for k in state_dict.keys() if k.startswith("classifier.")]
+                    lora_keys_in_ckpt = [k for k in state_dict.keys() if "lora_" in k]
+                    classifier_loaded = [k for k in classifier_keys_in_ckpt if k in matched_keys]
+                    lora_loaded = [k for k in lora_keys_in_ckpt if k in matched_keys]
+
                     if missing:
                         print(f"  - Warning: {len(missing)} missing keys when loading state dict (first 5): {missing[:5]}")
                     if unexpected:
                         print(f"  - Warning: {len(unexpected)} unexpected keys when loading state dict (first 5): {unexpected[:5]}")
+                    print(
+                        "  - Load summary: "
+                        f"classifier matched {len(classifier_loaded)}/{len(classifier_keys_in_ckpt)} keys, "
+                        f"LoRA matched {len(lora_loaded)}/{len(lora_keys_in_ckpt)} keys."
+                    )
+                    if classifier_keys_in_ckpt and not classifier_loaded:
+                        print("  - ⚠️  No classifier keys matched from checkpoint; head may be random.")
+                    if lora_keys_in_ckpt and not lora_loaded:
+                        print("  - ⚠️  No LoRA keys matched from checkpoint; using whatever base LoRA is already loaded.")
                     print("  - Loaded classifier (and base model where matching) from checkpoint.")
                 except Exception as e:
                     print(f"  - ⚠️  Warning: Could not load model state dict: {e}")
