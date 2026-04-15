@@ -20,7 +20,7 @@ wandb:
   run_name: "lora-1-month-logistic-refactored-new-time-mistral-7B"
 
 training:
-  output_dir: "/gpfs/scratch/qc25022/pancreas/experiments/Results/lora-1-month-logistic-refactored-new-time-mistral-7B-eval7000"
+  output_dir: "/gpfs/scratch/qc25022/pancreas/experiments/Results/lora-1-month-logistic-refactored-new-time-mistral-7B-rerun"
   overwrite_output_dir: true
   epochs: 1
   batch_size: 4
