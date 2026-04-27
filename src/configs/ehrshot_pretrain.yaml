@@ -1,0 +1,57 @@
+# src/configs/llm-pretrain.yaml
+
+name: "ehrshot_pretraining"
+
+model:
+  # Model to pretrain (unsloth/mistral-7b-v0.3-bnb-4bit , "unsloth/Qwen3-8B-Base-unsloth-bnb-4bit", unsloth/Qwen3-1.7B-Base-unsloth-bnb-4bit)
+  model_name: "unsloth/mistral-7b-v0.3-bnb-4bit"
+  max_length: 12000  # Context window for sequence packing
+  hf_token: null
+
+wandb:
+  enabled: true
+  project: "EHRSHOT-classification"
+  run_name: "Pretrain-Mistral-7B-EHRSHOT"
+
+lora:
+  r: 16
+  target_modules: ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
+  lora_alpha: 32
+  lora_dropout: 0.05
+  bias: "none"
+
+training:
+  output_dir: "/gpfs/scratch/qc25022/pancreas/experiments/Results/EHRSHOT/Pretrain-Mistral-7B-EHRSHOT"  # EDIT ME
+  overwrite_output_dir: true
+
+  
+  # Training hyperparameters
+  epochs: 1
+  batch_size: 1
+  eval_batch_size: 1
+  learning_rate: 1e-5
+  weight_decay: 0.05
+  warmup_steps: 500
+  
+  # Gradient settings
+  gradient_accumulation_steps: 1  # Effective batch size = gradient_accumulation_steps * batch_size
+  gradient_checkpointing: false  # Set to true for large models to save memory
+  
+  # Precision
+  fp16: false  # Use FP16 for faster training (if GPU supports it)
+  bf16: true  # Use BF16 for better numerical stability (if GPU supports it - only does for NVIDA Ampere GPUs)
+  
+  # Logging and saving
+  logging_steps: 10
+  eval_steps: 500
+  save_steps: 1000
+  save_total_limit: 3  # Keep only 1 best checkpoint
+
+data:
+  dataset: "EHRSHOT"
+  csv_filepath: "/data/home/qc25022/TextCancEHR2/src/resources/new_pancan_formatted.csv"  # EDIT ME
+  prediction: false  # false => use full trajectory text (no prediction-time cutoff) when available
+  # Optional explicit override. If omitted and prediction=false, loader tries:
+  # full_model_text -> full_text -> trajectory_text -> model_text
+  # text_column: "full_model_text"
+  combine_eval_splits: true

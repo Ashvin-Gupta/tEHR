@@ -51,6 +51,8 @@ def get_dataset(
         return EHRSHOTDataset(
             csv_filepath = data_config['csv_filepath'],
             split = split,
+            prediction = data_config.get('prediction', True),
+            text_column = data_config.get('text_column'),
         )
     else:
         raise ValueError(f"Unsupported dataset type '{dataset_name}' in data_config.")
