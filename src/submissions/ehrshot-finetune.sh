@@ -31,7 +31,7 @@ export PYTHONPATH="${BASE_DIR}:${PYTHONPATH}"
 #   ${CHECKPOINT_PATH:+--checkpoint_path "$CHECKPOINT_PATH"}
 
 
-python -m src.pipelines.llm_pretrain \
-  --config_filepath src/configs/ehrshot_pretrain.yaml \
+python -m src.pipelines.finetune_llm_classifier \
+  --config_filepath src/configs/ehrshot_finetune_config.yaml \
 
 deactivate
