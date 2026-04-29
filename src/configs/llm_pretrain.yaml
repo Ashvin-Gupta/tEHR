@@ -5,7 +5,7 @@ name: "llama_pretraining"
 model:
   # Model to pretrain (unsloth/mistral-7b-v0.3-bnb-4bit , "unsloth/Qwen3-8B-Base-unsloth-bnb-4bit", unsloth/Qwen3-1.7B-Base-unsloth-bnb-4bit)
   model_name: "unsloth/mistral-7b-v0.3-bnb-4bit"
-  max_length: 1024  # Context window for sequence packing
+  max_length: 12000  # Context window for sequence packing
   hf_token: null
 
 wandb:
