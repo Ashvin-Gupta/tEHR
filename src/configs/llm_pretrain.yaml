@@ -4,14 +4,14 @@ name: "llama_pretraining"
 
 model:
   # Model to pretrain (unsloth/mistral-7b-v0.3-bnb-4bit , "unsloth/Qwen3-8B-Base-unsloth-bnb-4bit", unsloth/Qwen3-1.7B-Base-unsloth-bnb-4bit)
-  model_name: "unsloth/Qwen3-0.6B-Base"
+  model_name: "unsloth/mistral-7b-v0.3-bnb-4bit"
   max_length: 1024  # Context window for sequence packing
   hf_token: null
 
 wandb:
   enabled: true
-  project: "Pretrain-Qwen3-8B-Pancreas"
-  run_name: "Pretrain-Qwen3-0.6B-Pancreas-new-time"
+  project: "CPRD-UPGI"
+  run_name: "Pretrain-Mistral-7B-CPRD-UPGI"
 
 lora:
   r: 16
@@ -21,7 +21,7 @@ lora:
   bias: "none"
 
 training:
-  output_dir: "/data/private/ag619/experiments/Results/Pretrain-Qwen3-0.6B-Pancreas-debug"
+  output_dir: "/gpfs/scratch/qc25022/pancreas/experiments/Results/Pretrain-Mistral-7B-CPRD-UPGI"
   overwrite_output_dir: true
 
   
@@ -50,9 +50,9 @@ training:
 data:
   cutoff_months: 1  # Remove last 1 month before diagnosis for cancer patients
   dataset: "CPRD"
-  data_dir: "/data/private/ag619/CPRD_tokenisation"
-  vocab_filepath: "/data/private/ag619/CPRD_tokenisation/vocab.csv"
-  labels_filepath: "/home/ag619/TextCancEHR2/src/resources/subject_information.csv"
+  data_dir: "/gpfs/scratch/qc25022/combined_MEDS_data/tokenised_data_combined_MEDS_new_time/cprd_upgi"
+  vocab_filepath: "/gpfs/scratch/qc25022/combined_MEDS_data/tokenised_data_combined_MEDS_new_time/cprd_upgi/vocab.csv"
+  labels_filepath: "/home/ag619/cancer-extraction-pipeline/output/combined_subject_information.csv"
   medical_lookup_filepath: "/home/ag619/TextCancEHR2/src/resources/MedicalDictTranslation2.csv"
   lab_lookup_filepath: "/home/ag619/TextCancEHR2/src/resources/LabLookUP.csv"
   region_lookup_filepath: "/home/ag619/TextCancEHR2/src/resources/RegionLookUp.csv"
