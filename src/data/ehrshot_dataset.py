@@ -26,7 +26,9 @@ class EHRSHOTDataset(Dataset):
     def __init__(
         self,
         csv_filepath: str,
-        split: str = 'train'
+        split: str = 'train',
+        prediction: bool = True,
+        text_column: str | None = None,
     ):
         # Load the CSV
         df = pd.read_csv(csv_filepath)
@@ -40,7 +42,33 @@ class EHRSHOTDataset(Dataset):
             if 'split' in df.columns:
                 df = df[df['split'] == csv_split]
 
+        # Use prediction narratives by default; allow config override for
+        # full-trajectory pretraining when prediction=False.
+        self.prediction = prediction
+        self.text_column = text_column or self._resolve_text_column(df.columns)
         self.records = df.to_dict('records')
+
+    def _resolve_text_column(self, available_columns) -> str:
+        """
+        Choose which narrative column to use.
+
+        - prediction=True  -> default to model_text (prediction-style narrative)
+        - prediction=False -> prefer full trajectory columns if present
+        """
+        cols = set(available_columns)
+        if self.prediction:
+            if "model_text" not in cols:
+                raise ValueError("EHRSHOT CSV is missing required 'model_text' column for prediction=True.")
+            return "model_text"
+
+        for candidate in ("full_model_text", "full_text", "trajectory_text", "model_text"):
+            if candidate in cols:
+                return candidate
+
+        raise ValueError(
+            "Could not find a narrative text column in EHRSHOT CSV. "
+            "Tried: full_model_text, full_text, trajectory_text, model_text."
+        )
 
     def __len__(self) -> int:
         return len(self.records)
@@ -61,7 +89,7 @@ class EHRSHOTDataset(Dataset):
             label = int(raw_label)
 
         # The CSV column holding the model-ready free-text narrative.
-        narrative = str(record['model_text'])
+        narrative = str(record[self.text_column])
 
         return {
             'text': narrative,

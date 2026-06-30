@@ -22,39 +22,50 @@ from src.resources.lab_reference_ranges import LAB_REFERENCE_RANGES
 
 
 TARGET_LABS = [
-    # "Lab Ferritin",
     "Lab ALP",
     "Lab HbA1c",
-    "Lab CA125",
-    "Lab Creatinine serum",
-    "Lab GGT",
     "Lab Glucose",
+    "Lab CA125",
+    "Lab Ferritin",
+    "Lab GGT",
     "Lab Amylase",
     "Lab ALT",
+    "Lab ESR",
+    "Lab AST",
+    "Lab Urea serum",
+    "Lab Creatinine serum",
+
+    
 ]
 
 LAB_DISPLAY_NAMES = {
-    # "Lab Ferritin": "Ferritin",
     "Lab ALP": "ALP",
     "Lab HbA1c": "HbA1c",
+    "Lab Glucose": "Glucose",
     "Lab CA125": "CA125",
+    "Lab Ferritin": "Ferritin",
     "Lab Creatinine serum": "Creatinine",
     "Lab GGT": "GGT",
-    "Lab Glucose": "Glucose",
     "Lab Amylase": "Amylase",
     "Lab ALT": "ALT",
+    "Lab ESR": "ESR",
+    "Lab AST": "AST",
+    "Lab Urea serum": "Urea",
 }
 
 LAB_UNITS = {
-    # "Lab Ferritin": "ug/L",
     "Lab ALP": "U/L",
     "Lab HbA1c": "mmol/mol",
+    "Lab Glucose": "mmol/L",
     "Lab CA125": "U/mL",
+    "Lab Ferritin": "ug/L",
     "Lab Creatinine serum": "umol/L",
     "Lab GGT": "U/L",
-    "Lab Glucose": "mmol/L",
     "Lab Amylase": "U/L",
     "Lab ALT": "U/L",
+    "Lab ESR": "mm/hr",
+    "Lab AST": "U/L",
+    "Lab Urea serum": "mmol/L",
 }
 
 
@@ -184,7 +195,8 @@ def plot_violin(df: pd.DataFrame, output_path: str, highlight_cluster: int):
     df["lab"] = pd.Categorical(df["lab"], categories=lab_order, ordered=True)
     df["lab_display"] = pd.Categorical(df["lab_display"], categories=display_order, ordered=True)
 
-    fig, axes = plt.subplots(2, 4, figsize=(20, 12), sharex=False, sharey=False)
+    # 11 labs: plot as 3 rows x 4 columns
+    fig, axes = plt.subplots(3, 4, figsize=(24, 16), sharex=False, sharey=False)
     axes_flat = axes.flatten()
 
     for i, lab in enumerate(lab_order):
@@ -220,11 +232,11 @@ def plot_violin(df: pd.DataFrame, output_path: str, highlight_cluster: int):
 
         unit = LAB_UNITS.get(lab, "")
         title = f"{LAB_DISPLAY_NAMES[lab]} ({unit})" if unit else LAB_DISPLAY_NAMES[lab]
-        ax.set_title(title, weight="bold")
+        ax.set_title(title, weight="bold", fontsize=16)
         ax.set_xlabel("Cluster")
         ax.set_ylabel("Value")
 
-    # Hide any unused subplots (none are unused when plotting 8 labs).
+    # Hide any unused subplots (all but len(lab_order) used)
     for j in range(len(lab_order), len(axes_flat)):
         axes_flat[j].axis("off")
 

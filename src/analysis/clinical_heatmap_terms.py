@@ -101,7 +101,7 @@ def main() -> None:
     parser.add_argument(
         "--term",
         action="append",
-        default=['Gastrectomy', 'Steatorrhea', 'Ankylosing spondylitus', 'Pancreatitis', 'Jaundice', 'Abdominal mass', 'Obesity', 'Dysmenorrhoea', 'Male infertility', 'Leiomyoma'],
+        default=['Gastrectomy', 'Steatorrhea', 'Ankylosing spondylitus', 'Pancreatitis', 'Jaundice', 'Abdominal mass', 'Obesity', 'Lupus erythematosus', 'Liver failure', 'Non-Alcoholic fatty liver disease', 'GIT bleed', 'Dysmenorrhoea', 'Male infertility', 'Leiomyoma'],
         help="Term of interest (repeat this flag for multiple terms)",
     )
     args = parser.parse_args()

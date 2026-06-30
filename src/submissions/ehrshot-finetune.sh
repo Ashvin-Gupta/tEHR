@@ -5,8 +5,8 @@
 #SBATCH --cpus-per-gpu=12
 #SBATCH -t 24:0:0
 #SBATCH --mem-per-cpu=7500M
-#SBATCH -o /data/home/qc25022/TextCancEHR2/HPC_Eval/logo/%x.o%j
-#SBATCH -e /data/home/qc25022/TextCancEHR2/HPC_Eval/loge/%x.e%j
+#SBATCH -o /data/home/qc25022/TextCancEHR2/HPC_Pretrain/logo/%x.o%j
+#SBATCH -e /data/home/qc25022/TextCancEHR2/HPC_Pretrain/loge/%x.e%j
 
 set -e
 
@@ -32,6 +32,6 @@ export PYTHONPATH="${BASE_DIR}:${PYTHONPATH}"
 
 
 python -m src.pipelines.finetune_llm_classifier \
-  --config_filepath src/configs/ehrshot_finetune_config.yaml \
-
+  --config_filepath src/configs/ehrshot_finetune_config.yaml 
+  
 deactivate

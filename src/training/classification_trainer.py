@@ -14,7 +14,7 @@ from src.training.training_utils import compute_and_sort_by_length
 from src.models.llm_classifier import LLMClassifier
 from src.training.model_loader import load_pretrained_lora_model
 from src.training.metrics import compute_classification_metrics
-from src.evaluations.evaluations import plot_all_curves
+from src.evaluations.evaluations import plot_all_curves, save_results
 
 from src.data.dataset_factory import get_dataset
 import logging
@@ -508,6 +508,12 @@ class EHRClassificationTrainer:
                 c_probs,
                 os.path.join(self.training_config['output_dir'], 'plots_combined')
             )
+            self._save_split_predictions(
+                combined_dataset,
+                combined_pred_output,
+                split_name="combined",
+                metrics=combined_results,
+            )
             return combined_results, combined_results
 
         # Evaluate on validation set
@@ -525,6 +531,12 @@ class EHRClassificationTrainer:
         pred_output = self.trainer.predict(val_dataset)
         v_labels, v_probs = self._pred_to_labels_and_probs(pred_output)
         plot_all_curves(v_labels, v_probs, os.path.join(self.training_config['output_dir'], 'plots_validation'))
+        self._save_split_predictions(
+            val_dataset,
+            pred_output,
+            split_name="validation",
+            metrics=eval_results,
+        )
         
         # Evaluate on test set
         print("\n" + "=" * 80)
@@ -541,6 +553,12 @@ class EHRClassificationTrainer:
         test_pred_output = self.trainer.predict(test_dataset)
         t_labels, t_probs = self._pred_to_labels_and_probs(test_pred_output)
         plot_all_curves(t_labels, t_probs, os.path.join(self.training_config['output_dir'], 'plots_test'))
+        self._save_split_predictions(
+            test_dataset,
+            test_pred_output,
+            split_name="test",
+            metrics=test_results,
+        )
         
         return eval_results, test_results
     
@@ -728,6 +746,54 @@ class EHRClassificationTrainer:
 
         probs = self._logits_to_pos_probs(logits)
         return labels, probs
+
+    def _extract_patient_ids(self, dataset):
+        """
+        Extract patient IDs in prediction order when available.
+
+        Supports base datasets exposing `patient_records`, and torch Subset
+        wrappers used by cached length-sorting.
+        """
+        if isinstance(dataset, torch.utils.data.Subset):
+            base_dataset = dataset.dataset
+            if hasattr(base_dataset, "patient_records"):
+                return [
+                    str(base_dataset.patient_records[i].get("subject_id", i))
+                    for i in dataset.indices
+                ]
+            return [str(i) for i in dataset.indices]
+
+        if hasattr(dataset, "patient_records"):
+            return [
+                str(dataset.patient_records[i].get("subject_id", i))
+                for i in range(len(dataset))
+            ]
+
+        # Fallback for datasets without explicit subject IDs (e.g. ConcatDataset)
+        return [str(i) for i in range(len(dataset))]
+
+    def _save_split_predictions(
+        self,
+        dataset,
+        pred_output,
+        split_name: str,
+        metrics: Dict[str, Any] | None = None,
+    ):
+        """Persist per-sample labels and probabilities for a split."""
+        labels, probs = self._pred_to_labels_and_probs(pred_output)
+        patient_ids = self._extract_patient_ids(dataset)
+
+        results_payload = {
+            "metrics": metrics or {},
+            "patient_ids": [str(pid) for pid in patient_ids],
+            "labels": labels.tolist() if hasattr(labels, "tolist") else list(labels),
+            "probs": probs.tolist() if hasattr(probs, "tolist") else list(probs),
+        }
+        save_results(
+            results_payload,
+            os.path.join(self.training_config["output_dir"], "results"),
+            f"{split_name}_results.json",
+        )
 
     def _generate_plots(self, pred_output, plot_dir_name: str):
         """Helper to generate ROC and PR curves."""

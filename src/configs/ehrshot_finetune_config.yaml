@@ -2,7 +2,7 @@ name: "ehrshot_classifier_finetune"
 
 model:
   # Path to LoRA-adapted checkpoint from pretraining.
-  pretrained_checkpoint: "/gpfs/scratch/qc25022/pancreas/experiments/Pretrain-Mistral-7B-Pancreas-new-time/checkpoint-6000"  # EDIT ME
+  pretrained_checkpoint: "/gpfs/scratch/qc25022/pancreas/experiments/Results/EHRSHOT/Pretrain-Mistral-7B-EHRSHOT/final_model"  # EDIT ME
   max_length: 12000
   hidden_size: 4096
   num_labels: 2
@@ -20,7 +20,7 @@ model:
   # carried over.  Use this when the task is the same (pancreatic cancer
   # prediction) but the dataset has changed.
   # Comment out to start from the pretrained_checkpoint LoRA weights only.
-  init_from_checkpoint: "/gpfs/scratch/qc25022/pancreas/experiments/Results/lora-12-month-logistic-refactored-new-time-mistral-7B/seed_3078332855/checkpoint-7372"
+  # init_from_checkpoint: "/gpfs/scratch/qc25022/pancreas/experiments/Results/lora-12-month-logistic-refactored-new-time-mistral-7B/seed_3078332855/checkpoint-7372"
 
 wandb:
   enabled: true
@@ -28,9 +28,9 @@ wandb:
   run_name: "ehrshot-lora-linear-finetune"  # EDIT ME
 
 training:
-  output_dir: "/gpfs/scratch/qc25022/pancreas/experiments/Results/ehrshot-pancreas-classification-finetune"  # EDIT ME
+  output_dir: "/gpfs/scratch/qc25022/pancreas/experiments/Results/EHRSHOT/EHRSHOT-classification-finetune"  # EDIT ME
   overwrite_output_dir: false
-  epochs: 3
+  epochs: 10
   batch_size: 8
   eval_batch_size: 8
   learning_rate: 1e-6
@@ -57,3 +57,4 @@ data:
   #   test  -> held-out split
   # At final evaluation, metrics are computed on val+test together.
   combine_eval_splits: true
+  prediction: true

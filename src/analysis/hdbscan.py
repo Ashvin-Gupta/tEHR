@@ -8,11 +8,14 @@ Features:
 """
 
 import argparse
+import json
 import os
 import yaml
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+from matplotlib.colors import to_rgba
+from matplotlib.patches import Patch
 import seaborn as sns
 import umap
 import hdbscan
@@ -30,6 +33,10 @@ from src.resources.lab_terms import LAB_TERMS
 CONFIG_PATH = "src/configs/classification_config.yaml"
 EMBEDDINGS_DIR = "/gpfs/scratch/qc25022/pancreas/experiments/Results/lora-1-month-logistic-refactored-new-time-mistral-7B/patient_clustering_heldout"
 OUTPUT_DIR = EMBEDDINGS_DIR + "/journal_clustering_output"
+# Path to the per-patient prediction JSON produced by evaluate_model.py.
+# Matches training.output_dir in classification_config.yaml.
+EVAL_RESULTS_DIR = "/gpfs/scratch/qc25022/pancreas/experiments/Results/lora-1-month-logistic-refactored-new-time-mistral-7B"
+PREDICTIONS_JSON = os.path.join(EVAL_RESULTS_DIR, "results", "test_results.json")
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 RANDOM_SEED = 42
@@ -277,7 +284,7 @@ def plot_annotated_umap(df_clusters: pd.DataFrame, output_dir: str):
     axes[1].legend(title="", loc="upper right")
 
     plt.tight_layout()
-    plt.savefig(os.path.join(output_dir, "fig1_annotated_umap.png"), dpi=300, bbox_inches='tight')
+    plt.savefig(os.path.join(output_dir, "fig12_annotated_umap.png"), dpi=300, bbox_inches='tight')
     plt.close()
 
 def plot_stacked_composition(df_clusters: pd.DataFrame, output_dir: str):
@@ -295,7 +302,7 @@ def plot_stacked_composition(df_clusters: pd.DataFrame, output_dir: str):
     sns.despine(left=True)
     
     plt.tight_layout()
-    plt.savefig(os.path.join(output_dir, "fig2_cluster_composition.png"), dpi=300, bbox_inches='tight')
+    plt.savefig(os.path.join(output_dir, "fig11_cluster_composition.png"), dpi=300, bbox_inches='tight')
     plt.close()
 
 def plot_lab_zscore_heatmap(heatmap_lab: pd.DataFrame, output_dir: str):
@@ -323,7 +330,7 @@ def plot_lab_zscore_heatmap(heatmap_lab: pd.DataFrame, output_dir: str):
     plt.xlabel("")
     plt.xticks(rotation=30, ha='right')
     plt.tight_layout()
-    plt.savefig(os.path.join(output_dir, "fig3_lab_zscore_heatmap.png"), dpi=300)
+    plt.savefig(os.path.join(output_dir, "fig10_lab_zscore_heatmap.png"), dpi=300)
     plt.close()
 
 def plot_clinical_heatmap(heatmap_cat: pd.DataFrame, output_dir: str):
@@ -347,8 +354,519 @@ def plot_clinical_heatmap(heatmap_cat: pd.DataFrame, output_dir: str):
     plt.xlabel("")
     plt.xticks(rotation=30, ha='right')
     plt.tight_layout()
-    plt.savefig(os.path.join(output_dir, "fig4_clinical_fingerprint_heatmap.png"), dpi=300)
+    plt.savefig(os.path.join(output_dir, "fig9_clinical_fingerprint_heatmap.png"), dpi=300)
     plt.close()
+
+# ---------------------------------------------------------------------------
+# Prediction-correctness helpers
+# ---------------------------------------------------------------------------
+def load_predictions(results_json_path: str) -> pd.DataFrame | None:
+    """
+    Load per-patient predictions saved by evaluate_model.py.
+
+    Returns a DataFrame with columns:
+        patient_id, true_label, pred_label, prob, predicted_correctly
+    Returns None (with a warning) if the file is missing or has no patient_ids.
+    """
+    if not os.path.exists(results_json_path):
+        print(f"  [pred plot] Results JSON not found: {results_json_path}. Skipping.")
+        return None
+
+    with open(results_json_path) as f:
+        data = json.load(f)
+
+    if "patient_ids" not in data:
+        print("  [pred plot] No patient_ids in results JSON — re-run evaluate_model.py first.")
+        return None
+
+    df = pd.DataFrame({
+        "patient_id": [str(p) for p in data["patient_ids"]],
+        "true_label": data["labels"],
+        "prob": data["probs"],
+    })
+    df["pred_label"] = (df["prob"] >= 0.5).astype(int)
+    df["predicted_correctly"] = (df["pred_label"] == df["true_label"])
+    return df
+
+
+def plot_prediction_correctness_umap(
+    df_clusters: pd.DataFrame,
+    df_preds: pd.DataFrame,
+    output_dir: str,
+) -> None:
+    """
+    UMAP scatter coloured by prediction outcome (TP / TN / FP / FN / Noise).
+
+    df_clusters must have columns: patient_id_str, dim1, dim2, cluster.
+    df_preds    must have columns: patient_id, true_label, pred_label, predicted_correctly.
+    """
+    # CSV reload can make patient_id_str int64; JSON preds use str — align dtypes for merge.
+    merged = (
+        df_clusters.assign(patient_id_str=df_clusters["patient_id_str"].astype(str))
+        .merge(
+            df_preds.rename(columns={"patient_id": "patient_id_str"}).assign(
+                patient_id_str=lambda d: d["patient_id_str"].astype(str)
+            ),
+            on="patient_id_str",
+            how="left",
+        )
+    )
+
+    OUTCOME_COLOURS = {
+        "TP": "#e74c3c",   # red    — case correctly identified
+        "TN": "#3498db",   # blue   — control correctly dismissed
+        "FN": "#e67e22",   # orange — case missed by model
+        "FP": "#9b59b6",   # purple — control wrongly flagged
+        "Noise": "#cccccc",
+    }
+
+    def outcome(row):
+        if row["cluster"] == -1:
+            return "Noise"
+        if pd.isna(row.get("true_label")):
+            return "Noise"
+        tl, pl = int(row["true_label"]), int(row["pred_label"])
+        if tl == 1 and pl == 1:
+            return "TP"
+        if tl == 0 and pl == 0:
+            return "TN"
+        if tl == 1 and pl == 0:
+            return "FN"
+        return "FP"
+
+    merged["outcome"] = merged.apply(outcome, axis=1)
+
+    sns.set(style="white", context="paper", font_scale=1.2)
+    fig, ax = plt.subplots(figsize=(9, 7))
+
+    order = ["TN", "TP", "FN", "FP", "Noise"]
+    for cat in order:
+        sub = merged[merged["outcome"] == cat]
+        if sub.empty:
+            continue
+        alpha = 0.25 if cat == "Noise" else 0.65
+        size = 6 if cat == "Noise" else 10
+        ax.scatter(
+            sub["dim1"], sub["dim2"],
+            s=size, alpha=alpha,
+            color=OUTCOME_COLOURS[cat],
+            label=f"{cat} ({len(sub)})",
+            rasterized=True,
+        )
+
+    ax.set_title("UMAP: Prediction Outcomes", weight="bold")
+    ax.axis("off")
+    ax.legend(title="Outcome", loc="upper right", fontsize=9, markerscale=1.8)
+
+    plt.tight_layout()
+    plt.savefig(os.path.join(output_dir, "fig8_prediction_correctness_umap.png"), dpi=300, bbox_inches="tight")
+    plt.close()
+    print("  Saved fig8_prediction_correctness_umap.png")
+
+
+# ---------------------------------------------------------------------------
+# Cluster + probability stacked figure
+# ---------------------------------------------------------------------------
+def _scatter_predicted_probability_umap(
+    ax: plt.Axes,
+    fig: plt.Figure,
+    df_clusters: pd.DataFrame,
+    df_preds: pd.DataFrame,
+) -> None:
+    """Scatter UMAP coloured by predicted P(cancer); grey if no match in df_preds."""
+    merged = (
+        df_clusters.assign(patient_id_str=df_clusters["patient_id_str"].astype(str))
+        .merge(
+            df_preds[["patient_id", "prob"]].assign(
+                patient_id=lambda d: d["patient_id"].astype(str)
+            ),
+            left_on="patient_id_str",
+            right_on="patient_id",
+            how="left",
+        )
+    )
+    no_pred = merged[merged["prob"].isna()]
+    has_pred = merged[merged["prob"].notna()].copy()
+    if not no_pred.empty:
+        ax.scatter(
+            no_pred["dim1"], no_pred["dim2"],
+            s=6, alpha=0.2, color="lightgrey", rasterized=True,
+        )
+    sc = ax.scatter(
+        has_pred["dim1"], has_pred["dim2"],
+        c=has_pred["prob"],
+        cmap="RdBu_r",
+        vmin=0.0, vmax=1.0,
+        s=10, alpha=0.7,
+        rasterized=True,
+    )
+    cbar = fig.colorbar(sc, ax=ax, fraction=0.03, pad=0.02)
+    cbar.set_label("P(Cancer)", fontsize=10)
+    cbar.ax.tick_params(labelsize=9)
+
+
+def _prob_to_face_alpha(probs: np.ndarray, alpha_floor: float = 0.08, alpha_cap: float = 0.95) -> np.ndarray:
+    """Higher predicted probability → higher alpha (more opaque); lower → more transparent."""
+    p = np.clip(probs.astype(float), 0.0, 1.0)
+    return alpha_floor + (alpha_cap - alpha_floor) * p
+
+
+def _add_opacity_key_below_legend(fig: plt.Figure, legend) -> None:
+    """
+    Horizontal strip under the true-label legend: neutral grey fill with alpha following
+    _prob_to_face_alpha, so the mapping matches the scatter points.
+    """
+    fig.canvas.draw()
+    renderer = fig.canvas.get_renderer()
+    bbox = legend.get_window_extent(renderer=renderer).transformed(fig.transFigure.inverted())
+    gap = 0.012
+    h_bar = 0.032
+    left = float(bbox.x0)
+    width = float(bbox.width)
+    bottom = float(bbox.y0) - gap - h_bar
+    bottom = max(bottom, 0.02)
+
+    op_ax = fig.add_axes([left, bottom, width, h_bar])
+    w = 256
+    probs = np.linspace(0.0, 1.0, w)
+    alphas = _prob_to_face_alpha(probs)
+    rgba = np.zeros((1, w, 4), dtype=float)
+    rgba[0, :, 0] = 0.33
+    rgba[0, :, 1] = 0.33
+    rgba[0, :, 2] = 0.33
+    rgba[0, :, 3] = alphas
+    op_ax.imshow(rgba, aspect="auto", interpolation="nearest", origin="lower")
+    op_ax.set_xlim(-0.5, w - 0.5)
+    op_ax.set_xticks([0, w // 2, w - 1])
+    op_ax.set_xticklabels(["0", "0.5", "1"], fontsize=8)
+    op_ax.set_yticks([])
+    op_ax.set_xlabel("Predicted P(cancer) → marker opacity", fontsize=8, labelpad=2)
+    op_ax.tick_params(axis="x", length=2, pad=1)
+    for spine in op_ax.spines.values():
+        spine.set_linewidth(0.4)
+        spine.set_edgecolor("0.55")
+
+
+def plot_predicted_probability_umap_case_control_markers(
+    df_clusters: pd.DataFrame,
+    df_preds: pd.DataFrame | None,
+    output_dir: str,
+) -> None:
+    """
+    Single UMAP: all circles; true case = dark red, control = blue; alpha (opacity) encodes
+    predicted P(cancer) (higher prob → more opaque). HDBSCAN cluster IDs at spatial medians
+    (noise omitted). No second panel.
+    """
+    if df_preds is None:
+        print("  [prob + marker shape] No predictions JSON — skipping.")
+        return
+
+    case_rgb = to_rgba("#8b1538")[:3]
+    ctrl_rgb = to_rgba("#1565c0")[:3]
+
+    df = df_clusters.copy()
+    df["_is_case"] = df["case_label"].apply(lambda x: str(x).lower() != "control")
+    merged = (
+        df.assign(patient_id_str=df["patient_id_str"].astype(str))
+        .merge(
+            df_preds[["patient_id", "prob"]].assign(
+                patient_id=lambda d: d["patient_id"].astype(str)
+            ),
+            left_on="patient_id_str",
+            right_on="patient_id",
+            how="left",
+        )
+    )
+    no_pred = merged[merged["prob"].isna()]
+    has_pred = merged[merged["prob"].notna()]
+
+    fig, ax = plt.subplots(figsize=(9, 8))
+    if not no_pred.empty:
+        ax.scatter(
+            no_pred["dim1"], no_pred["dim2"],
+            s=6, alpha=0.2, color="lightgrey", rasterized=True,
+        )
+
+    controls = has_pred[~has_pred["_is_case"]]
+    cases = has_pred[has_pred["_is_case"]]
+
+    if not controls.empty:
+        a = _prob_to_face_alpha(controls["prob"].values)
+        colors = [(*ctrl_rgb, ai) for ai in a]
+        ax.scatter(
+            controls["dim1"], controls["dim2"],
+            c=colors,
+            marker="o",
+            s=22,
+            edgecolors="none",
+            rasterized=True,
+        )
+    if not cases.empty:
+        a = _prob_to_face_alpha(cases["prob"].values)
+        colors = [(*case_rgb, ai) for ai in a]
+        ax.scatter(
+            cases["dim1"], cases["dim2"],
+            c=colors,
+            marker="o",
+            s=22,
+            edgecolors="none",
+            rasterized=True,
+        )
+
+    for cluster_id in sorted(df["cluster"].unique()):
+        if cluster_id == -1:
+            continue
+        subset = df[df["cluster"] == cluster_id]
+        ax.text(
+            float(subset["dim1"].median()),
+            float(subset["dim2"].median()),
+            str(cluster_id),
+            fontsize=12,
+            weight="bold",
+            ha="center",
+            va="center",
+            zorder=5,
+            bbox=dict(facecolor="white", alpha=0.75, edgecolor="none", boxstyle="round,pad=0.2"),
+        )
+
+    ax.set_title(
+        "Case (red) vs control (blue); opacity = predicted P(cancer)\n(cluster ID at centroid)",
+        weight="bold",
+        fontsize=16,
+        pad=6,
+    )
+    ax.axis("off")
+    fig.subplots_adjust(left=0.03, right=0.98, top=0.92, bottom=0.08)
+    legend = ax.legend(
+        handles=[
+            Patch(facecolor="#8b1538", edgecolor="none", label="Case"),
+            Patch(facecolor="#1565c0", edgecolor="none", label="Control"),
+        ],
+        loc="upper right",
+        fontsize=10,
+        title="True label",
+        title_fontsize=9,
+    )
+    _add_opacity_key_below_legend(fig, legend)
+
+    out_name = "fig14_predicted_probability_umap_case_control_markers.png"
+    plt.savefig(os.path.join(output_dir, out_name), dpi=300, bbox_inches="tight")
+    plt.close()
+    print(f"  Saved {out_name}")
+
+
+def plot_case_control_cluster_annotated_and_probability_umap(
+    df_clusters: pd.DataFrame,
+    df_preds: pd.DataFrame | None,
+    output_dir: str,
+) -> None:
+    """
+    Like fig7 (stacked UMAP + probability) but top panel is case vs control only,
+    with HDBSCAN cluster IDs annotated at per-cluster spatial medians.
+    Panel titles use a larger font than fig7.
+    """
+    has_probs = df_preds is not None
+    title_fs = 18
+    title_pad = 4
+
+    if has_probs:
+        fig, (ax_top, ax_bot) = plt.subplots(
+            2,
+            1,
+            figsize=(9, 15),
+            gridspec_kw={"hspace": 0.02, "height_ratios": [1, 1]},
+        )
+    else:
+        fig, ax_top = plt.subplots(1, 1, figsize=(9, 8))
+        ax_bot = None
+
+    df = df_clusters.copy()
+    df["_is_case"] = df["case_label"].apply(lambda x: str(x).lower() != "control")
+
+    controls = df[~df["_is_case"]]
+    cases = df[df["_is_case"]]
+    if not controls.empty:
+        ax_top.scatter(
+            controls["dim1"], controls["dim2"],
+            s=12, alpha=0.55, color="#bdc3c7", label="Control", rasterized=True,
+        )
+    if not cases.empty:
+        ax_top.scatter(
+            cases["dim1"], cases["dim2"],
+            s=18, alpha=0.65, color="#e74c3c", label="Case", rasterized=True,
+        )
+
+    for cluster_id in sorted(df["cluster"].unique()):
+        if cluster_id == -1:
+            continue
+        subset = df[df["cluster"] == cluster_id]
+        ax_top.text(
+            float(subset["dim1"].median()),
+            float(subset["dim2"].median()),
+            str(cluster_id),
+            fontsize=12,
+            weight="bold",
+            ha="center",
+            va="center",
+            bbox=dict(facecolor="white", alpha=0.75, edgecolor="none", boxstyle="round,pad=0.2"),
+        )
+
+    ax_top.set_title(
+        "Case vs. control (cluster ID at centroid)",
+        weight="bold",
+        fontsize=title_fs,
+        pad=title_pad,
+    )
+    ax_top.axis("off")
+    ax_top.legend(loc="upper right", fontsize=10)
+
+    if has_probs and ax_bot is not None:
+        _scatter_predicted_probability_umap(ax_bot, fig, df_clusters, df_preds)
+        ax_bot.set_title("Predicted probability", weight="bold", fontsize=title_fs, pad=title_pad)
+        ax_bot.axis("off")
+        span_x = float(df_clusters["dim1"].max() - df_clusters["dim1"].min())
+        span_y = float(df_clusters["dim2"].max() - df_clusters["dim2"].min())
+        px = 0.02 * span_x if span_x > 0 else 0.1
+        py = 0.02 * span_y if span_y > 0 else 0.1
+        xlim = (float(df_clusters["dim1"].min()) - px, float(df_clusters["dim1"].max()) + px)
+        ylim = (float(df_clusters["dim2"].min()) - py, float(df_clusters["dim2"].max()) + py)
+        ax_top.set_xlim(xlim)
+        ax_top.set_ylim(ylim)
+        ax_bot.set_xlim(xlim)
+        ax_bot.set_ylim(ylim)
+
+    fig.subplots_adjust(left=0.03, right=0.91, top=0.97, bottom=0.02)
+
+    out_name = "fig13_case_control_cluster_annotated_and_probability_umap.png"
+    plt.savefig(os.path.join(output_dir, out_name), dpi=300, bbox_inches="tight")
+    plt.close()
+    print(f"  Saved {out_name}")
+
+
+def plot_cluster_and_probability_umap(
+    df_clusters: pd.DataFrame,
+    df_preds: pd.DataFrame | None,
+    output_dir: str,
+) -> None:
+    """
+    Two-panel stacked figure sharing the same 2D UMAP space.
+
+    Top panel   — coloured by HDBSCAN cluster; cases shown as crosses (×),
+                  controls as circles (○).
+    Bottom panel — coloured by model-predicted probability (continuous heatmap).
+                  Requires df_preds; skipped with a warning if None.
+    """
+    has_probs = df_preds is not None
+    title_pad = 4
+
+    if has_probs:
+        fig, (ax_top, ax_bot) = plt.subplots(
+            2,
+            1,
+            figsize=(9, 15),
+            gridspec_kw={"hspace": 0.02, "height_ratios": [1, 1]},
+        )
+    else:
+        fig, ax_top = plt.subplots(1, 1, figsize=(9, 8))
+        ax_bot = None
+
+    # Derive is_case flag
+    df_clusters = df_clusters.copy()
+    df_clusters["_is_case"] = df_clusters["case_label"].apply(
+        lambda x: str(x).lower() != "control"
+    )
+
+    real_clusters = sorted(c for c in df_clusters["cluster"].unique() if c != -1)
+    cmap = plt.cm.get_cmap("tab10", max(len(real_clusters), 1))
+
+    # ── Top panel: cluster colour, marker by case/control ──────────────────
+    # Noise first so real clusters render on top
+    noise = df_clusters[df_clusters["cluster"] == -1]
+    if not noise.empty:
+        ax_top.scatter(
+            noise["dim1"], noise["dim2"],
+            s=6, alpha=0.25, color="lightgrey",
+            marker="o", label="_nolegend_", rasterized=True,
+        )
+
+    for i, cid in enumerate(real_clusters):
+        sub = df_clusters[df_clusters["cluster"] == cid]
+        colour = cmap(i)
+        controls = sub[~sub["_is_case"]]
+        cases    = sub[sub["_is_case"]]
+
+        if not controls.empty:
+            ax_top.scatter(
+                controls["dim1"], controls["dim2"],
+                s=10, alpha=0.55, color=colour,
+                marker="o", label=f"Cluster {cid} – control" if i == 0 else f"Cluster {cid}",
+                rasterized=True,
+            )
+        if not cases.empty:
+            ax_top.scatter(
+                cases["dim1"], cases["dim2"],
+                s=35, alpha=0.8, color=colour,
+                marker="x", linewidths=0.9,
+                label=f"Cluster {cid} – case" if i == 0 else "_nolegend_",
+                rasterized=True,
+            )
+        # Centroid annotation
+        cx = float(sub["dim1"].median())
+        cy = float(sub["dim2"].median())
+        ax_top.text(
+            cx, cy, str(cid),
+            fontsize=10, weight="bold", ha="center", va="center",
+            bbox=dict(facecolor="white", alpha=0.7, edgecolor="none", boxstyle="round,pad=0.2"),
+        )
+
+    ax_top.set_title(
+        "HDBSCAN Clusters\n(× = case, ○ = control)",
+        weight="bold",
+        fontsize=18,
+        pad=title_pad,
+    )
+    ax_top.axis("off")
+
+    # Compact legend: one entry per cluster + a marker-shape key
+    handles, labels_ = ax_top.get_legend_handles_labels()
+    # Add shape-only legend entries
+    from matplotlib.lines import Line2D
+    handles += [
+        Line2D([0], [0], marker="o", color="grey", linestyle="None", markersize=6, label="Control"),
+        Line2D([0], [0], marker="x", color="grey", linestyle="None", markersize=8,
+               markeredgewidth=1.2, label="Case"),
+    ]
+    ax_top.legend(
+        handles=handles,
+        loc="lower right", fontsize=7, markerscale=1.2,
+        framealpha=0.6, ncol=2,
+    )
+
+    # ── Bottom panel: predicted probability heatmap ─────────────────────────
+    if has_probs and ax_bot is not None:
+        _scatter_predicted_probability_umap(ax_bot, fig, df_clusters, df_preds)
+        ax_bot.set_title("Predicted Probability", weight="bold", fontsize=18, pad=title_pad)
+        ax_bot.axis("off")
+        span_x = float(df_clusters["dim1"].max() - df_clusters["dim1"].min())
+        span_y = float(df_clusters["dim2"].max() - df_clusters["dim2"].min())
+        px = 0.02 * span_x if span_x > 0 else 0.1
+        py = 0.02 * span_y if span_y > 0 else 0.1
+        xlim = (float(df_clusters["dim1"].min()) - px, float(df_clusters["dim1"].max()) + px)
+        ylim = (float(df_clusters["dim2"].min()) - py, float(df_clusters["dim2"].max()) + py)
+        ax_top.set_xlim(xlim)
+        ax_top.set_ylim(ylim)
+        ax_bot.set_xlim(xlim)
+        ax_bot.set_ylim(ylim)
+
+    fig.subplots_adjust(left=0.03, right=0.91, top=0.97, bottom=0.02)
+
+    plt.savefig(
+        os.path.join(output_dir, "fig7_cluster_and_probability_umap.png"),
+        dpi=300, bbox_inches="tight",
+    )
+    plt.close()
+    print("  Saved fig7_cluster_and_probability_umap.png")
+
 
 # ---------------------------------------------------------------------------
 # Main Execution
@@ -368,6 +886,11 @@ def generate_plots_from_saved_outputs(output_dir: str, clusters_csv: str = None,
     print(f"Loading differential summary from: {summary_csv}")
     df_summary = pd.read_csv(summary_csv)
 
+    # INSERT_YOUR_CODE
+    # Make the output directory output_dir + "/testing"
+    output_dir = os.path.join(output_dir, "testing")
+    os.makedirs(output_dir, exist_ok=True)
+
     print("Generating journal tables from loaded summary...")
     heatmap_cat, heatmap_lab = generate_journal_reports(df_summary, output_dir)
 
@@ -376,6 +899,14 @@ def generate_plots_from_saved_outputs(output_dir: str, clusters_csv: str = None,
     plot_stacked_composition(df_clusters, output_dir)
     plot_clinical_heatmap(heatmap_cat, output_dir)
     plot_lab_zscore_heatmap(heatmap_lab, output_dir)
+
+    df_preds = load_predictions(PREDICTIONS_JSON)
+    if df_preds is not None:
+        plot_prediction_correctness_umap(df_clusters, df_preds, output_dir)
+        plot_predicted_probability_umap_case_control_markers(df_clusters, df_preds, output_dir)
+    plot_cluster_and_probability_umap(df_clusters, df_preds, output_dir)
+    plot_case_control_cluster_annotated_and_probability_umap(df_clusters, df_preds, output_dir)
+
     print(f"Plot-only run complete. Check {output_dir}")
 
 
@@ -441,6 +972,14 @@ def main():
     plot_stacked_composition(df_clusters, output_dir)
     plot_clinical_heatmap(heatmap_cat, output_dir)
     plot_lab_zscore_heatmap(heatmap_lab, output_dir)
+
+    print("6. Generating prediction figures (if evaluation results exist)...")
+    df_preds = load_predictions(PREDICTIONS_JSON)
+    if df_preds is not None:
+        plot_prediction_correctness_umap(df_clusters, df_preds, output_dir)
+        plot_predicted_probability_umap_case_control_markers(df_clusters, df_preds, output_dir)
+    plot_cluster_and_probability_umap(df_clusters, df_preds, output_dir)
+    plot_case_control_cluster_annotated_and_probability_umap(df_clusters, df_preds, output_dir)
 
     print(f"Pipeline Complete! Check {output_dir} for publication-ready figures.")
 
