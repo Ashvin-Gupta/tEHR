@@ -1,0 +1,29 @@
+name: "pure_llm_baseline_mimic"
+
+debug:
+  enabled: false
+  print_first_n: 5
+
+model:
+  model_name: "unsloth/mistral-7b-instruct-v0.3-bnb-4bit"
+  max_length: 12000
+  load_in_4bit: true
+
+inference:
+  batch_size: 2
+  logit_low_threshold: -10.0   # if max(logit_0, logit_1) < this value → default to 0.5
+
+output_dir: "/home/ag619/experiments/Results/mimic-baselines/pure_llm_mimic"
+overwrite_output_dir: true
+
+prompt:
+  filepath: "src/resources/icu_mortality_prompt.txt"
+
+data:
+  data_dir: "/home/ag619/MIMIC-IV tokensiation"
+  vocab_filepath: "/home/ag619/MIMIC-IV tokensiation/vocab.csv"
+  aces_label_dir: "/home/ag619/MIMIC_data/labels/icu_mortality"
+  lookup_dir: "/home/ag619/MIMIC_data/hosp"
+  dataset: "MIMIC"
+  task: "prediction"
+  format: "text"

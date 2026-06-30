@@ -46,6 +46,7 @@ def get_dataset(
             split = split,
             label_column = data_config.get('label_column', 'label'),
             task = data_config.get('task', 'pretrain'),
+            format = data_config.get('format', 'text'),
         )
     elif dataset_name == 'EHRSHOT':
         return EHRSHOTDataset(

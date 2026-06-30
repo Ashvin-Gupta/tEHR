@@ -26,10 +26,12 @@ class MIMICDataset(BaseDataset):
         task: str = "pretrain",
         split: str = "train",
         label_column: str = "label",
+        format: str = "text",
     ):
         self.task = task
         self.split = split
         self.label_column = label_column
+        self.format = format
         
         # Vocabulary: token_id -> token_string
         vocab_df = pd.read_csv(vocab_file, dtype={'str': str})
@@ -43,7 +45,7 @@ class MIMICDataset(BaseDataset):
         )
 
         # Load patient records
-        limit = 1 if split in ['tuning'] else None
+        limit = 2 if split in ['tuning'] else None
         self.patient_records = self._load_data(data_dir, split, limit=limit)
 
         # For prediction task: build ACES-keyed examples
@@ -161,6 +163,13 @@ class MIMICDataset(BaseDataset):
             tokens = list(record['tokens'])
             timestamps = list(record['timestamps'])
             label_value = 0
+
+        if self.format == "tokens":
+            return {
+                "tokens": tokens,
+                "label": torch.tensor(label_value, dtype=torch.long),
+                "subject_id": subject_id,
+            }
 
         string_codes = [self.id_to_token.get(tid, "") for tid in tokens]
         narrative = "".join(self._tokens_to_phrases(string_codes))

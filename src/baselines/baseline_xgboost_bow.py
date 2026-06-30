@@ -22,7 +22,7 @@ import os
 import json
 import numpy as np
 import pandas as pd
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 from tqdm import tqdm
 import xgboost as xgb
 from collections import Counter
@@ -138,7 +138,7 @@ def should_include_token(token_str: str) -> bool:
     
     # By default, exclude unknown tokens to be conservative
     # Only include tokens that explicitly match known patterns
-    return False
+    return True
 
 
 def extract_bow_features(patient_record: Dict, token_to_idx: Dict[str, int]) -> np.ndarray:
@@ -228,6 +228,12 @@ class XGBoostBOWBaseline(BaseBaseline):
         return np.sort(samples)
 
     def _load_binary_labels(self) -> Dict[int, int]:
+        dataset_name = str(self.data_config.get("dataset", "CPRD")).upper()
+        if dataset_name == "MIMIC":
+            # MIMIC prediction labels are stored in ACES parquet files and are handled
+            # directly inside the dataset examples, so no labels CSV is needed.
+            return {}
+
         labels_df = pd.read_csv(self.data_config["labels_filepath"])
         return pd.Series(labels_df["is_case"].values, index=labels_df["subject_id"]).to_dict()
     
@@ -286,7 +292,12 @@ class XGBoostBOWBaseline(BaseBaseline):
         
         return self.token_to_idx
     
-    def extract_features_from_dataset(self, dataset, token_to_idx: Dict[str, int], subject_to_is_case: Dict[int, int]) -> tuple:
+    def extract_features_from_dataset(
+        self,
+        dataset,
+        token_to_idx: Dict[str, int],
+        subject_to_is_case: Optional[Dict[int, int]] = None
+    ) -> tuple:
         """
         Extract bag-of-words features and labels from dataset.
         
@@ -304,45 +315,118 @@ class XGBoostBOWBaseline(BaseBaseline):
         
         print("Extracting bag-of-words features from dataset...")
         
-        # Access patient records directly to get raw tokens without translation
-        for i in tqdm(range(len(dataset.patient_records)), desc="Processing samples"):
-            patient_record = dataset.patient_records[i]
-            subject_id = patient_record['subject_id']
-            
-            # Get binary label (is_case: 0 = Control, 1 = Pancreatic Cancer)
-            label = subject_to_is_case.get(subject_id)
-            if pd.isna(label) if hasattr(pd, 'isna') else (label is None):
-                continue  # Skip patients without labels
-            
-            # Get raw token IDs and timestamps
-            token_ids = patient_record['tokens']
-            timestamps = patient_record['timestamps']
+        dataset_name = str(self.data_config.get("dataset", "CPRD")).upper()
 
-            # Apply the dataset's cutoff logic (handles both cases and controls)
-            if dataset.cutoff_months is not None:
-                token_ids = dataset._apply_time_cutoff(token_ids, timestamps, subject_id, int(label))
-            
-            # Convert token IDs to strings and filter out cancer tokens
-            token_strings = []
-            for tid in token_ids:
-                tok = dataset.id_to_token.get(tid, "")
-                if 'cancer' in str(tok).lower():
-                    continue
-                token_strings.append(tok)
-            
-            # Build sparse bag-of-words entries for this sample
-            filtered_tokens = [str(token) for token in token_strings if should_include_token(str(token))]
-            token_counts = Counter(filtered_tokens)
-            current_row = len(labels_list)
-            for token, count in token_counts.items():
-                col_idx = token_to_idx.get(token)
-                if col_idx is not None:
-                    row_indices.append(current_row)
-                    col_indices.append(col_idx)
-                    values.append(float(count))
-            
-            # Use is_case directly (already binary: 0 = Control, 1 = Pancreatic Cancer)
-            labels_list.append(int(label))
+        if dataset_name == "MIMIC":
+            examples = getattr(dataset, "examples", [])
+            subject_to_records = getattr(dataset, "subject_to_records", {})
+            label_column = getattr(dataset, "label_column", "label")
+
+            if getattr(dataset, "task", None) == "prediction" and examples:
+                for example in tqdm(examples, desc="Processing samples"):
+                    subject_id = example.get("subject_id")
+                    records = subject_to_records.get(subject_id)
+                    if not records:
+                        continue
+
+                    # Keep behavior aligned with MIMICDataset.__getitem__ (first trajectory).
+                    record = records[0]
+                    token_ids = list(record.get("tokens", []))
+                    timestamps = list(record.get("timestamps", []))
+                    token_ids = dataset._apply_prediction_time_cutoff(
+                        token_ids, timestamps, example.get("prediction_time")
+                    )
+
+                    raw_label = example.get(label_column, 0)
+                    try:
+                        label = int(raw_label)
+                    except Exception:
+                        label = 1 if raw_label else 0
+
+                    token_strings = []
+                    for tid in token_ids:
+                        tok = dataset.id_to_token.get(tid, "")
+                        if "cancer" in str(tok).lower():
+                            continue
+                        token_strings.append(tok)
+
+                    filtered_tokens = [str(token) for token in token_strings if should_include_token(str(token))]
+                    token_counts = Counter(filtered_tokens)
+                    current_row = len(labels_list)
+                    for token, count in token_counts.items():
+                        col_idx = token_to_idx.get(token)
+                        if col_idx is not None:
+                            row_indices.append(current_row)
+                            col_indices.append(col_idx)
+                            values.append(float(count))
+
+                    labels_list.append(int(label))
+            else:
+                # Fallback mode for non-prediction MIMIC usage (e.g. quick sanity runs).
+                for i in tqdm(range(len(dataset.patient_records)), desc="Processing samples"):
+                    patient_record = dataset.patient_records[i]
+                    token_ids = patient_record.get("tokens", [])
+
+                    token_strings = []
+                    for tid in token_ids:
+                        tok = dataset.id_to_token.get(tid, "")
+                        if "cancer" in str(tok).lower():
+                            continue
+                        token_strings.append(tok)
+
+                    filtered_tokens = [str(token) for token in token_strings if should_include_token(str(token))]
+                    token_counts = Counter(filtered_tokens)
+                    current_row = len(labels_list)
+                    for token, count in token_counts.items():
+                        col_idx = token_to_idx.get(token)
+                        if col_idx is not None:
+                            row_indices.append(current_row)
+                            col_indices.append(col_idx)
+                            values.append(float(count))
+
+                    labels_list.append(0)
+        else:
+            # CPRD path: labels are read from labels_filepath (`is_case`) and cutoff is
+            # diagnosis-relative via CPRDDataset._apply_time_cutoff.
+            subject_to_is_case = subject_to_is_case or {}
+            for i in tqdm(range(len(dataset.patient_records)), desc="Processing samples"):
+                patient_record = dataset.patient_records[i]
+                subject_id = patient_record['subject_id']
+
+                # Get binary label (is_case: 0 = Control, 1 = Pancreatic Cancer)
+                label = subject_to_is_case.get(subject_id)
+                if pd.isna(label) if hasattr(pd, 'isna') else (label is None):
+                    continue  # Skip patients without labels
+
+                # Get raw token IDs and timestamps
+                token_ids = patient_record['tokens']
+                timestamps = patient_record['timestamps']
+
+                # Apply the dataset's cutoff logic (handles both cases and controls)
+                if getattr(dataset, "cutoff_months", None) is not None:
+                    token_ids = dataset._apply_time_cutoff(token_ids, timestamps, subject_id, int(label))
+
+                # Convert token IDs to strings and filter out cancer tokens
+                token_strings = []
+                for tid in token_ids:
+                    tok = dataset.id_to_token.get(tid, "")
+                    if 'cancer' in str(tok).lower():
+                        continue
+                    token_strings.append(tok)
+
+                # Build sparse bag-of-words entries for this sample
+                filtered_tokens = [str(token) for token in token_strings if should_include_token(str(token))]
+                token_counts = Counter(filtered_tokens)
+                current_row = len(labels_list)
+                for token, count in token_counts.items():
+                    col_idx = token_to_idx.get(token)
+                    if col_idx is not None:
+                        row_indices.append(current_row)
+                        col_indices.append(col_idx)
+                        values.append(float(count))
+
+                # Use is_case directly (already binary: 0 = Control, 1 = Pancreatic Cancer)
+                labels_list.append(int(label))
         
         # Convert to sparse matrix and labels array
         num_samples = len(labels_list)

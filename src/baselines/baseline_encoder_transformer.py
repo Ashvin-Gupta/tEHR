@@ -6,17 +6,19 @@ Uses transformer encoder on filtered EHR tokens. Uses the same filtering logic a
 - Excludes: Time intervals, numeric values, units, lab value categories, quantile values, cancer-related tokens
 """
 import os
+import copy
 import torch
 import torch.nn as nn
 import numpy as np
 from typing import Dict, Any, List
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import Dataset, DataLoader, ConcatDataset
 from tqdm import tqdm
 from collections import Counter
 
 from src.baselines.baseline_utils import load_baseline_config, setup_output_dir
 from src.evaluations.evaluations import compute_baseline_metrics, plot_all_curves, save_results, print_results
 from src.baselines.baseline_xgboost_bow import should_include_token
+from src.data.dataset_factory import get_dataset
 
 
 def filter_tokens(token_list: List[str]) -> List[str]:
@@ -132,9 +134,51 @@ class FilteredTokenDataset(Dataset):
         return self.filtered_samples[idx]
 
 
+def build_head(
+    head_type: str,
+    hidden_dim: int,
+    num_labels: int,
+    head_hidden_size: int = 256,
+    dropout: float = 0.1,
+) -> nn.Module:
+    """
+    Build a classification head.
+
+    Args:
+        head_type: 'linear', 'mlp', or 'logistic'.
+            - 'linear': nn.Linear(hidden_dim, num_labels) with CrossEntropyLoss.
+            - 'mlp': two-layer MLP with GELU and CrossEntropyLoss.
+            - 'logistic': nn.Linear(hidden_dim, 1) with BCEWithLogitsLoss (binary only).
+        hidden_dim: Input feature size.
+        num_labels: Number of output classes (ignored for 'logistic').
+        head_hidden_size: Intermediate size for MLP head.
+        dropout: Dropout rate for MLP head.
+    """
+    if head_type == 'linear':
+        return nn.Linear(hidden_dim, num_labels)
+    elif head_type == 'mlp':
+        return nn.Sequential(
+            nn.Linear(hidden_dim, head_hidden_size),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(head_hidden_size, num_labels),
+        )
+    elif head_type == 'logistic':
+        return nn.Linear(hidden_dim, 1)
+    else:
+        raise ValueError(
+            f"Unknown head_type: '{head_type}'. Options: 'linear', 'mlp', 'logistic'"
+        )
+
+
 class EHRTransformerEncoder(nn.Module):
     """
     Transformer encoder for EHR token sequences.
+
+    Supports:
+    - pooling: 'mean' (masked mean over all token positions) or 'cls' (learnable
+      CLS token prepended; position-0 output used for classification).
+    - head_type: 'linear', 'mlp', or 'logistic' (see build_head).
     """
     
     def __init__(
@@ -146,7 +190,10 @@ class EHRTransformerEncoder(nn.Module):
         ff_dim: int = 2048,
         dropout: float = 0.1,
         max_seq_length: int = 512,
-        num_labels: int = 2
+        num_labels: int = 2,
+        head_type: str = 'linear',
+        head_hidden_size: int = 256,
+        pooling: str = 'mean',
     ):
         """
         Initialize transformer encoder.
@@ -158,19 +205,29 @@ class EHRTransformerEncoder(nn.Module):
             num_heads: Number of attention heads
             ff_dim: Feed-forward dimension
             dropout: Dropout rate
-            max_seq_length: Maximum sequence length
+            max_seq_length: Maximum sequence length (for token positions; CLS is extra)
             num_labels: Number of output classes
+            head_type: 'linear', 'mlp', or 'logistic'
+            head_hidden_size: Intermediate size for MLP head
+            pooling: 'mean' or 'cls'
         """
         super().__init__()
         
         self.hidden_dim = hidden_dim
         self.max_seq_length = max_seq_length
+        self.pooling = pooling
+        self.head_type = head_type
         
         # Token embedding
         self.token_embedding = nn.Embedding(vocab_size, hidden_dim)
         
-        # Positional encoding
-        self.pos_encoding = nn.Parameter(torch.randn(max_seq_length, hidden_dim))
+        # Positional encoding. Allocate max_seq_length+1 so that CLS pooling
+        # can assign position 0 to the CLS token and 1..seq_len to real tokens.
+        self.pos_encoding = nn.Parameter(torch.randn(max_seq_length + 1, hidden_dim))
+        
+        # Learnable CLS token (used only when pooling='cls')
+        if pooling == 'cls':
+            self.cls_token = nn.Parameter(torch.randn(1, 1, hidden_dim))
         
         # Transformer encoder
         encoder_layer = nn.TransformerEncoderLayer(
@@ -182,14 +239,15 @@ class EHRTransformerEncoder(nn.Module):
         )
         self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
         
-        # Classification head (logistic regression-style)
-        self.classifier = nn.Linear(hidden_dim, num_labels)
+        # Classification head
+        self.classifier = build_head(head_type, hidden_dim, num_labels, head_hidden_size, dropout)
         
         self.dropout = nn.Dropout(dropout)
     
     def encode(self, token_ids: torch.Tensor, attention_mask: torch.Tensor = None) -> torch.Tensor:
         """
-        Encode token IDs into contextual representations (no pooling or head).
+        Encode token IDs into contextual representations (no pooling, no CLS, no head).
+        Used by EHRTransformerMLMHead for per-token MLM predictions.
         
         Args:
             token_ids: Token IDs [batch_size, seq_len]
@@ -207,22 +265,17 @@ class EHRTransformerEncoder(nn.Module):
                 attention_mask = attention_mask[:, :self.max_seq_length]
             seq_len = self.max_seq_length
         
-        # Embeddings
+        # Embeddings + positional encoding (positions 0..seq_len-1)
         x = self.token_embedding(token_ids)  # [batch, seq_len, hidden_dim]
-        
-        # Add positional encoding (truncate pos_encoding if needed)
-        pos_len = min(seq_len, self.max_seq_length)
-        x = x + self.pos_encoding[:pos_len, :].unsqueeze(0)
+        x = x + self.pos_encoding[:seq_len, :].unsqueeze(0)
         x = self.dropout(x)
         
-        # Create attention mask (invert: 1 = attend, 0 = ignore)
+        # Convert to transformer mask format: True = ignore, False = attend
         if attention_mask is not None:
-            # Convert to transformer format: True = ignore, False = attend
             mask = (attention_mask == 0)
         else:
             mask = None
         
-        # Transformer encoder
         x = self.transformer(x, src_key_padding_mask=mask)  # [batch, seq_len, hidden_dim]
         return x
     
@@ -230,26 +283,59 @@ class EHRTransformerEncoder(nn.Module):
         """
         Forward pass for classification.
         
+        When pooling='cls': prepends a learnable CLS token at position 0, assigns
+        positional encodings 1..seq_len to the real tokens, and takes position-0
+        output as the sequence representation.
+
+        When pooling='mean': masked mean over all real token positions (original behaviour).
+        
         Args:
             token_ids: Token IDs [batch_size, seq_len]
             attention_mask: Attention mask [batch_size, seq_len]
         
         Returns:
-            Logits [batch_size, num_labels]
+            Logits [batch_size, num_labels] for linear/mlp, or [batch_size, 1] for logistic
         """
-        x = self.encode(token_ids, attention_mask)
-        
-        # Pool: use mean pooling over sequence
-        if attention_mask is not None:
-            mask_expanded = attention_mask.float().unsqueeze(-1)
-            x = x * mask_expanded
-            pooled = x.sum(dim=1) / mask_expanded.sum(dim=1).clamp(min=1)
-        else:
-            pooled = x.mean(dim=1)  # [batch, hidden_dim]
-        
-        # Classify
-        logits = self.classifier(pooled)  # [batch, num_labels]
-        
+        batch_size, seq_len = token_ids.shape
+
+        # Truncate
+        if seq_len > self.max_seq_length:
+            token_ids = token_ids[:, :self.max_seq_length]
+            if attention_mask is not None:
+                attention_mask = attention_mask[:, :self.max_seq_length]
+            seq_len = self.max_seq_length
+
+        if self.pooling == 'cls':
+            # Tokens get positions 1..seq_len; CLS occupies position 0.
+            x = self.token_embedding(token_ids)
+            x = x + self.pos_encoding[1:seq_len + 1, :].unsqueeze(0)
+            x = self.dropout(x)
+
+            # Prepend CLS token
+            cls = self.cls_token.expand(batch_size, -1, -1)  # [B, 1, D]
+            x = torch.cat([cls, x], dim=1)  # [B, seq_len+1, D]
+
+            # Extend attention mask to cover CLS position (always attended)
+            if attention_mask is not None:
+                cls_mask = torch.ones(batch_size, 1, dtype=attention_mask.dtype, device=attention_mask.device)
+                full_mask = torch.cat([cls_mask, attention_mask], dim=1)
+                src_key_padding_mask = (full_mask == 0)
+            else:
+                src_key_padding_mask = None
+
+            x = self.transformer(x, src_key_padding_mask=src_key_padding_mask)
+            pooled = x[:, 0, :]  # CLS token output
+
+        else:  # pooling == 'mean'
+            x = self.encode(token_ids, attention_mask)
+            if attention_mask is not None:
+                mask_expanded = attention_mask.float().unsqueeze(-1)
+                x = x * mask_expanded
+                pooled = x.sum(dim=1) / mask_expanded.sum(dim=1).clamp(min=1)
+            else:
+                pooled = x.mean(dim=1)
+
+        logits = self.classifier(pooled)
         return logits
 
 
@@ -319,6 +405,44 @@ class EncoderTransformerBaseline:
         self.max_seq_length = None
         self._label_conversion_warned = False  # Track if we've warned about label conversion
         self.pretrain_config = config.get('pretrain', {})  # Optional stage-1 config
+
+    def _load_datasets(self, splits: List[str], task_override: str = None) -> Dict[str, Dataset]:
+        """Load datasets through the factory, optionally overriding MIMIC task."""
+        dataset_name = self.data_config.get("dataset", "CPRD")
+        data_cfg = copy.deepcopy(self.data_config)
+        data_cfg["format"] = "tokens"
+        if task_override is not None:
+            data_cfg["task"] = task_override
+        return {split: get_dataset(dataset_name, data_cfg, split) for split in splits}
+
+    def _load_pretrained_checkpoint(self, checkpoint_path: str, device: torch.device):
+        """
+        Load a stage-1 pretrained encoder checkpoint and restore vocab + weights.
+        """
+        print(f"\nLoading pretrained encoder checkpoint: {checkpoint_path}")
+        checkpoint = torch.load(checkpoint_path, map_location=device)
+
+        ckpt_vocab = checkpoint.get("vocab")
+        if ckpt_vocab is not None:
+            self.vocab = ckpt_vocab
+            self.token_to_id = ckpt_vocab.get("token_to_id", {})
+            self.id_to_token = ckpt_vocab.get("id_to_token", {})
+            print(f"  - Restored checkpoint vocabulary (size: {self.vocab.get('size', 'unknown')})")
+        elif self.vocab is None:
+            raise ValueError(
+                "Checkpoint missing `vocab`, and no in-memory vocab available. "
+                "Build vocab first or provide a checkpoint saved by this baseline."
+            )
+
+        if self.model is None:
+            self.create_model()
+        self.model = self.model.to(device)
+
+        state_dict = checkpoint.get("encoder_state_dict", checkpoint.get("model_state_dict"))
+        if state_dict is None:
+            raise ValueError("Checkpoint missing `encoder_state_dict` (or `model_state_dict`).")
+        self.model.load_state_dict(state_dict, strict=True)
+        print("  - Loaded pretrained encoder weights successfully")
     
     def build_vocabulary(self, datasets: Dict[str, Dataset]):
         """
@@ -345,16 +469,19 @@ class EncoderTransformerBaseline:
                             token_str = str(token)
                             token_counter[token_str] += 1
         
-        # Report total unique tokens before truncation
+        # Report total unique tokens before any cap
         num_unique_tokens = len(token_counter)
         print(f"  - Total unique tokens observed: {num_unique_tokens:,}")
         
-        # Keep only the top K most frequent tokens
-        max_vocab_tokens = 5000
-        most_common_tokens = token_counter.most_common(max_vocab_tokens)
-        kept_tokens = [tok for tok, _ in most_common_tokens]
-        
-        print(f"  - Keeping top {len(kept_tokens):,} most frequent tokens for vocabulary")
+        # Configurable vocab cap: vocab_size=null (None) means keep full vocab
+        max_vocab_tokens = self.model_config.get('vocab_size', None)
+        if max_vocab_tokens is not None:
+            most_common_tokens = token_counter.most_common(int(max_vocab_tokens))
+            kept_tokens = [tok for tok, _ in most_common_tokens]
+            print(f"  - Keeping top {len(kept_tokens):,} most frequent tokens (vocab_size={max_vocab_tokens})")
+        else:
+            kept_tokens = list(token_counter.keys())
+            print(f"  - Using full vocabulary ({len(kept_tokens):,} tokens, no cap)")
         
         # Create vocabulary from kept tokens only
         kept_tokens = sorted(kept_tokens)
@@ -527,9 +654,15 @@ class EncoderTransformerBaseline:
         dropout = float(self.model_config.get('dropout', 0.1))
         max_seq_length = int(self.model_config.get('max_seq_length', 512))
         num_labels = int(self.model_config.get('num_labels', 2))
+        head_type = self.model_config.get('head_type', 'linear')
+        head_hidden_size = int(self.model_config.get('head_hidden_size', 256))
+        pooling = self.model_config.get('pooling', 'mean')
         
-        # Store max_seq_length for use in collate_fn
+        # Store for use in collate_fn, train_epoch, evaluate
         self.max_seq_length = max_seq_length
+        self.head_type = head_type
+        
+        print(f"  - head_type: {head_type}, pooling: {pooling}")
         
         self.model = EHRTransformerEncoder(
             vocab_size=vocab_size,
@@ -539,7 +672,10 @@ class EncoderTransformerBaseline:
             ff_dim=ff_dim,
             dropout=dropout,
             max_seq_length=max_seq_length,
-            num_labels=num_labels
+            num_labels=num_labels,
+            head_type=head_type,
+            head_hidden_size=head_hidden_size,
+            pooling=pooling,
         )
         
         # Count parameters
@@ -595,11 +731,26 @@ class EncoderTransformerBaseline:
         
         return total_loss / max(num_batches, 1)
     
+    def _get_criterion(self):
+        """Return the appropriate loss function for the configured head type."""
+        head_type = getattr(self, 'head_type', 'linear')
+        if head_type == 'logistic':
+            return nn.BCEWithLogitsLoss()
+        return nn.CrossEntropyLoss()
+
+    def _logits_to_probs(self, logits: torch.Tensor) -> torch.Tensor:
+        """Convert raw logits to positive-class probabilities."""
+        head_type = getattr(self, 'head_type', 'linear')
+        if head_type == 'logistic':
+            return torch.sigmoid(logits).squeeze(1)
+        return torch.softmax(logits, dim=1)[:, 1]
+
     def train_epoch(self, train_loader, optimizer, criterion, device):
         """Train for one epoch."""
         self.model.train()
         total_loss = 0
         num_batches = 0
+        head_type = getattr(self, 'head_type', 'linear')
         
         for batch in tqdm(train_loader, desc="Training"):
             token_ids = batch['token_ids'].to(device)
@@ -608,7 +759,12 @@ class EncoderTransformerBaseline:
             
             optimizer.zero_grad()
             logits = self.model(token_ids, attention_mask)
-            loss = criterion(logits, labels)
+
+            if head_type == 'logistic':
+                loss = criterion(logits.squeeze(1), labels.float())
+            else:
+                loss = criterion(logits, labels)
+
             loss.backward()
             optimizer.step()
             
@@ -640,7 +796,7 @@ class EncoderTransformerBaseline:
                 labels = batch['labels'].to(device)
                 
                 logits = self.model(token_ids, attention_mask)
-                probs = torch.softmax(logits, dim=1)[:, 1].cpu().numpy()
+                probs = self._logits_to_probs(logits).cpu().numpy()
                 labels_np = labels.cpu().numpy()
                 
                 all_labels.extend(labels_np)
@@ -677,27 +833,34 @@ class EncoderTransformerBaseline:
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         print(f"\nUsing device: {device}")
         
-        # Load datasets
-        datasets = load_datasets(
-            self.data_config,
-            splits=['train', 'tuning', 'held_out'],
-            format='tokens'
-        )
+        # Load datasets (for MIMIC stage-2 we force prediction/cohort mode)
+        dataset_name = self.data_config.get("dataset", "CPRD")
+        stage2_task = "prediction" if dataset_name == "MIMIC" else None
+        datasets = self._load_datasets(['train', 'tuning', 'held_out'], task_override=stage2_task)
         
         # Filter tokens
         filtered_datasets = {}
         for split_name, dataset in datasets.items():
             filtered_datasets[split_name] = FilteredTokenDataset(dataset)
         
-        # Build vocabulary
-        self.build_vocabulary(filtered_datasets)
-        
-        # Create model
-        self.create_model()
-        self.model = self.model.to(device)
+        checkpoint_path = self.pretrain_config.get("pretrained_checkpoint")
+        force_pretrain = bool(self.pretrain_config.get("force_pretrain", False))
+
+        if checkpoint_path:
+            # Reuse a previously pretrained stage-1 encoder and skip MLM by default.
+            if not os.path.exists(checkpoint_path):
+                raise FileNotFoundError(f"pretrain.pretrained_checkpoint not found: {checkpoint_path}")
+            self._load_pretrained_checkpoint(checkpoint_path, device)
+            if self.pretrain_config.get("enabled", False) and not force_pretrain:
+                print("  - pretrain.enabled=True but pretrained_checkpoint provided; skipping stage-1 MLM.")
+        else:
+            # Build vocabulary and create model from scratch when no checkpoint is provided.
+            self.build_vocabulary(filtered_datasets)
+            self.create_model()
+            self.model = self.model.to(device)
         
         # Optional Stage 1: MLM pretraining on encoder
-        if self.pretrain_config.get('enabled', False):
+        if self.pretrain_config.get('enabled', False) and (not checkpoint_path or force_pretrain):
             print("\n" + "=" * 80)
             print("Stage 1: MLM pretraining for encoder transformer")
             print("=" * 80)
@@ -710,15 +873,31 @@ class EncoderTransformerBaseline:
             self.mlm_model = self.mlm_model.to(device)
             
             mlm_batch_size = int(self.pretrain_config.get('batch_size', self.training_config.get('batch_size', 32)))
+
+            # For MIMIC, pretrain on full trajectory data (all splits) by default.
+            # This enforces: stage-1 on all data; stage-2 on label cohorts.
+            stage1_train_ds = filtered_datasets['train']
+            stage1_val_ds = filtered_datasets['tuning']
+            if dataset_name == "MIMIC" and self.pretrain_config.get("use_all_splits_for_mimic", True):
+                stage1_raw = self._load_datasets(
+                    ['train', 'tuning', 'held_out'],
+                    task_override="pretrain",
+                )
+                stage1_filtered = [FilteredTokenDataset(stage1_raw[s]) for s in ['train', 'tuning', 'held_out']]
+                stage1_train_ds = ConcatDataset(stage1_filtered)
+                # No natural val cohort when pretraining on the full corpus; reuse train for loss tracking.
+                stage1_val_ds = stage1_train_ds
+                print("  - MIMIC stage-1 uses train+tuning+held_out in pretrain mode")
+
             mlm_train_loader = DataLoader(
-                filtered_datasets['train'],
+                stage1_train_ds,
                 batch_size=mlm_batch_size,
                 shuffle=True,
                 collate_fn=self.mlm_collate_fn,
                 num_workers=int(self.pretrain_config.get('dataloader_num_workers', self.training_config.get('dataloader_num_workers', 4)))
             )
             mlm_val_loader = DataLoader(
-                filtered_datasets['tuning'],
+                stage1_val_ds,
                 batch_size=mlm_batch_size,
                 shuffle=False,
                 collate_fn=self.mlm_collate_fn,
@@ -742,6 +921,23 @@ class EncoderTransformerBaseline:
                 best_mlm_loss = min(best_mlm_loss, val_mlm_loss)
             
             print(f"\nFinished MLM pretraining. Best val loss: {best_mlm_loss:.4f}")
+
+            # Persist stage-1 encoder so it can be reused independently of stage-2.
+            if self.pretrain_config.get("save_model", True):
+                pretrain_model_dir = os.path.join(self.output_dir, "models")
+                os.makedirs(pretrain_model_dir, exist_ok=True)
+                pretrain_model_path = os.path.join(pretrain_model_dir, "pretrained_encoder_stage1_mlm.pt")
+                torch.save(
+                    {
+                        "encoder_state_dict": self.model.state_dict(),
+                        "vocab": self.vocab,
+                        "model_config": self.model_config,
+                        "pretrain_config": self.pretrain_config,
+                        "best_mlm_val_loss": best_mlm_loss,
+                    },
+                    pretrain_model_path,
+                )
+                print(f"  - Saved stage-1 pretrained encoder to: {pretrain_model_path}")
             
             # Re-enable classification head for supervised fine-tuning
             for p in self.model.classifier.parameters():
@@ -777,7 +973,7 @@ class EncoderTransformerBaseline:
             lr=float(self.training_config.get('learning_rate', 1e-4)),
             weight_decay=float(self.training_config.get('weight_decay', 0.01))
         )
-        criterion = nn.CrossEntropyLoss()
+        criterion = self._get_criterion()
         
         # Train
         num_epochs = int(self.training_config.get('epochs', 10))

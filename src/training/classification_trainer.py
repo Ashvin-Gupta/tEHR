@@ -120,7 +120,8 @@ class EHRClassificationTrainer:
             tokenizer=self.tokenizer,
             head_type=self.model_config.get('head_type', 'linear'),
             head_hidden_size=self.model_config.get('head_hidden_size', 512),
-            head_dropout=self.model_config.get('head_dropout', 0.1)
+            head_dropout=self.model_config.get('head_dropout', 0.1),
+            pooling=self.model_config.get('pooling', 'last_token'),
         )
 
     def _sort_with_cache(self, dataset, split: str, shuffle_buckets: bool, num_buckets: int = 20):
@@ -687,6 +688,24 @@ class EHRClassificationTrainer:
 
         logger.info("  - Training will start from step 0 with the above weights.")
 
+    @staticmethod
+    def _logits_to_pos_probs(logits_np) -> "np.ndarray":
+        """
+        Convert raw model logits to positive-class probability array (1-D).
+
+        Handles two output shapes:
+          - (N, 1): logistic head → sigmoid, squeeze to (N,)
+          - (N, C): linear/mlp head → softmax, take column 1 for binary
+        """
+        import numpy as np
+        t = torch.tensor(logits_np, dtype=torch.float32)
+        if t.ndim == 2 and t.shape[1] == 1:
+            return torch.sigmoid(t).squeeze(1).numpy()
+        probs = torch.softmax(t, dim=-1).numpy()
+        if probs.ndim == 2 and probs.shape[1] >= 2:
+            return probs[:, 1]
+        return probs
+
     def _pred_to_labels_and_probs(self, pred_output):
         """
         Convert a PredictionOutput into 1-D numpy arrays suitable for sklearn
@@ -694,8 +713,7 @@ class EHRClassificationTrainer:
 
         - label_ids may be 1-D class indices or 2-D one-hot; we always return
           1-D class indices.
-        - predictions are raw logits of shape (N, C); we softmax them and
-          return the positive-class (index 1) column as a 1-D probability array.
+        - predictions are raw logits; shape (N,1) for logistic head, (N,C) otherwise.
         """
         import numpy as np
 
@@ -708,11 +726,7 @@ class EHRClassificationTrainer:
         if np.ndim(labels) == 2:
             labels = np.argmax(labels, axis=1)
 
-        probs = torch.softmax(torch.tensor(logits, dtype=torch.float32), dim=-1).numpy()
-        # For binary classification extract the positive-class column
-        if probs.ndim == 2 and probs.shape[1] == 2:
-            probs = probs[:, 1]
-
+        probs = self._logits_to_pos_probs(logits)
         return labels, probs
 
     def _generate_plots(self, pred_output, plot_dir_name: str):
@@ -726,10 +740,7 @@ class EHRClassificationTrainer:
             print("  - Skipping ROC/PR plots for multi-label (not yet supported)")
             return
         
-        # Convert to probabilities.
-        # IMPORTANT: keep full [n_samples, n_classes] matrix so that downstream
-        # plotting code can handle both binary and multi-class cases.
-        probs = torch.softmax(torch.tensor(logits), dim=1).numpy()
+        probs = self._logits_to_pos_probs(logits)
         labels = pred_output.label_ids
         
         # Create plots

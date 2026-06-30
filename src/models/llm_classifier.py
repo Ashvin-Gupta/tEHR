@@ -14,11 +14,15 @@ class LLMClassifier(nn.Module):
     """
     Wrapper that adds a classification head on top of a (frozen) LLM.
     
-    The LLM extracts hidden states from the EOS token position,
-    and we pass it through a linear classification head.
-    
-    Architecture:
-        LLM (frozen/partially frozen) → Last Hidden State → Linear → Logits
+    Pooling strategies (pooling arg):
+        'last_token': hidden state of the last non-padding token (default, original behaviour).
+        'mean':       masked mean over all non-padding token hidden states.
+
+    Head types (head_type arg):
+        'linear':   nn.Linear(hidden_size, num_labels).  CrossEntropyLoss.
+        'mlp':      Two-layer MLP with GELU.  CrossEntropyLoss.
+        'deep_mlp': Three-layer MLP with GELU.  CrossEntropyLoss.
+        'logistic': nn.Linear(hidden_size, 1).  BCEWithLogitsLoss (binary only).
     
     Args:
         base_model: The pretrained LLM (with or without LoRA adapters).
@@ -29,6 +33,7 @@ class LLMClassifier(nn.Module):
             trainable (e.g., ["lora_"] to train LoRA adapters).
         multi_label: If True, uses BCE loss (for multi-label tasks).
         tokenizer: Optional tokenizer (for debugging).
+        pooling: 'last_token' or 'mean'.
     """
     
     def __init__(
@@ -42,7 +47,8 @@ class LLMClassifier(nn.Module):
         tokenizer=None,
         head_type: str = 'linear',
         head_hidden_size: int = 512,
-        head_dropout: float = 0.1
+        head_dropout: float = 0.1,
+        pooling: str = 'last_token',
     ):
         super().__init__()
         self.base_model = base_model
@@ -51,6 +57,7 @@ class LLMClassifier(nn.Module):
         self.trainable_param_keywords = trainable_param_keywords or []
         self.tokenizer = tokenizer
         self.head_type = head_type
+        self.pooling = pooling
         self._lora_verified = False
         # Enable gradient checkpointing if available
         if hasattr(self.base_model, "gradient_checkpointing_enable"):
@@ -91,22 +98,59 @@ class LLMClassifier(nn.Module):
         Args:
             hidden_size: Input size from LLM.
             num_labels: Number of output classes.
-            head_type: Type of head ('linear', 'mlp', 'deep_mlp').
-            head_hidden_size: Hidden size for MLP heads.
-            head_dropout: Dropout rate for MLP heads.
+            head_type: 'linear', 'mlp', 'deep_mlp', or 'logistic'.
+                - 'linear':   nn.Linear(hidden_size, num_labels).  CrossEntropyLoss.
+                - 'mlp':      Linear -> GELU -> Dropout -> Linear.  CrossEntropyLoss.
+                - 'deep_mlp': Two hidden layers.  CrossEntropyLoss.
+                - 'logistic': nn.Linear(hidden_size, 1). BCEWithLogitsLoss (binary only).
+            head_hidden_size: Hidden size for MLP/deep_mlp heads.
+            head_dropout: Dropout rate for MLP/deep_mlp heads.
         
         Returns:
             Classification head module.
         """
         if head_type == 'linear':
-            # Simple logistic regression
             head = nn.Linear(hidden_size, num_labels)
             print(f"  - Added LINEAR classification head: {hidden_size} -> {num_labels}")
-        
+
+        elif head_type == 'mlp':
+            head = nn.Sequential(
+                nn.Linear(hidden_size, head_hidden_size),
+                nn.GELU(),
+                nn.Dropout(head_dropout),
+                nn.Linear(head_hidden_size, num_labels),
+            )
+            print(
+                f"  - Added MLP classification head: "
+                f"{hidden_size} -> {head_hidden_size} -> {num_labels}"
+            )
+
+        elif head_type == 'deep_mlp':
+            head = nn.Sequential(
+                nn.Linear(hidden_size, head_hidden_size),
+                nn.GELU(),
+                nn.Dropout(head_dropout),
+                nn.Linear(head_hidden_size, head_hidden_size // 2),
+                nn.GELU(),
+                nn.Dropout(head_dropout),
+                nn.Linear(head_hidden_size // 2, num_labels),
+            )
+            print(
+                f"  - Added DEEP_MLP classification head: "
+                f"{hidden_size} -> {head_hidden_size} -> {head_hidden_size // 2} -> {num_labels}"
+            )
+
+        elif head_type == 'logistic':
+            head = nn.Linear(hidden_size, 1)
+            print(
+                f"  - Added LOGISTIC classification head: {hidden_size} -> 1 "
+                f"(BCEWithLogitsLoss, binary)"
+            )
+
         else:
             raise ValueError(
                 f"Unknown head_type: '{head_type}'. "
-                f"Options: 'linear'"
+                f"Options: 'linear', 'mlp', 'deep_mlp', 'logistic'"
             )
         
         return head
@@ -127,6 +171,27 @@ class LLMClassifier(nn.Module):
         """Helper needed by Trainer to verify model compatibility."""
         return self.base_model.get_input_embeddings()
 
+    def _pool(self, hidden_states: torch.Tensor, attention_mask: torch.Tensor) -> torch.Tensor:
+        """
+        Pool hidden states into a single patient-level vector.
+
+        Args:
+            hidden_states: (batch_size, seq_len, hidden_size)
+            attention_mask: (batch_size, seq_len)
+
+        Returns:
+            (batch_size, hidden_size)
+        """
+        if self.pooling == 'mean':
+            mask_expanded = attention_mask.float().unsqueeze(-1)
+            summed = (hidden_states * mask_expanded).sum(dim=1)
+            counts = mask_expanded.sum(dim=1).clamp(min=1)
+            return summed / counts
+        else:  # last_token
+            sequence_lengths = attention_mask.sum(dim=1) - 1
+            batch_size = hidden_states.size(0)
+            return hidden_states[range(batch_size), sequence_lengths]
+
     def get_patient_representation(
         self,
         input_ids: torch.Tensor,
@@ -134,10 +199,7 @@ class LLMClassifier(nn.Module):
     ) -> torch.Tensor:
         """
         Compute the patient-level hidden representation used for classification.
-
-        This mirrors the forward pass up to (and including) the step where we
-        extract the last non-padding token's hidden state. It does NOT apply
-        the classification head.
+        Does NOT apply the classification head.
 
         Args:
             input_ids: (batch_size, seq_len) token IDs.
@@ -160,11 +222,7 @@ class LLMClassifier(nn.Module):
         else:
             hidden_states = outputs.hidden_states[-1]
 
-        sequence_lengths = attention_mask.sum(dim=1) - 1
-        batch_size = hidden_states.size(0)
-        last_hidden_states = hidden_states[range(batch_size), sequence_lengths]
-
-        return last_hidden_states
+        return self._pool(hidden_states, attention_mask)
     
     def forward(
         self,
@@ -221,19 +279,19 @@ class LLMClassifier(nn.Module):
         else:
             hidden_states = outputs.hidden_states[-1]
         
-        # Get the last non-padding token's hidden state (intended to be EOS)
-        sequence_lengths = attention_mask.sum(dim=1) - 1  # -1 for 0-indexing
-        batch_size = hidden_states.size(0)
-        last_hidden_states = hidden_states[range(batch_size), sequence_lengths]
+        # Pool into patient-level representation
+        pooled = self._pool(hidden_states, attention_mask)
         
-        
-        # Pass through classification head (logistic regression head by default)
-        logits = self.classifier(last_hidden_states)
+        # Pass through classification head
+        logits = self.classifier(pooled)
         
         # Calculate loss if labels provided
         loss = None
         if labels is not None:
-            if self.multi_label:
+            if self.head_type == 'logistic':
+                loss_fct = nn.BCEWithLogitsLoss()
+                loss = loss_fct(logits.squeeze(1), labels.float())
+            elif self.multi_label:
                 loss_fct = nn.BCEWithLogitsLoss()
                 loss = loss_fct(logits, labels.float())
             else:

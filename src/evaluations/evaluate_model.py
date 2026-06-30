@@ -23,6 +23,7 @@ from src.training.model_loader import (
     load_classification_model,
     load_pretrained_lora_model,
     is_qwen3_embedding_baseline_checkpoint,
+    is_qwen3_embedding_trainer_checkpoint,
     load_qwen3_embedding_classifier_from_checkpoint,
 )
 
@@ -98,8 +99,9 @@ class ModelEvaluator:
                 )
             return
 
-        # Case 2: Qwen3-Embedding baseline — AutoModel + PEFT + linear head (not Unsloth causal LM)
-        if is_qwen3_embedding_baseline_checkpoint(self.model_checkpoint):
+        # Case 2: Qwen3-Embedding baseline/fine-tuning checkpoints.
+        # Supports both final_model/ and checkpoint-*/ dirs when they contain full weights.
+        if is_qwen3_embedding_baseline_checkpoint(self.model_checkpoint) or is_qwen3_embedding_trainer_checkpoint(self.model_checkpoint):
             print(f"  - Qwen3-Embedding baseline save at {self.model_checkpoint}")
             self.model, self.tokenizer = load_qwen3_embedding_classifier_from_checkpoint(
                 self.model_checkpoint,

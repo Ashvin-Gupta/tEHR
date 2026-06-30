@@ -1,5 +1,6 @@
 import torch
 import numpy as np
+import logging
 from abc import abstractmethod
 from typing import Dict, Any
 
@@ -10,6 +11,8 @@ from src.models.llm_classifier import LLMClassifier
 from src.training.metrics import compute_classification_metrics
 from src.evaluations.evaluations import compute_baseline_metrics, plot_all_curves, save_results, print_results
 import os
+
+logger = logging.getLogger(__name__)
 
 
 class BaseLLMClassifierBaseline(BaseBaseline):
@@ -56,6 +59,37 @@ class BaseLLMClassifierBaseline(BaseBaseline):
 
     def _build_training_args(self, run_name: str) -> TrainingArguments:
         """Build TrainingArguments from config. Shared across all LLM classifier baselines."""
+        device_pref = str(self.training_config.get("device", "auto")).lower()
+        if device_pref not in {"auto", "cpu", "cuda"}:
+            raise ValueError(f"Unsupported training.device='{device_pref}'. Use one of: auto, cpu, cuda.")
+
+        has_cuda = torch.cuda.is_available()
+        require_cuda = bool(self.training_config.get("require_cuda", False))
+
+        use_no_cuda = False
+        if device_pref == "cpu":
+            use_no_cuda = True
+        elif device_pref == "cuda":
+            if not has_cuda:
+                if require_cuda:
+                    raise RuntimeError("training.device='cuda' but CUDA is not available on this node.")
+                logger.warning("training.device='cuda' requested but CUDA unavailable; falling back to CPU.")
+                use_no_cuda = True
+        # device_pref == "auto" keeps HF default (GPU if available, else CPU).
+
+        use_fp16 = bool(self.training_config.get("fp16", False))
+        use_bf16 = bool(self.training_config.get("bf16", True))
+
+        bf16_supported = bool(has_cuda and hasattr(torch.cuda, "is_bf16_supported") and torch.cuda.is_bf16_supported())
+
+        # Guard precision settings to avoid runtime crashes on unsupported hardware.
+        if use_bf16 and not bf16_supported:
+            print("bf16 requested but not supported on this setup; disabling bf16.")
+            use_bf16 = False
+        if use_fp16 and not has_cuda:
+            print("fp16 requested but CUDA is unavailable; disabling fp16.")
+            use_fp16 = False
+
         return TrainingArguments(
             output_dir=os.path.join(self.output_dir, "checkpoints"),
             run_name=run_name,
@@ -67,8 +101,9 @@ class BaseLLMClassifierBaseline(BaseBaseline):
             weight_decay=float(self.training_config.get("weight_decay", 0.01)),
             warmup_steps=int(self.training_config.get("warmup_steps", 100)),
             gradient_accumulation_steps=int(self.training_config.get("gradient_accumulation_steps", 2)),
-            fp16=bool(self.training_config.get("fp16", False)),
-            bf16=bool(self.training_config.get("bf16", True)),
+            fp16=use_fp16,
+            bf16=use_bf16,
+            no_cuda=use_no_cuda,
             logging_steps=int(self.training_config.get("logging_steps", 50)),
             eval_strategy="steps",
             eval_steps=int(self.training_config.get("eval_steps", 250)),

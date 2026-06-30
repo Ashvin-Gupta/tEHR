@@ -5,8 +5,8 @@
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=64G
 #SBATCH --gres=gpu:2
-#SBATCH --output=logs/ix-m-classifier.log
-#SBATCH --job-name=ix-m-classifier
+#SBATCH --output=logs/ix-m-hospital-mortality-classification.log
+#SBATCH --job-name=ix-m-hospital-mortality-classification
 
 set -e
 
@@ -37,12 +37,12 @@ export MASTER_PORT
 echo "Using MASTER_PORT=$MASTER_PORT for torchrun"
 
 # python -m src.pipelines.finetune_llm_classifier --config_filepath src/configs/classification_config.yaml
-# torchrun --nproc_per_node=2 src/pipelines/finetune_llm_classifier.py --config_filepath src/configs/mimic_classifier.yaml
+torchrun --nproc_per_node=2 src/pipelines/finetune_llm_classifier.py --config_filepath src/configs/mimic_classifier.yaml
 
-torchrun --nproc_per_node=2 --master_port="$MASTER_PORT" src/pipelines/finetune_llm_classifier.py \
-  --config_filepath src/configs/mimic_classifier.yaml \
-  --seed 2557135408 \
-  --checkpoint_path /home/ag619/experiments/Results/mimic-ICU-mortality-classification/seed_2557135408/checkpoint-1000
+# torchrun --nproc_per_node=3 --master_port="$MASTER_PORT" src/pipelines/finetune_llm_classifier.py \
+#   --config_filepath src/configs/mimic_classifier.yaml \
+#   --seed 1081433188 \
+#   --checkpoint_path /home/ag619/experiments/Results/mimic-hospital-readmission-classification/seed_1081433188/checkpoint-3000
 
 echo "Pipeline finished."
 conda deactivate

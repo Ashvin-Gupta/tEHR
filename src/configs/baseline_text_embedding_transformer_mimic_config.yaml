@@ -1,0 +1,47 @@
+name: "text_embedding_transformer_mimic"
+
+# ------------------------------------------------------------------
+# Embedder config — points to the precomputed .pt file.
+# Run src/pipelines/precompute_token_embeddings.py first to generate it.
+# ------------------------------------------------------------------
+embedder:
+  model_name: "Qwen/Qwen3-Embedding-0.6B"    # used only during precompute step
+  precomputed_embeddings_path: "/home/ag619/experiments/Results/mimic-baselines/text_embedding_transformer/token_embeddings_qwen3_0.6B.pt"
+  # To use ClinicalBERT embeddings instead, precompute with model_name=emilyalsentzer/Bio_ClinicalBERT
+  # and point here:
+  # precomputed_embeddings_path: "/home/ag619/experiments/Results/mimic-baselines/text_embedding_transformer/token_embeddings_clinicalbert.pt"
+
+model:
+  # hidden_dim is NOT configured here — it is set automatically from the
+  # embedder output dimension loaded from the precomputed embeddings file.
+  num_layers: 6
+  num_heads: 8           # must divide the embedder's output dimension evenly
+  ff_dim: 2048
+  dropout: 0.1
+  max_seq_length: 512
+  num_labels: 2
+  head_type: "logistic"  # linear | mlp | logistic
+  head_hidden_size: 256  # used only for mlp head
+
+wandb:
+  enabled: false
+  project: "MIMIC-IV-baselines"
+  run_name: "baseline-text-embedding-transformer-mimic"
+
+training:
+  output_dir: "/home/ag619/experiments/Results/mimic-baselines/text_embedding_transformer-hospital-readmission"
+  overwrite_output_dir: true
+  epochs: 10
+  batch_size: 512
+  learning_rate: 1e-4
+  weight_decay: 0.01
+  dataloader_num_workers: 2
+
+data:
+  data_dir: "/home/ag619/MIMIC-IV tokensiation"
+  vocab_filepath: "/home/ag619/MIMIC-IV tokensiation/vocab.csv"
+  aces_label_dir: "/home/ag619/MIMIC_data/labels/hospital_readmission"
+  lookup_dir: "/home/ag619/MIMIC_data/hosp"
+  dataset: "MIMIC"
+  task: "prediction"
+  label_column: "label"

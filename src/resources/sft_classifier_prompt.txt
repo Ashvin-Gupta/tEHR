@@ -1,0 +1,5 @@
+Given the following patient's EHR in text, output either a 0 or a 1 for whether that person will {task}.
+Patient EHR:
+{ehr_text}
+
+Answer:

@@ -26,11 +26,15 @@ def compute_classification_metrics(eval_pred):
     elif isinstance(predictions, dict):
         predictions = predictions['logits']
     
-    # Get predicted class (argmax of logits)
-    preds = np.argmax(predictions, axis=1)
+    t = torch.tensor(predictions, dtype=torch.float32)
 
-    # Calculate AUROC using softmax probabilities
-    probs = torch.softmax(torch.tensor(predictions), dim=1).numpy()[:, 1]
+    # Logistic head produces shape (N, 1); linear/mlp produce (N, C).
+    if t.ndim == 2 and t.shape[1] == 1:
+        probs = torch.sigmoid(t).squeeze(1).numpy()
+        preds = (probs >= 0.5).astype(int)
+    else:
+        preds = np.argmax(predictions, axis=1)
+        probs = torch.softmax(t, dim=1).numpy()[:, 1]
     
     # Calculate metrics
     accuracy = accuracy_score(labels, preds)

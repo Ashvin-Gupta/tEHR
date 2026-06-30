@@ -13,10 +13,12 @@ Stage 2:
       classification.
 """
 import os
+import copy
+import json
 import torch
 import numpy as np
 from typing import Dict, Any
-from transformers import AutoModel, AutoTokenizer, TrainingArguments, Trainer
+from transformers import AutoModel, AutoTokenizer, TrainingArguments, Trainer, TrainerCallback
 from peft import LoraConfig, get_peft_model, TaskType
 import wandb
 from datasets import Dataset
@@ -30,6 +32,22 @@ from src.data.qwen3_mlm_collator import Qwen3MLMCollator
 from src.training.metrics import compute_classification_metrics
 from src.evaluations.evaluations import save_results, compute_baseline_metrics, print_results, plot_all_curves
 from src.training.training_utils import extract_text, pack_and_chunk_texts
+from src.data.dataset_factory import get_dataset
+
+
+class Qwen3CheckpointExportCallback(TrainerCallback):
+    """Ensure each Trainer checkpoint contains baseline-loadable weights/config."""
+
+    def __init__(self, baseline: "Qwen3EmbeddingBaseline"):
+        self.baseline = baseline
+
+    def on_save(self, args, state, control, **kwargs):
+        model = kwargs.get("model")
+        if model is None:
+            return control
+        checkpoint_dir = os.path.join(args.output_dir, f"checkpoint-{state.global_step}")
+        self.baseline._export_qwen_checkpoint(checkpoint_dir, model)
+        return control
 
 
 class Qwen3EmbeddingBaseline(BaseBaseline):
@@ -196,6 +214,14 @@ class Qwen3EmbeddingBaseline(BaseBaseline):
         print(f"  - Total parameters: {total_params:,}")
         print(f"  - Trainable parameters: {trainable_params:,} / {total_params:,} ({pct:.2f}%)")
 
+    def _load_stage_datasets(self, splits, task_override=None):
+        """Load datasets with optional task override (used for MIMIC two-stage flow)."""
+        dataset_name = self.data_config.get("dataset", "CPRD")
+        data_cfg = copy.deepcopy(self.data_config)
+        if task_override is not None:
+            data_cfg["task"] = task_override
+        return {split: get_dataset(dataset_name, data_cfg, split) for split in splits}
+
     def build_classifier_model(self):
         """
         Wrap the shared `base_model` with a classification head.
@@ -317,9 +343,42 @@ class Qwen3EmbeddingBaseline(BaseBaseline):
             tokenizer=self.tokenizer,
             data_collator=collator,
             compute_metrics=compute_classification_metrics,
+            callbacks=[Qwen3CheckpointExportCallback(self)],
         )
 
         print("  - Trainer created successfully")
+
+    def _export_qwen_checkpoint(self, checkpoint_dir: str, model=None):
+        """
+        Export full classifier state/config so evaluate_model can load checkpoint-* dirs.
+        """
+        os.makedirs(checkpoint_dir, exist_ok=True)
+        model_to_save = model if model is not None else self.model
+        if model_to_save is None:
+            return
+        if hasattr(model_to_save, "module"):
+            model_to_save = model_to_save.module
+
+        torch.save(model_to_save.state_dict(), os.path.join(checkpoint_dir, "pytorch_model.bin"))
+        if self.tokenizer is not None:
+            self.tokenizer.save_pretrained(checkpoint_dir)
+        with open(os.path.join(checkpoint_dir, "config.json"), "w") as f:
+            json.dump({
+                "model_name": self.model_config.get("model_name"),
+                "hidden_size": self.model_config.get("hidden_size", 4096),
+                "num_labels": self.model_config.get("num_labels", 2),
+                "head_dropout": self.model_config.get("head_dropout", 0.1),
+                "use_lora": self.model_config.get("use_lora", False),
+                "lora": self.model_config.get("lora"),
+            }, f, indent=2)
+
+        # Hard validation: fail fast if checkpoint is incomplete.
+        required = ["pytorch_model.bin", "config.json", "tokenizer_config.json"]
+        missing = [name for name in required if not os.path.exists(os.path.join(checkpoint_dir, name))]
+        if missing:
+            raise RuntimeError(
+                f"Checkpoint export incomplete at {checkpoint_dir}. Missing files: {missing}"
+            )
 
         # Debug: print shapes of the first two training batches
         print("\n" + "=" * 80)
@@ -438,7 +497,12 @@ class Qwen3EmbeddingBaseline(BaseBaseline):
         print("\n" + "=" * 80)
         print("Training Qwen3-Embedding classifier...")
         print("=" * 80)
-        self.trainer.train()
+        resume_ckpt = self.training_config.get("resume_from_checkpoint")
+        if resume_ckpt:
+            print(f"Resuming classification training from checkpoint: {resume_ckpt}")
+            self.trainer.train(resume_from_checkpoint=resume_ckpt)
+        else:
+            self.trainer.train()
         print("\nTraining completed!")
 
     def evaluate(self, dataset, split_name: str = "validation") -> Dict[str, float]:
@@ -497,17 +561,35 @@ class Qwen3EmbeddingBaseline(BaseBaseline):
         run_name = self.setup_wandb()
         self.load_model()
 
-        # Load datasets once (text format for classification & for MLM packing)
+        # Load classification datasets (MIMIC stage-2 must use prediction/cohort data).
         self.data_config["format"] = "text"
-        datasets = self.load_datasets(splits=["train", "tuning", "held_out"])
+        dataset_name = self.data_config.get("dataset", "CPRD")
+        stage2_task = "prediction" if dataset_name == "MIMIC" else None
+        datasets = self._load_stage_datasets(["train", "tuning", "held_out"], task_override=stage2_task)
 
         # Optional Stage 1: MLM pretraining with LoRA adapters only
         if self.pretrain_config.get("enabled", False):
             print("\n" + "=" * 80)
             print("Two-stage training ENABLED: running MLM pretraining first.")
             print("=" * 80)
+            # Stage-1 for MIMIC uses full trajectories irrespective of cohort labels.
+            stage1_task = "pretrain" if dataset_name == "MIMIC" else None
+            stage1_datasets = self._load_stage_datasets(["train", "tuning", "held_out"], task_override=stage1_task)
+
+            # Optionally train MLM on all available splits for MIMIC.
+            if dataset_name == "MIMIC" and self.pretrain_config.get("use_all_splits_for_mimic", True):
+                merged_train = copy.deepcopy(stage1_datasets["train"])
+                merged_train.patient_records = (
+                    list(stage1_datasets["train"].patient_records)
+                    + list(stage1_datasets["tuning"].patient_records)
+                    + list(stage1_datasets["held_out"].patient_records)
+                )
+                stage1_datasets["train"] = merged_train
+                stage1_datasets["tuning"] = merged_train
+                print("  - MIMIC stage-1 uses train+tuning+held_out in pretrain mode")
+
             # Prepare packed MLM datasets (no per-patient truncation)
-            mlm_datasets = self.prepare_mlm_datasets(datasets)
+            mlm_datasets = self.prepare_mlm_datasets(stage1_datasets)
             self.build_mlm_model()
             self.create_mlm_trainer(mlm_datasets['train'], mlm_datasets['tuning'], run_name)
             self.train_mlm()

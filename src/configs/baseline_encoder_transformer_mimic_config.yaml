@@ -1,0 +1,47 @@
+name: "encoder_transformer_baseline_mimic"
+
+model:
+  vocab_size: null      # null = full vocabulary (no cap). Set to an integer to limit.
+  hidden_dim: 512
+  num_layers: 6
+  num_heads: 8
+  ff_dim: 2048
+  dropout: 0.1
+  max_seq_length: 512
+  num_labels: 2
+  head_type: "linear"   # linear | mlp | logistic
+  head_hidden_size: 256 # intermediate size for mlp head (ignored otherwise)
+  pooling: "mean"       # mean | cls
+
+training:
+  output_dir: "/home/ag619/experiments/Results/mimic-baselines/encoder_transformer-hospital-readmission"
+  overwrite_output_dir: true
+  epochs: 10
+  batch_size: 512
+  learning_rate: 1e-4
+  weight_decay: 0.01
+  dataloader_num_workers: 2
+
+pretrain:
+  enabled: true
+  # Optional: load a saved stage-1 checkpoint and skip MLM.
+  pretrained_checkpoint: "/home/ag619/experiments/Results/mimic-baselines/encoder_transformer/models/pretrained_encoder_stage1_mlm.pt"
+  force_pretrain: false
+  # For MIMIC: stage-1 pretrains on full corpus (train+tuning+held_out).
+  use_all_splits_for_mimic: true
+  epochs: 20
+  batch_size: 64
+  learning_rate: 1e-4
+  weight_decay: 0.01
+  mlm_probability: 0.15
+  dataloader_num_workers: 2
+
+data:
+  data_dir: "/home/ag619/MIMIC-IV tokensiation"
+  vocab_filepath: "/home/ag619/MIMIC-IV tokensiation/vocab.csv"
+  aces_label_dir: "/home/ag619/MIMIC_data/labels/hospital_readmission"
+  lookup_dir: "/home/ag619/MIMIC_data/hosp"
+  dataset: "MIMIC"
+  # Stage-2 uses ACES cohort labels. Stage-1 task is forced to pretrain in code.
+  task: "prediction"
+  label_column: "label"

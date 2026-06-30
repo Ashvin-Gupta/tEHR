@@ -25,7 +25,8 @@ cd "${BASE_DIR}"
 echo "Starting experiment from directory: $(pwd)"
 export PYTHONPATH="${BASE_DIR}:${PYTHONPATH}"
 
-python -m src.debug.debug_aces --config_filepath src/configs/mimic_debug.yaml
+# python -m src.debug.debug_aces --config_filepath src/configs/mimic_debug.yaml
+python -m tests.check_mimic_leakage
 
 echo "Pipeline finished."
 conda deactivate

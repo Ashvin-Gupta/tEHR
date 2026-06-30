@@ -15,6 +15,7 @@ BASELINE_REGISTRY = {
     "qwen3_embedding":       "src.baselines.baseline_qwen3_embedding.Qwen3EmbeddingBaseline",
     "qwen_llm_linear":       "src.baselines.baseline_qwen_llm_linear.QwenLLMLinearBaseline",
     "logreg_demo_events":    "src.baselines.baseline_logreg_demo_events.LogRegDemoEventsBaseline",
+    "text_embedding_transformer": "src.baselines.baseline_text_embedding_transformer.TextEmbeddingTransformerBaseline",
 }
 
 def load_class(dotted_path: str):

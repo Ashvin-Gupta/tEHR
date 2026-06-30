@@ -81,6 +81,18 @@ def is_qwen3_embedding_baseline_checkpoint(checkpoint_dir: str) -> bool:
     return True
 
 
+def is_qwen3_embedding_trainer_checkpoint(checkpoint_dir: str) -> bool:
+    """
+    Detect HF Trainer checkpoint dirs for qwen3 baseline (checkpoint-*/ with tokenizer/trainer state).
+    """
+    base = os.path.basename(os.path.normpath(checkpoint_dir))
+    return (
+        base.startswith("checkpoint-")
+        and os.path.exists(os.path.join(checkpoint_dir, "trainer_state.json"))
+        and os.path.exists(os.path.join(checkpoint_dir, "tokenizer_config.json"))
+    )
+
+
 def load_qwen3_embedding_classifier_from_checkpoint(
     checkpoint_dir: str,
     model_config: Dict[str, Any],
@@ -94,8 +106,11 @@ def load_qwen3_embedding_classifier_from_checkpoint(
     """
     print(f"\nLoading Qwen3-Embedding classifier from: {checkpoint_dir}")
 
-    with open(os.path.join(checkpoint_dir, "config.json"), "r") as f:
-        ckpt_meta = json.load(f)
+    cfg_path = os.path.join(checkpoint_dir, "config.json")
+    ckpt_meta: Dict[str, Any] = {}
+    if os.path.exists(cfg_path):
+        with open(cfg_path, "r") as f:
+            ckpt_meta = json.load(f)
 
     merged: Dict[str, Any] = dict(model_config)
     merged.update(ckpt_meta)
@@ -159,11 +174,23 @@ def load_qwen3_embedding_classifier_from_checkpoint(
         tokenizer=tokenizer,
     )
 
-    weights_path = os.path.join(checkpoint_dir, "pytorch_model.bin")
-    try:
-        state = torch.load(weights_path, map_location="cpu", weights_only=True)
-    except TypeError:
-        state = torch.load(weights_path, map_location="cpu")
+    pt_path = os.path.join(checkpoint_dir, "pytorch_model.bin")
+    sf_path = os.path.join(checkpoint_dir, "model.safetensors")
+    if os.path.exists(pt_path):
+        try:
+            state = torch.load(pt_path, map_location="cpu", weights_only=True)
+        except TypeError:
+            state = torch.load(pt_path, map_location="cpu")
+    elif os.path.exists(sf_path):
+        from safetensors.torch import load_file
+        state = load_file(sf_path)
+    else:
+        raise RuntimeError(
+            f"No classifier weights found in checkpoint dir: {checkpoint_dir}. "
+            "Expected `pytorch_model.bin` or `model.safetensors`. "
+            "If this is an older qwen3 baseline Trainer checkpoint, re-run with the "
+            "updated checkpoint exporter or use a checkpoint directory that contains full weights."
+        )
 
     missing, unexpected = full_model.load_state_dict(state, strict=False)
     if missing:
