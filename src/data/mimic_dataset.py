@@ -45,7 +45,7 @@ class MIMICDataset(BaseDataset):
         )
 
         # Load patient records
-        limit = 2 if split in ['tuning'] else None
+        limit = 5 if split in ['tuning'] else None
         self.patient_records = self._load_data(data_dir, split, limit=limit)
 
         # For prediction task: build ACES-keyed examples

@@ -26,7 +26,9 @@ echo "Starting experiment from directory: $(pwd)"
 export PYTHONPATH="${BASE_DIR}:${PYTHONPATH}"
 
 # python -m src.debug.debug_aces --config_filepath src/configs/mimic_debug.yaml
-python -m tests.check_mimic_leakage
+# python -m tests.check_mimic_leakage
+python src/analysis/summarize_mimic_labels.py \
+    --labels-dir /home/ag619/EHR-JEPA-Data/labels
 
 echo "Pipeline finished."
 conda deactivate

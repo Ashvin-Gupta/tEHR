@@ -17,10 +17,10 @@ model:
 wandb:
   enabled: true
   project: "MIMIC-IV-classification"
-  run_name: "mimic-hospital-mortality-classification-mistral"
+  run_name: "mimic-icu-mortality-classification-mistral"
 
 training:
-  output_dir: "/home/ag619/experiments/Results/mimic-hospital-mortality-classification"
+  output_dir: "/home/ag619/experiments/Results/mimic-icu-mortality-classification"
   overwrite_output_dir: false
   epochs: 1
   batch_size: 8
@@ -44,9 +44,9 @@ training:
 
 
 data:
-  data_dir: "/home/ag619/MIMIC-IV tokensiation"
-  vocab_filepath: "/home/ag619/MIMIC-IV tokensiation/vocab.csv"
-  aces_label_dir: "/home/ag619/MIMIC_data/labels/hospital_mortality"
+  data_dir: "/home/ag619/MIMIC-IV-tokenisation"
+  vocab_filepath: "/home/ag619/MIMIC-IV-tokenisation/vocab.csv"
+  aces_label_dir: "/home/ag619/MIMIC_data/labels/icu_mortality"
   lookup_dir: "/home/ag619/MIMIC_data/hosp"
   dataset: "MIMIC"
   task: "prediction"  # CRITICAL: Must be "prediction" to load ACES labels

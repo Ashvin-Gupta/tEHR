@@ -4,8 +4,8 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=8G
-#SBATCH --output=logs/ix-m-xgboost.log
-#SBATCH --job-name=ix-m-xgboost
+#SBATCH --output=logs/ix-m-xgboost-icu-mortality.log
+#SBATCH --job-name=ix-m-xgboost-icu-mortality
 
 set -e
 

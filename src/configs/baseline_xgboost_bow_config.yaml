@@ -24,16 +24,16 @@ model:
   reg_lambda: 1
 
 training:
-  output_dir: "/home/ag619/experiments/Results/mimic-hospital-readmission-classification/xgboost_bow"
+  output_dir: "/home/ag619/experiments/Results/mimic-icu-mortality-classification/xgboost_bow"
   overwrite_output_dir: true
   early_stopping_rounds: 10
   verbose: true
   n_jobs: -1
 
 data:
-  data_dir: "/home/ag619/MIMIC-IV tokensiation"
-  vocab_filepath: "/home/ag619/MIMIC-IV tokensiation/vocab.csv"
-  aces_label_dir: "/home/ag619/MIMIC_data/labels/hospital_readmission"
+  data_dir: "/home/ag619/MIMIC-IV-tokenisation"
+  vocab_filepath: "/home/ag619/MIMIC-IV-tokenisation/vocab.csv"
+  aces_label_dir: "/home/ag619/MIMIC_data/labels/icu_mortality"
   lookup_dir: "/home/ag619/MIMIC_data/hosp"
   dataset: "MIMIC"
   task: "prediction"  # CRITICAL: Must be "prediction" to load ACES labels
