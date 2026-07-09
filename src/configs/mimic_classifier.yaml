@@ -20,7 +20,7 @@ wandb:
   run_name: "mimic-icu-mortality-classification-mistral"
 
 training:
-  output_dir: "/home/ag619/experiments/Results/mimic-icu-mortality-classification"
+  output_dir: "/home/ag619/experiments/Results/mimic-icu-mortality-classification-rerun-ix-main"
   overwrite_output_dir: false
   epochs: 1
   batch_size: 8
