@@ -69,6 +69,7 @@ class MIMICDataset(BaseDataset):
             logger.warning("ACES labels file not found: %s", aces_path)
             return
         
+        print(f"  Building prediction examples from {aces_path}...", flush=True)
         aces_df = pl.read_parquet(aces_path).to_pandas()
 
         #subject_id -> list of records
@@ -85,6 +86,12 @@ class MIMICDataset(BaseDataset):
                 continue
             self.examples.append(row.to_dict())
 
+        print(
+            f"  Loaded {len(self.patient_records):,} patient trajectories → "
+            f"{len(self.examples):,} prediction examples "
+            f"({skipped:,} ACES rows skipped, no trajectory found)",
+            flush=True,
+        )
         logger.info(
             "  Loaded %d patient trajectories → %d prediction examples "
             "(%d ACES rows skipped, no trajectory found)",

@@ -91,7 +91,11 @@ class EHRPretrainer:
         return run_name, report_to
     
     def load_model(self):
-        """Load model and tokenizer with Unsloth."""
+        """
+        Load model and tokenizer.
+        Uses Unsloth by default; set ``model.use_unsloth: false`` in config to
+        fall back to HuggingFace + BitsAndBytes (required for MedGemma).
+        """
         logger.info("\n" + "=" * 80)
         logger.info(f"Loading model: {self.model_config['model_name']}")
         logger.info("=" * 80)
@@ -101,35 +105,57 @@ class EHRPretrainer:
             logger.info(f"  - CUDA devices: {torch.cuda.device_count()}")
         else:
             logger.info(f"  - CUDA not available, using CPU")
-        
-        self.model, self.tokenizer = FastLanguageModel.from_pretrained(
-            model_name=self.model_config['model_name'],
-            max_seq_length=self.model_config['max_length'],
-            dtype=None,
-            load_in_4bit=self.training_config.get('load_in_4bit', True),
-            device_map={"": self.local_rank}
-        )
+
+        use_unsloth = self.model_config.get('use_unsloth', True)
+
+        if use_unsloth:
+            self.model, self.tokenizer = FastLanguageModel.from_pretrained(
+                model_name=self.model_config['model_name'],
+                max_seq_length=self.model_config['max_length'],
+                dtype=None,
+                load_in_4bit=self.training_config.get('load_in_4bit', True),
+                device_map={"": self.local_rank},
+            )
+        else:
+            from src.training.model_loader import load_hf_model
+            self.model, self.tokenizer = load_hf_model(
+                model_name=self.model_config['model_name'],
+                max_seq_length=self.model_config['max_length'],
+                load_in_4bit=self.training_config.get('load_in_4bit', True),
+                local_rank=self.local_rank,
+            )
     
     
     def apply_lora(self):
-        """Apply LoRA adapters to the model."""
-        self.model = FastLanguageModel.get_peft_model(
-            self.model,
-            r=self.lora_config.get('r', 16),
-            target_modules=self.lora_config.get('target_modules', [
-                "q_proj", "k_proj", "v_proj", "o_proj", 
-                "gate_proj", "up_proj", "down_proj", 
-                "embed_tokens", "lm_head"
-            ]),
-            lora_alpha=self.lora_config.get('lora_alpha', 16),
-            lora_dropout=self.lora_config.get('lora_dropout', 0.05),
-            bias=self.lora_config.get('bias', "none"),
-            use_gradient_checkpointing=self.training_config.get('gradient_checkpointing', 'unsloth'),
-            random_state=42,
-            use_rslora=self.lora_config.get('use_rslora', True),
-            loftq_config=self.lora_config.get('loftq_config', None),
-        )
-        logger.info("  - Applied LoRA adapters (PEFT) to the model.")
+        """
+        Apply LoRA adapters to the model.
+        Uses Unsloth's ``get_peft_model`` when ``use_unsloth=True``, otherwise
+        falls back to standard PEFT ``get_peft_model``.
+        """
+        use_unsloth = self.model_config.get('use_unsloth', True)
+
+        if use_unsloth:
+            self.model = FastLanguageModel.get_peft_model(
+                self.model,
+                r=self.lora_config.get('r', 16),
+                target_modules=self.lora_config.get('target_modules', [
+                    "q_proj", "k_proj", "v_proj", "o_proj",
+                    "gate_proj", "up_proj", "down_proj",
+                    "embed_tokens", "lm_head",
+                ]),
+                lora_alpha=self.lora_config.get('lora_alpha', 16),
+                lora_dropout=self.lora_config.get('lora_dropout', 0.05),
+                bias=self.lora_config.get('bias', "none"),
+                use_gradient_checkpointing=self.training_config.get('gradient_checkpointing', 'unsloth'),
+                random_state=42,
+                use_rslora=self.lora_config.get('use_rslora', True),
+                loftq_config=self.lora_config.get('loftq_config', None),
+            )
+        else:
+            from src.training.model_loader import apply_lora_peft
+            self.model = apply_lora_peft(self.model, self.lora_config)
+
+        logger.info("  - Applied LoRA adapters to the model.")
     
     def prepare_datasets(self) -> tuple[Dataset, Optional[Dataset]]:
         """
@@ -290,12 +316,25 @@ class EHRPretrainer:
 
     
     def train(self):
-        """Run the training loop."""
+        """Run the training loop and report FLOPs on completion."""
         logger.info("\n" + "=" * 80)
         logger.info("Starting training...")
         logger.info("=" * 80 + "\n")
-        
+
         self.trainer.train()
+
+        # ── FLOPs reporting ─────────────────────────────────────────────────
+        try:
+            from src.training.flops_counter import report_flops_from_trainer
+            report_flops_from_trainer(
+                trainer=self.trainer,
+                model=self.model,
+                seq_length=int(self.model_config.get("max_length", 8192)),
+                output_dir=self.training_config.get("output_dir"),
+                local_rank=self.local_rank,
+            )
+        except Exception as _flops_err:
+            logger.warning(f"FLOPs reporting failed (non-fatal): {_flops_err}")
     
     def save_model(self):
         """Save the final trained model."""

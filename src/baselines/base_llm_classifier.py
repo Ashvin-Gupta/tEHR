@@ -51,6 +51,7 @@ class BaseLLMClassifierBaseline(BaseBaseline):
             head_type=self.model_config.get("head_type", "linear"),
             head_hidden_size=self.model_config.get("head_hidden_size", 512),
             head_dropout=self.model_config.get("head_dropout", 0.1),
+            pooling=self.model_config.get("pooling", "last_token"),
         )
 
     def _get_trainable_keywords(self):
@@ -149,6 +150,20 @@ class BaseLLMClassifierBaseline(BaseBaseline):
         datasets = self.load_datasets()
         self.create_trainer(datasets["train"], datasets["tuning"], run_name)
         self.trainer.train()
+
+        # ── FLOPs reporting ─────────────────────────────────────────────────
+        try:
+            from src.training.flops_counter import report_flops_from_trainer
+            report_flops_from_trainer(
+                trainer=self.trainer,
+                model=self.classifier_model,
+                seq_length=int(self.model_config.get("max_length", 8192)),
+                output_dir=self.output_dir,
+                local_rank=getattr(self, "local_rank", 0),
+            )
+        except Exception as _flops_err:
+            logger.warning(f"FLOPs reporting failed (non-fatal): {_flops_err}")
+
         val_metrics = self.evaluate_split(datasets["tuning"], "tuning")
         test_metrics = self.evaluate_split(datasets["held_out"], "held_out")
         if self.training_config.get("save_model", False):

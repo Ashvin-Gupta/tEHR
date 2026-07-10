@@ -78,14 +78,25 @@ class PureLLMBaseline(BaseBaseline):
         print(f"  - Max length: {max_length}")
         print(f"  - 4-bit quantization: {load_in_4bit}")
         
-        self.model, self.tokenizer = FastLanguageModel.from_pretrained(
-            model_name=model_name,
-            max_seq_length=max_length,
-            dtype=None,
-            load_in_4bit=load_in_4bit,
-            device_map="auto"
-        )
-        
+        use_unsloth = self.model_config.get("use_unsloth", True)
+
+        if use_unsloth:
+            self.model, self.tokenizer = FastLanguageModel.from_pretrained(
+                model_name=model_name,
+                max_seq_length=max_length,
+                dtype=None,
+                load_in_4bit=load_in_4bit,
+                device_map="auto",
+            )
+        else:
+            from src.training.model_loader import load_hf_model
+            self.model, self.tokenizer = load_hf_model(
+                model_name=model_name,
+                max_seq_length=max_length,
+                load_in_4bit=load_in_4bit,
+                local_rank=0,
+            )
+
         print(f"  - Model loaded successfully")
         print(f"  - Vocab size: {len(self.tokenizer)}")
 

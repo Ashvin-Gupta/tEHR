@@ -1,0 +1,50 @@
+name: "frozen_llm_linear_baseline_mimic_medgemma"
+# Ablation 5c (MedGemma): No pretraining; frozen MedGemma; train linear head only.
+
+output_dir: "/home/ag619/experiments/Results/mimic-ablation-frozen-no-pretrain-medgemma"
+
+model:
+  model_name: "google/medgemma-1.5-4b-it"
+  max_length: 12000
+  hidden_size: 2560
+  num_labels: 2
+  freeze_llm: true
+  head_type: "linear"
+  head_hidden_size: 512
+  head_dropout: 0.1
+  pooling: "last_token"
+  use_unsloth: false
+  load_in_4bit: true
+
+wandb:
+  enabled: true
+  project: "MIMIC-IV-classification"
+  run_name: "mimic-ablation-frozen-no-pretrain-medgemma"
+
+training:
+  output_dir: "/home/ag619/experiments/Results/mimic-ablation-frozen-no-pretrain-medgemma"
+  overwrite_output_dir: true
+  epochs: 1
+  batch_size: 8
+  eval_batch_size: 8
+  learning_rate: 1e-4
+  weight_decay: 0.01
+  warmup_steps: 100
+  gradient_accumulation_steps: 2
+  fp16: false
+  bf16: true
+  logging_steps: 10
+  eval_steps: 250
+  save_steps: 500
+  save_total_limit: 2
+  multi_label: false
+  dataloader_num_workers: 0
+
+data:
+  data_dir: "/home/ag619/MIMIC-IV-tokenisation"
+  vocab_filepath: "/home/ag619/MIMIC-IV-tokenisation/vocab.csv"
+  aces_label_dir: "/home/ag619/MIMIC_data/labels/icu_mortality"
+  lookup_dir: "/home/ag619/MIMIC_data/hosp"
+  dataset: "MIMIC"
+  task: "prediction"
+  sort_by_length: true

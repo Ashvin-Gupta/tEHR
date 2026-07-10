@@ -1,0 +1,53 @@
+name: "sft_llm_classifier_mimic_medgemma"
+# Exp 3 (MedGemma): SFT — train model to output "0" or "1" given EHR prompt.
+# Uses LoRA on the MedGemma instruct model.
+
+task:
+  description: "die in the ICU"
+
+model:
+  model_name: "google/medgemma-1.5-4b-it"
+  pretrained_checkpoint: null       # Optionally point to EHR-pretrained checkpoint
+  max_length: 8192
+  load_in_4bit: true
+  use_unsloth: false                # HF + BitsAndBytes backend
+  logit_low_threshold: -10.0
+
+lora:
+  r: 16
+  target_modules: ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
+  lora_alpha: 32
+  lora_dropout: 0.05
+
+prompt:
+  filepath: "src/resources/sft_classifier_prompt.txt"
+
+wandb:
+  enabled: true
+  project: "MIMIC-IV-classification"
+  run_name: "mimic-sft-classifier-medgemma"
+
+training:
+  output_dir: "/home/ag619/experiments/Results/mimic-sft-classification-medgemma"
+  epochs: 1
+  batch_size: 1
+  eval_batch_size: 1
+  learning_rate: 2e-5
+  weight_decay: 0.01
+  warmup_steps: 100
+  gradient_accumulation_steps: 4
+  fp16: false
+  bf16: true
+  logging_steps: 10
+  eval_steps: 200
+  save_steps: 200
+  save_total_limit: 2
+  dataloader_num_workers: 0
+
+data:
+  data_dir: "/home/ag619/MIMIC-IV-tokenisation"
+  vocab_filepath: "/home/ag619/MIMIC-IV-tokenisation/vocab.csv"
+  aces_label_dir: "/home/ag619/MIMIC_data/labels/icu_mortality"
+  lookup_dir: "/home/ag619/MIMIC_data/hosp"
+  dataset: "MIMIC"
+  task: "prediction"

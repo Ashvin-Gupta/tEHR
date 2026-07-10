@@ -20,8 +20,8 @@ prompt:
   filepath: "src/resources/icu_mortality_prompt.txt"
 
 data:
-  data_dir: "/home/ag619/MIMIC-IV tokensiation"
-  vocab_filepath: "/home/ag619/MIMIC-IV tokensiation/vocab.csv"
+  data_dir: "/home/ag619/MIMIC-IV-tokenisation"
+  vocab_filepath: "/home/ag619/MIMIC-IV-tokenisation/vocab.csv"
   aces_label_dir: "/home/ag619/MIMIC_data/labels/icu_mortality"
   lookup_dir: "/home/ag619/MIMIC_data/hosp"
   dataset: "MIMIC"

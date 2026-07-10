@@ -12,7 +12,12 @@ from torch.utils.data import ConcatDataset
 from src.data.classification_collator import ClassificationCollator
 from src.training.training_utils import compute_and_sort_by_length
 from src.models.llm_classifier import LLMClassifier
-from src.training.model_loader import load_pretrained_lora_model
+from src.training.model_loader import (
+    load_pretrained_lora_model,
+    load_pretrained_lora_model_hf,
+    load_hf_model,
+    apply_lora_peft,
+)
 from src.training.metrics import compute_classification_metrics
 from src.evaluations.evaluations import plot_all_curves, save_results
 
@@ -75,21 +80,91 @@ class EHRClassificationTrainer:
         return "classification-run"
     
     def load_pretrained_model(self):
-        """Load pretrained model with LoRA adapters from pretraining stage."""
+        """
+        Load model for classification fine-tuning.
+
+        Supports four modes controlled by config fields:
+          1. ``pretrained_checkpoint`` set, ``use_unsloth: true``  (default):
+             Load Unsloth checkpoint with LoRA — original behaviour.
+          2. ``pretrained_checkpoint`` set, ``use_unsloth: false``:
+             Load HF/PEFT checkpoint (e.g. saved MedGemma pretrain).
+          3. ``pretrained_checkpoint: null``, ``use_unsloth: true``:
+             Load fresh Unsloth base model; apply LoRA if ``train_lora: true``.
+             Used for ablation 5a (no pretrain + LoRA) and 5c (no pretrain, frozen).
+          4. ``pretrained_checkpoint: null``, ``use_unsloth: false``:
+             Load fresh HF base model (e.g. MedGemma ablations).
+        """
         print("\n" + "=" * 80)
-        print("Loading pretrained model...")
+        print("Loading model...")
         print("=" * 80)
-        
+
         pretrained_checkpoint = self.model_config.get('pretrained_checkpoint')
-        if not pretrained_checkpoint:
-            raise ValueError("'model.pretrained_checkpoint' must be set in config")
-        
-        self.base_model, self.tokenizer = load_pretrained_lora_model(
-            pretrained_checkpoint=pretrained_checkpoint,
-            max_seq_length=self.model_config.get('max_length', 8192),
-            load_in_4bit=self.training_config.get('load_in_4bit', True),
-            local_rank=self.local_rank
-        )
+        use_unsloth = self.model_config.get('use_unsloth', True)
+        train_lora = self.model_config.get('train_lora', False)
+
+        if pretrained_checkpoint:
+            # ── Mode 1 / 2: load from saved pretraining checkpoint ──────────
+            if use_unsloth:
+                self.base_model, self.tokenizer = load_pretrained_lora_model(
+                    pretrained_checkpoint=pretrained_checkpoint,
+                    max_seq_length=self.model_config.get('max_length', 8192),
+                    load_in_4bit=self.training_config.get('load_in_4bit', True),
+                    local_rank=self.local_rank,
+                )
+            else:
+                self.base_model, self.tokenizer = load_pretrained_lora_model_hf(
+                    pretrained_checkpoint=pretrained_checkpoint,
+                    max_seq_length=self.model_config.get('max_length', 8192),
+                    load_in_4bit=self.training_config.get('load_in_4bit', True),
+                    local_rank=self.local_rank,
+                )
+        else:
+            # ── Mode 3 / 4: no pretrained checkpoint — fresh base model ─────
+            model_name = self.model_config.get('model_name')
+            if not model_name:
+                raise ValueError(
+                    "Either 'model.pretrained_checkpoint' or 'model.model_name' "
+                    "must be set in config."
+                )
+            print(f"  - No pretrained checkpoint; loading fresh base model: {model_name}")
+
+            if use_unsloth:
+                from unsloth import FastLanguageModel
+                self.base_model, self.tokenizer = FastLanguageModel.from_pretrained(
+                    model_name=model_name,
+                    max_seq_length=self.model_config.get('max_length', 8192),
+                    dtype=None,
+                    load_in_4bit=self.training_config.get('load_in_4bit', True),
+                    device_map={"": self.local_rank},
+                )
+                if train_lora:
+                    lora_cfg = self.config.get('lora', {})
+                    self.base_model = FastLanguageModel.get_peft_model(
+                        self.base_model,
+                        r=lora_cfg.get('r', 16),
+                        target_modules=lora_cfg.get('target_modules', [
+                            "q_proj", "k_proj", "v_proj", "o_proj",
+                            "gate_proj", "up_proj", "down_proj",
+                        ]),
+                        lora_alpha=lora_cfg.get('lora_alpha', 32),
+                        lora_dropout=lora_cfg.get('lora_dropout', 0.05),
+                        bias=lora_cfg.get('bias', 'none'),
+                        use_gradient_checkpointing='unsloth',
+                        random_state=42,
+                        use_rslora=lora_cfg.get('use_rslora', True),
+                    )
+                    print("  - Applied fresh LoRA adapters (Unsloth)")
+            else:
+                self.base_model, self.tokenizer = load_hf_model(
+                    model_name=model_name,
+                    max_seq_length=self.model_config.get('max_length', 8192),
+                    load_in_4bit=self.training_config.get('load_in_4bit', True),
+                    local_rank=self.local_rank,
+                )
+                if train_lora:
+                    lora_cfg = self.config.get('lora', {})
+                    self.base_model = apply_lora_peft(self.base_model, lora_cfg)
+                    print("  - Applied fresh LoRA adapters (PEFT)")
     
     def create_classifier(self):
         """Wrap the pretrained model with a classification head."""
@@ -443,7 +518,7 @@ class EHRClassificationTrainer:
         )
     
     def train(self, resume_from_checkpoint: str | None = None):
-        """Run the training loop."""
+        """Run the training loop and report FLOPs on completion."""
         print("\n" + "=" * 80)
         print("Starting classification training...")
         print("=" * 80)
@@ -453,9 +528,6 @@ class EHRClassificationTrainer:
                 raise ValueError(f"Checkpoint not found: {resume_from_checkpoint}")
             print(f"  - Resuming from checkpoint: {resume_from_checkpoint}")
 
-            # Auto-detect checkpoint format: if the checkpoint only contains
-            # model.safetensors (and no pytorch_model.bin), force safetensors
-            # loading so the Trainer doesn't mistakenly look for the .bin file.
             safetensors_path = os.path.join(resume_from_checkpoint, "model.safetensors")
             bin_path = os.path.join(resume_from_checkpoint, "pytorch_model.bin")
             if os.path.exists(safetensors_path) and not os.path.exists(bin_path):
@@ -465,6 +537,19 @@ class EHRClassificationTrainer:
             self.trainer.train(resume_from_checkpoint=resume_from_checkpoint)
         else:
             self.trainer.train()
+
+        # ── FLOPs reporting ─────────────────────────────────────────────────
+        try:
+            from src.training.flops_counter import report_flops_from_trainer
+            report_flops_from_trainer(
+                trainer=self.trainer,
+                model=self.classifier_model,
+                seq_length=int(self.model_config.get("max_length", 8192)),
+                output_dir=self.training_config.get("output_dir"),
+                local_rank=self.local_rank,
+            )
+        except Exception as _flops_err:
+            logger.warning(f"FLOPs reporting failed (non-fatal): {_flops_err}")
     
     def save_model(self):
         """Save the final trained model."""

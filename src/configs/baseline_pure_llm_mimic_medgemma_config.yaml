@@ -1,0 +1,31 @@
+name: "pure_llm_baseline_mimic_medgemma"
+# Exp 2 (MedGemma): zero-shot prompting — logit-based 0/1 extraction.
+
+debug:
+  enabled: false
+  print_first_n: 5
+
+model:
+  model_name: "google/medgemma-1.5-4b-it"
+  max_length: 12000
+  load_in_4bit: true
+  use_unsloth: false                # HF + BitsAndBytes backend
+
+inference:
+  batch_size: 2
+  logit_low_threshold: -10.0
+
+output_dir: "/home/ag619/experiments/Results/mimic-baselines/pure_llm_mimic_medgemma"
+overwrite_output_dir: true
+
+prompt:
+  filepath: "src/resources/icu_mortality_prompt.txt"
+
+data:
+  data_dir: "/home/ag619/MIMIC-IV-tokenisation"
+  vocab_filepath: "/home/ag619/MIMIC-IV-tokenisation/vocab.csv"
+  aces_label_dir: "/home/ag619/MIMIC_data/labels/icu_mortality"
+  lookup_dir: "/home/ag619/MIMIC_data/hosp"
+  dataset: "MIMIC"
+  task: "prediction"
+  format: "text"

@@ -1,10 +1,10 @@
 #!/bin/bash
-#SBATCH --time=24:00:00
+#SBATCH --time=00:30:00
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=64G
-#SBATCH --gres=gpu:2
+#SBATCH --gres=gpu:1
 #SBATCH --output=logs/ix-m-sft-classifier.log
 #SBATCH --job-name=ix-m-sft-classifier
 
@@ -28,7 +28,7 @@ MASTER_PORT=$(get_free_port)
 export MASTER_PORT
 echo "Using MASTER_PORT=$MASTER_PORT"
 
-torchrun --nproc_per_node=2 src/pipelines/finetune_llm_sft_classifier.py \
+torchrun --nproc_per_node=1 src/pipelines/finetune_llm_sft_classifier.py \
     --config_filepath src/configs/mimic_sft_classifier.yaml
 
 echo "Pipeline finished."
