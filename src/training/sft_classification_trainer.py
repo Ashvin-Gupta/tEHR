@@ -22,6 +22,7 @@ from trl import SFTTrainer, SFTConfig
 
 from src.data.dataset_factory import get_dataset
 from src.evaluations.evaluations import compute_baseline_metrics, plot_all_curves, save_results
+from src.training.training_utils import resolve_binary_label_token_ids
 
 import logging
 logger = logging.getLogger(__name__)
@@ -195,16 +196,69 @@ class _SFTDataset:
 
     def as_hf_dataset(self) -> HFDataset:
         """
-        Return an HF Dataset with separate prompt/completion columns for TRL.
-        EHR text is already pre-truncated during __init__ so the tokenizer
-        does not need to truncate from the right.
-        Used by SFTTrainer.
+        Return an HF Dataset with separate prompt/completion columns.
+        Prefer ``as_tokenized_hf_dataset`` when using Unsloth's SFTTrainer,
+        which does not accept the prompt/completion column format.
         """
         rows = []
         for s in self.samples:
             prompt = self._format_prompt(s["text"])
             completion = " " + str(s["label"])
             rows.append({"prompt": prompt, "completion": completion})
+        return HFDataset.from_list(rows)
+
+    def as_tokenized_hf_dataset(self, tokenizer, max_length: int) -> HFDataset:
+        """
+        Pre-tokenise prompt+completion with completion-only labels.
+
+        Unsloth's patched SFTTrainer does not accept ``prompt``/``completion``
+        columns (it requires ``text`` or a ``formatting_func``, which is
+        incompatible with ``completion_only_loss``).  Pre-tokenising ourselves
+        and providing ``input_ids`` / ``attention_mask`` / ``labels`` lets
+        Unsloth skip its dataset prep while still masking the prompt in the loss
+        (prompt tokens get label ``-100``).
+        """
+        print(
+            f"  Tokenising {len(self.samples):,} samples "
+            f"(prompt masked, loss on answer token only)...",
+            flush=True,
+        )
+        bos_id = tokenizer.bos_token_id
+        eos_id = tokenizer.eos_token_id
+
+        rows = []
+        for s in tqdm(self.samples, desc="Tokenising SFT samples", mininterval=5.0):
+            prompt = self._format_prompt(s["text"])
+            completion = " " + str(s["label"])
+
+            prompt_ids = tokenizer.encode(prompt, add_special_tokens=False)
+            completion_ids = tokenizer.encode(completion, add_special_tokens=False)
+
+            bos = [bos_id] if bos_id is not None else []
+            eos = [eos_id] if eos_id is not None else []
+
+            # Safety net: EHR was already truncated in __init__, but if the
+            # assembled sequence is still too long, drop oldest prompt tokens.
+            overhead = len(bos) + len(completion_ids) + len(eos)
+            budget = max_length - overhead
+            if budget <= 0:
+                continue
+            if len(prompt_ids) > budget:
+                prompt_ids = prompt_ids[-budget:]
+
+            input_ids = bos + prompt_ids + completion_ids + eos
+            prompt_len = len(bos) + len(prompt_ids)
+            labels = ([-100] * prompt_len) + list(completion_ids) + list(eos)
+
+            rows.append(
+                {
+                    "input_ids": input_ids,
+                    "attention_mask": [1] * len(input_ids),
+                    "labels": labels,
+                }
+            )
+
+        print(f"  Tokenised {len(rows):,} samples.", flush=True)
         return HFDataset.from_list(rows)
 
     def prompts_and_labels(self) -> Tuple[List[str], List[int]]:
@@ -349,9 +403,10 @@ class SFTClassificationTrainer:
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
 
-        # Cache token IDs for "0" and "1"
-        self._token_id_0 = self.tokenizer.encode("0", add_special_tokens=False)[0]
-        self._token_id_1 = self.tokenizer.encode("1", add_special_tokens=False)[0]
+        # Cache vocab IDs for answer tokens "0" / "1" (see resolve_binary_label_token_ids).
+        self._token_id_0, self._token_id_1 = resolve_binary_label_token_ids(
+            self.tokenizer
+        )
         logger.info(
             f"  - Token IDs: '0' → {self._token_id_0}, '1' → {self._token_id_1}"
         )
@@ -400,25 +455,31 @@ class SFTClassificationTrainer:
     # Training
     # ------------------------------------------------------------------
 
-    def train(self, splits: Dict[str, "_SFTDataset"]):
-        """Run SFT via TRL SFTTrainer (loss computed only on the answer token)."""
+    def train(self, splits: Dict[str, "_SFTDataset"], resume_from_checkpoint: str | None = None):
+        """Run SFT via TRL/Unsloth SFTTrainer (loss computed only on the answer token)."""
         print("=" * 80, flush=True)
         print("Training with SFTTrainer...", flush=True)
         print("=" * 80, flush=True)
 
+        max_length = int(self.model_config.get("max_length", 8192))
         print(
-            f"  Building HF prompt/completion datasets "
+            f"  Building pre-tokenised datasets "
             f"(train={len(splits['train'].samples):,}, "
             f"val={len(splits['tuning'].samples):,})...",
             flush=True,
         )
-        train_hf = splits["train"].as_hf_dataset()
-        val_hf = splits["tuning"].as_hf_dataset()
-        print("  HF datasets ready.", flush=True)
+        # Pre-tokenise with prompt labels masked to -100.  Unsloth's SFTTrainer
+        # does not accept prompt/completion columns (requires formatting_func,
+        # which is incompatible with completion_only_loss), so we prepare the
+        # tokenised form ourselves and let Unsloth skip dataset prep.
+        train_hf = splits["train"].as_tokenized_hf_dataset(self.tokenizer, max_length)
+        val_hf = splits["tuning"].as_tokenized_hf_dataset(self.tokenizer, max_length)
+        print("  Tokenised datasets ready.", flush=True)
 
         report_to = "wandb" if self.wandb_config.get("enabled") else "none"
         sft_config = SFTConfig(
             output_dir=self.output_dir,
+            overwrite_output_dir=bool(self.training_config.get("overwrite_output_dir", False)),
             num_train_epochs=int(self.training_config.get("epochs", 1)),
             per_device_train_batch_size=int(self.training_config.get("batch_size", 4)),
             per_device_eval_batch_size=int(self.training_config.get("eval_batch_size", 4)),
@@ -437,19 +498,16 @@ class SFTClassificationTrainer:
             save_total_limit=int(self.training_config.get("save_total_limit", 2)),
             load_best_model_at_end=False,
             report_to=report_to,
-            max_length=int(self.model_config.get("max_length", 8192)),
-            completion_only_loss=True,
+            max_length=max_length,
+            # Labels already mask the prompt (-100); do not ask TRL/Unsloth to
+            # re-derive completion-only loss from prompt/completion columns.
+            completion_only_loss=False,
             packing=False,
             dataloader_num_workers=int(self.training_config.get("dataloader_num_workers", 0)),
+            remove_unused_columns=False,
         )
 
-        # SFTTrainer.__init__ tokenises the full train/eval sets — can take
-        # several minutes on ~75k long EHR prompts with no other output.
-        print(
-            "  Constructing SFTTrainer (TRL will tokenise the full dataset "
-            "here; this is necessary and can take several minutes)...",
-            flush=True,
-        )
+        print("  Constructing SFTTrainer...", flush=True)
         trainer = SFTTrainer(
             model=self.model,
             processing_class=self.tokenizer,
@@ -459,7 +517,11 @@ class SFTClassificationTrainer:
         )
         print("  SFTTrainer ready — starting training loop.", flush=True)
 
-        trainer.train()
+        if resume_from_checkpoint:
+            print(f"  Resuming from checkpoint: {resume_from_checkpoint}", flush=True)
+            trainer.train(resume_from_checkpoint=resume_from_checkpoint)
+        else:
+            trainer.train()
         self.trainer = trainer
 
         # ── FLOPs reporting ─────────────────────────────────────────────────
@@ -468,7 +530,7 @@ class SFTClassificationTrainer:
             report_flops_from_trainer(
                 trainer=self.trainer,
                 model=self.model,
-                seq_length=int(self.model_config.get("max_length", 8192)),
+                seq_length=max_length,
                 output_dir=self.training_config.get("output_dir"),
                 local_rank=self.local_rank,
             )
@@ -527,11 +589,11 @@ class SFTClassificationTrainer:
                 with torch.cuda.amp.autocast():
                     outputs = self.model(**inputs)
 
-                # Next-token logits at the last non-padding position
+                # Last non-pad token (correct for left- and right-padding).
                 last_logits = outputs.logits  # (B, T, V)
-                seq_lengths = inputs["attention_mask"].sum(dim=1) - 1
+                last_indices = inputs["attention_mask"].long().cumsum(dim=1).argmax(dim=1)
                 batch_sz = last_logits.size(0)
-                next_logits = last_logits[range(batch_sz), seq_lengths, :]
+                next_logits = last_logits[range(batch_sz), last_indices, :]
 
                 logit_0 = next_logits[:, self._token_id_0].cpu().float()
                 logit_1 = next_logits[:, self._token_id_1].cpu().float()
@@ -573,14 +635,14 @@ class SFTClassificationTrainer:
     # Full pipeline
     # ------------------------------------------------------------------
 
-    def run_full_pipeline(self):
+    def run_full_pipeline(self, resume_from_checkpoint: str | None = None):
         """Run training then evaluate on tuning and held_out splits."""
         os.makedirs(self.output_dir, exist_ok=True)
 
         self.setup_wandb()
         self.load_model()
         splits = self.prepare_datasets()
-        self.train(splits)
+        self.train(splits, resume_from_checkpoint=resume_from_checkpoint)
 
         # Switch to inference mode (Unsloth optimisation — skip for HF backend)
         if self.model_config.get("use_unsloth", True):

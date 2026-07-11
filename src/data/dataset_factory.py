@@ -41,7 +41,7 @@ def get_dataset(
         return MIMICDataset(
             data_dir = data_config['data_dir'],
             vocab_file = data_config['vocab_filepath'],
-            aces_label_dir = data_config['aces_label_dir'],
+            aces_label_dir = data_config.get('aces_label_dir'),
             lookup_dir = data_config['lookup_dir'],
             split = split,
             label_column = data_config.get('label_column', 'label'),

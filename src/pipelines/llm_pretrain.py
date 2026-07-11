@@ -4,11 +4,10 @@ Main pipeline for LLM continued pretraining on EHR data.
 This script orchestrates the entire pretraining workflow using the refactored modules.
 """
 import argparse
-import yaml
 import pprint
-from typing import Optional, Dict, Any, List
-from src.training.training_utils import seed_all
+from src.training.training_utils import prepare_run_reproducibility
 from src.training.pretrainer_trainer import EHRPretrainer
+from src.training.config_utils import load_config
 
 import logging
 logger = logging.getLogger(__name__)
@@ -28,32 +27,38 @@ DEFAULT_INFERENCE_PROMPT = (
 )
 
 
-def main(config_path: str):
+def main(config_path: str, seed: int | None = None, checkpoint_path: str | None = None):
     """
     Main function to run LLM continued pretraining.
     
     Args:
         config_path: Path to YAML configuration file.
+        seed: Optional CLI seed override.
+        checkpoint_path: Optional explicit checkpoint; else ``training.resume_from_last``.
     """
-    # Set seed for reproducibility
-    seed_all(42)
-    
-    # Load configuration
     print("=" * 80)
     print("LLM Continued Pretraining")
     print("=" * 80)
     print(f"\nLoading configuration from: {config_path}")
     
-    with open(config_path, "r") as f:
-        config = yaml.safe_load(f)
+    config = load_config(config_path)
+
+    seed, resume_ckpt = prepare_run_reproducibility(
+        config,
+        cli_seed=seed,
+        cli_checkpoint=checkpoint_path,
+        use_seed_subdir=False,  # keep stable pretrain output paths
+    )
+    print(f"Using seed: {seed}")
+    if resume_ckpt:
+        print(f"Resuming from: {resume_ckpt}")
     
     print('Loaded configuration:')
     pprint.pprint(config)
     print("=" * 80)
 
-    # Create pretrainer and run the full pipeline
     pretrainer = EHRPretrainer(config)
-    pretrainer.run_full_pipeline()
+    pretrainer.run_full_pipeline(resume_from_checkpoint=resume_ckpt)
     
     print("\n" + "=" * 80)
     print("Training completed successfully!")
@@ -70,6 +75,18 @@ if __name__ == "__main__":
         required=True,
         help="Path to the experiment config YAML file"
     )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=None,
+        help="Override config seed (default: config seed, usually 42)",
+    )
+    parser.add_argument(
+        "--checkpoint_path",
+        type=str,
+        default=None,
+        help="Explicit Trainer checkpoint to resume from (overrides resume_from_last)",
+    )
     args = parser.parse_args()
     
-    main(args.config_filepath)
+    main(args.config_filepath, seed=args.seed, checkpoint_path=args.checkpoint_path)

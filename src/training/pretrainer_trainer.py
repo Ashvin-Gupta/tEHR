@@ -238,6 +238,28 @@ class EHRPretrainer:
         logger.info("Setting up training...")
         logger.info("=" * 80)
         
+        # Align AMP flags with the loaded model dtype.
+        # Unsloth patches SFTTrainer globally and raises if the model is float16
+        # while bf16=True (common for HF+BitsAndBytes MedGemma loads).
+        use_fp16 = bool(self.training_config.get("fp16", False))
+        use_bf16 = bool(self.training_config.get("bf16", True))
+        try:
+            param_dtype = next(self.model.parameters()).dtype
+        except StopIteration:
+            param_dtype = None
+        if param_dtype == torch.float16 and use_bf16 and not use_fp16:
+            logger.warning(
+                "Model parameters are float16 but training.bf16=True; "
+                "switching to fp16=True, bf16=False for Unsloth/SFTTrainer compatibility."
+            )
+            use_fp16, use_bf16 = True, False
+        elif param_dtype == torch.bfloat16 and use_fp16 and not use_bf16:
+            logger.warning(
+                "Model parameters are bfloat16 but training.fp16=True; "
+                "switching to bf16=True, fp16=False."
+            )
+            use_fp16, use_bf16 = False, True
+
         # Define the SFT configuration with all your detailed parameters
         training_args = SFTConfig(
             output_dir=self.training_config['output_dir'],
@@ -268,8 +290,8 @@ class EHRPretrainer:
             metric_for_best_model="loss" if val_dataset else None,
             
             # Performance
-            fp16=self.training_config.get('fp16', False),
-            bf16=self.training_config.get('bf16', True),
+            fp16=use_fp16,
+            bf16=use_bf16,
             gradient_accumulation_steps=self.training_config.get('gradient_accumulation_steps', 1),
             gradient_checkpointing=self.training_config.get('gradient_checkpointing', False),
             
@@ -315,13 +337,17 @@ class EHRPretrainer:
         effective_global_bs = per_device_bs * grad_acc * world_size
 
     
-    def train(self):
+    def train(self, resume_from_checkpoint: str | None = None):
         """Run the training loop and report FLOPs on completion."""
         logger.info("\n" + "=" * 80)
         logger.info("Starting training...")
         logger.info("=" * 80 + "\n")
 
-        self.trainer.train()
+        if resume_from_checkpoint:
+            logger.info(f"Resuming from checkpoint: {resume_from_checkpoint}")
+            self.trainer.train(resume_from_checkpoint=resume_from_checkpoint)
+        else:
+            self.trainer.train()
 
         # ── FLOPs reporting ─────────────────────────────────────────────────
         try:
@@ -350,7 +376,7 @@ class EHRPretrainer:
         
         logger.info(f"  - Model + tokenizer saved to: {final_model_path}")
     
-    def run_full_pipeline(self):
+    def run_full_pipeline(self, resume_from_checkpoint: str | None = None):
         """
         Run the complete pretraining pipeline.
         
@@ -371,7 +397,7 @@ class EHRPretrainer:
         self.create_trainer(train_dataset, val_dataset, run_name, report_to)
         
         # Train
-        self.train()
+        self.train(resume_from_checkpoint=resume_from_checkpoint)
         
         # Save
         self.save_model()

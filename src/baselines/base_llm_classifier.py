@@ -149,7 +149,13 @@ class BaseLLMClassifierBaseline(BaseBaseline):
         self.create_classifier()
         datasets = self.load_datasets()
         self.create_trainer(datasets["train"], datasets["tuning"], run_name)
-        self.trainer.train()
+
+        resume_ckpt = self.training_config.get("resume_from_checkpoint")
+        if resume_ckpt:
+            print(f"Resuming from checkpoint: {resume_ckpt}")
+            self.trainer.train(resume_from_checkpoint=resume_ckpt)
+        else:
+            self.trainer.train()
 
         # ── FLOPs reporting ─────────────────────────────────────────────────
         try:

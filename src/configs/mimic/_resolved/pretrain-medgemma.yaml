@@ -1,0 +1,61 @@
+seed: 42
+training:
+  seed: 42
+  resume_from_last: false
+  output_dir: /home/ag619/experiments/Results/Pretrain-medgemma-Mimic
+  overwrite_output_dir: true
+  load_in_4bit: true
+  epochs: 1
+  batch_size: 4
+  eval_batch_size: 4
+  learning_rate: 1e-5
+  weight_decay: 0.05
+  warmup_steps: 500
+  gradient_accumulation_steps: 4
+  gradient_checkpointing: true
+  fp16: false
+  bf16: true
+  logging_steps: 10
+  eval_steps: 500
+  save_steps: 1000
+  save_total_limit: 3
+  dataloader_num_workers: 4
+data:
+  data_dir: /home/ag619/MIMIC-IV-tokenisation
+  vocab_filepath: /home/ag619/MIMIC-IV-tokenisation/vocab.csv
+  lookup_dir: /home/ag619/MIMIC_data/hosp
+  dataset: MIMIC
+  task: pretrain
+  sort_by_length: false
+  label_column: label
+lora:
+  r: 16
+  target_modules:
+  - q_proj
+  - k_proj
+  - v_proj
+  - o_proj
+  - gate_proj
+  - up_proj
+  - down_proj
+  lora_alpha: 32
+  lora_dropout: 0.05
+  bias: none
+  use_rslora: true
+name: mimic_pretrain_medgemma
+wandb:
+  enabled: true
+  project: Pretrain-MIMIC
+  run_name: pretrain-medgemma
+model:
+  max_length: 12000
+  model_name: google/medgemma-1.5-4b-it
+  instruct_model_name: google/medgemma-1.5-4b-it
+  pretrained_checkpoint: null
+  hidden_size: 2560
+  use_unsloth: false
+_aliases:
+  model_tag: medgemma
+_meta:
+  experiment: pretrain
+  model: medgemma

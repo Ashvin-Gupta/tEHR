@@ -55,7 +55,14 @@ def load_hf_model(
 
     print(f"\nLoading model (HF backend): {model_name}")
 
-    tokenizer = AutoTokenizer.from_pretrained(model_name)
+    # Gated models (e.g. MedGemma) need an authenticated HF token.
+    hf_token = (
+        os.environ.get("HF_TOKEN")
+        or os.environ.get("HUGGING_FACE_HUB_TOKEN")
+        or True  # fall back to cached huggingface-cli login
+    )
+
+    tokenizer = AutoTokenizer.from_pretrained(model_name, token=hf_token)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
     tokenizer.padding_side = "right"
@@ -74,6 +81,7 @@ def load_hf_model(
         quantization_config=quantization_config,
         device_map=device,
         trust_remote_code=True,
+        token=hf_token,
     )
     if not load_in_4bit:
         extra_kwargs["torch_dtype"] = torch.bfloat16

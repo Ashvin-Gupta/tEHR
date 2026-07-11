@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --time=24:00:00
+#SBATCH --time=00:30:00
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8
@@ -39,8 +39,9 @@ export MASTER_PORT
 echo "Using MASTER_PORT=$MASTER_PORT for torchrun"
 
 
-python -m src.pipelines.run_baseline --baseline encoder_transformer --config_filepath src/configs/baseline_encoder_transformer_mimic_config.yaml
+# python -m src.pipelines.run_baseline --baseline encoder_transformer --config_filepath src/configs/baseline_encoder_transformer_mimic_config.yaml
 # python -m src.pipelines.run_baseline --baseline clinicalbert --config_filepath src/configs/baseline_clinicalbert_mimic_config.yaml
+python -m src.pipelines.run_baseline --baseline pure_llm --config_filepath src/configs/baseline_pure_llm_config.yaml
 
 echo "Pipeline finished."
 conda deactivate

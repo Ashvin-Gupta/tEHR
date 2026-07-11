@@ -26,7 +26,12 @@ class BaseBaseline(ABC):
         self.config = config
         self.model_config = config.get("model", {})
         self.data_config = config["data"]
-        self.output_dir = config.get("output_dir", "./outputs")
+        self.training_config = config.get("training", {})
+        self.output_dir = (
+            config.get("output_dir")
+            or self.training_config.get("output_dir")
+            or "./outputs"
+        )
         self.local_rank = int(os.environ.get("LOCAL_RANK", 0))
         setup_output_dir(self.output_dir)
 

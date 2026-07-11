@@ -1,6 +1,8 @@
 import argparse
 import importlib
-import yaml
+
+from src.training.config_utils import load_config
+from src.training.training_utils import prepare_run_reproducibility
 
 BASELINE_REGISTRY = {
     "frozen_llm_linear":     "src.baselines.baseline_frozen_llm_linear.FrozenLLMLinearBaseline",
@@ -27,10 +29,38 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--baseline", required=True, choices=BASELINE_REGISTRY.keys())
     parser.add_argument("--config_filepath", required=True)
+    parser.add_argument("--seed", type=int, default=None, help="Override config seed")
+    parser.add_argument(
+        "--checkpoint_path",
+        type=str,
+        default=None,
+        help="Explicit Trainer checkpoint to resume from (overrides resume_from_last)",
+    )
     args = parser.parse_args()
 
-    with open(args.config_filepath) as f:
-        config = yaml.safe_load(f)
+    config = load_config(args.config_filepath)
+
+    # Align top-level output_dir with training.output_dir when only the latter is set.
+    training = config.setdefault("training", {})
+    if not config.get("output_dir") and training.get("output_dir"):
+        config["output_dir"] = training["output_dir"]
+    if training.get("output_dir") is None and config.get("output_dir"):
+        training["output_dir"] = config["output_dir"]
+
+    seed, resume_ckpt = prepare_run_reproducibility(
+        config,
+        cli_seed=args.seed,
+        cli_checkpoint=args.checkpoint_path,
+        use_seed_subdir=False,
+    )
+    # Keep top-level output_dir in sync after any path rewrites.
+    if training.get("output_dir"):
+        config["output_dir"] = training["output_dir"]
+    if resume_ckpt:
+        training["resume_from_checkpoint"] = resume_ckpt
+        print(f"Using seed={seed}; resume_from_checkpoint={resume_ckpt}")
+    else:
+        print(f"Using seed={seed}")
 
     baseline_class = load_class(BASELINE_REGISTRY[args.baseline])
     baseline = baseline_class(config)

@@ -1,5 +1,4 @@
 import os
-import yaml
 import logging
 from typing import Dict, Any
 
@@ -7,10 +6,8 @@ logger = logging.getLogger(__name__)
 
 
 def load_baseline_config(config_path: str) -> Dict[str, Any]:
-    if not os.path.exists(config_path):
-        raise FileNotFoundError(f"Config file not found: {config_path}")
-    with open(config_path) as f:
-        config = yaml.safe_load(f)
+    from src.training.config_utils import load_config
+    config = load_config(config_path)
     if "data" not in config:
         raise ValueError("Config missing required section: 'data'")
     return config

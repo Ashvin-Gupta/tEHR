@@ -1,0 +1,24 @@
+# MedGemma-1.5-4B-IT overlay — merged on top of an experiment config by run.sh
+# Requires HF_TOKEN and accepting the model license on Hugging Face.
+
+model:
+  model_name: "google/medgemma-1.5-4b-it"
+  instruct_model_name: "google/medgemma-1.5-4b-it"
+  # Update after pretrain finishes:
+  pretrained_checkpoint: "/home/ag619/experiments/Results/Pretrain-MedGemma-4B-Mimic/checkpoint-XXXX"
+  hidden_size: 2560
+  use_unsloth: false
+  max_length: 12000
+
+# Slightly smaller batches for the multimodal-derived backbone.
+# HF+BitsAndBytes loads often report float16; Unsloth SFTTrainer requires
+# fp16=True/bf16=False in that case (auto-fixed in pretrainer, set explicitly here).
+training:
+  batch_size: 4
+  eval_batch_size: 4
+  gradient_accumulation_steps: 4
+  fp16: true
+  bf16: false
+
+_aliases:
+  model_tag: "medgemma"

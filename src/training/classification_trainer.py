@@ -201,115 +201,61 @@ class EHRClassificationTrainer:
 
     def _sort_with_cache(self, dataset, split: str, shuffle_buckets: bool, num_buckets: int = 20):
         """
-        Sort a dataset by sequence length, caching the sorted indices so that
-        we do not need to recompute lengths every time we run a new model.
-        Uses a shared cache dir (data_cache_dir) when set, so all seeds/ranks
-        reuse the same cache. Uses a lock file so only one process computes when
-        multiple ranks start together.
+        Sort a dataset by sequence length, caching the sorted indices.
+
+        Cache layout (shared across experiments for the same task+model)::
+
+            {data_cache_dir}/MIMIC_{split}_sorted.pt
+
+        ``data_cache_dir`` is normally set by ``build_mimic_config`` to
+        ``/home/ag619/experiments/labels_cache/{task}/{model}``.
+
+        The cache is **tokenizer-specific**: Mistral and MedGemma must not share
+        a directory, because token lengths (and thus sort order) differ.
+        Filenames no longer embed checkpoint basenames like ``checkpoint-14000``.
         """
         print("Sorting dataset with cache...")
         if not self.data_config.get('sort_by_length', False):
             return dataset
 
         dataset_name = self.data_config.get("dataset", "CPRD")
-        tokenizer_id = getattr(self.tokenizer, "name_or_path", "tokenizer")
-        tokenizer_id_basename = os.path.basename(str(tokenizer_id))
-        # Use shared cache root when set (base output dir), so all seeds share one cache
-        cache_base = self.training_config.get(
-            "data_cache_dir", self.training_config["output_dir"]
-        )
-        cache_root = os.path.join(cache_base, "data_cache", "length_sorted")
+        cache_root = self.training_config.get("data_cache_dir")
+        if not cache_root:
+            # Fallback for ad-hoc runs without the shared labels_cache path.
+            cache_root = os.path.join(
+                self.training_config["output_dir"], "data_cache", "length_sorted"
+            )
         os.makedirs(cache_root, exist_ok=True)
 
-        cache_filename = f"{dataset_name}_{split}_sorted_{tokenizer_id_basename}.pt"
+        cache_filename = f"{dataset_name}_{split}_sorted.pt"
         cache_path = os.path.join(cache_root, cache_filename)
         lock_path = cache_path + ".lock"
 
-        # Robustness: tokenizer_id_basename can change depending on what checkpoint
-        # directory you point Unsloth at (e.g. `checkpoint-4000` vs the original
-        # base model id). If the exact cache filename doesn't exist, but there is
-        # another `*_sorted_*.pt` for the same dataset+split in `cache_root`,
-        # reuse the closest match and update the expected cache naming.
+        # One-time migration: accept legacy
+        #   MIMIC_{split}_sorted_checkpoint-*.pt  (or any *_sorted_*.pt)
+        # sitting in the same directory and rename to the stable filename.
         if not os.path.exists(cache_path):
             prefix = f"{dataset_name}_{split}_sorted_"
-            candidates = [
+            legacy = [
                 f
                 for f in os.listdir(cache_root)
-                if f.endswith(".pt") and f.startswith(prefix)
+                if f.startswith(prefix) and f.endswith(".pt")
             ]
-
-            if candidates:
-                # Optional override (for future experiments). If not provided we
-                # prefer the Mistral tokenizer basename used when building caches.
-                preferred_exact = self.training_config.get("data_cache_tokenizer_basename")
-                preferred_substrings = self.training_config.get(
-                    "data_cache_tokenizer_preferred_substrings",
-                    ["mistral-7b-v0.3-bnb-4bit"],
+            if legacy:
+                legacy.sort(
+                    key=lambda f: os.path.getmtime(os.path.join(cache_root, f)),
+                    reverse=True,
                 )
-                preferred_substrings = [str(s).lower() for s in preferred_substrings]
-
-                def _extract_tok_basename(fname: str) -> str | None:
-                    if not (fname.startswith(prefix) and fname.endswith(".pt")):
-                        return None
-                    return fname[len(prefix) : -len(".pt")]
-
-                # 1) exact match if explicitly configured
-                if preferred_exact:
-                    preferred_exact = str(preferred_exact)
-                    exact = [
-                        f
-                        for f in candidates
-                        if _extract_tok_basename(f) == preferred_exact
-                    ]
-                    if exact:
-                        chosen = sorted(exact)[0]
-                    else:
-                        chosen = None
-                else:
-                    chosen = None
-
-                # 2) prefer one containing a known substring
-                if chosen is None and preferred_substrings:
-                    lowered = [f for f in candidates]
-                    scored = []
-                    for f in lowered:
-                        tok_base = (_extract_tok_basename(f) or "").lower()
-                        score = 0
-                        for i, s in enumerate(preferred_substrings):
-                            if s in tok_base:
-                                # earlier items in preferred_substrings are higher priority
-                                score = 1000 - i
-                                break
-                        scored.append((score, f))
-                    scored.sort(reverse=True, key=lambda x: x[0])
-                    if scored and scored[0][0] > 0:
-                        chosen = scored[0][1]
-
-                # 3) otherwise, use the newest candidate
-                if chosen is None:
-                    candidates.sort(key=lambda f: os.path.getmtime(os.path.join(cache_root, f)), reverse=True)
-                    chosen = candidates[0]
-
-                chosen_tok_basename = _extract_tok_basename(chosen)
-                chosen_cache_path = os.path.join(cache_root, chosen)
-
+                legacy_path = os.path.join(cache_root, legacy[0])
                 if self.local_rank == 0:
                     print(
-                        "  - Cache miss for expected filename, but reusing existing cache "
-                        f"file: {chosen_cache_path}"
+                        f"  - Migrating legacy cache {legacy_path} → {cache_path}"
                     )
-                    print(
-                        "  - Updating tokenizer_id_basename used for cache naming to: "
-                        f"{chosen_tok_basename}"
-                    )
-
-                # Update naming variables to point at the reused cache file.
-                # This makes subsequent runs look for the same stable filename.
-                if chosen_tok_basename:
-                    tokenizer_id_basename = chosen_tok_basename
-                    cache_filename = f"{dataset_name}_{split}_sorted_{tokenizer_id_basename}.pt"
-                    cache_path = os.path.join(cache_root, cache_filename)
-                    lock_path = cache_path + ".lock"
+                    try:
+                        os.rename(legacy_path, cache_path)
+                    except OSError:
+                        import shutil
+                        shutil.copy2(legacy_path, cache_path)
 
         def _load_indices(path):
             try:
@@ -319,7 +265,10 @@ class EHRClassificationTrainer:
 
         # Fast path: cache already exists
         if os.path.exists(cache_path):
-            print(f"  - Found cached length-sorted indices for split '{split}', loading from disk...")
+            print(
+                f"  - Found cached length-sorted indices for split '{split}' "
+                f"at {cache_path}"
+            )
             indices = _load_indices(cache_path)
             return torch.utils.data.Subset(dataset, indices)
 
@@ -334,7 +283,10 @@ class EHRClassificationTrainer:
 
         if acquired:
             # We hold the lock: compute and write, then remove lock
-            print(f"  - No cached length-sorted indices for split '{split}', computing and caching...")
+            print(
+                f"  - No cached length-sorted indices for split '{split}', "
+                f"computing and caching to {cache_path}..."
+            )
             sorted_dataset = compute_and_sort_by_length(
                 dataset,
                 self.tokenizer,
@@ -354,7 +306,10 @@ class EHRClassificationTrainer:
         for _ in range(14400):
             time.sleep(1)
             if os.path.exists(cache_path):
-                print(f"  - Found cached length-sorted indices for split '{split}' (written by another process), loading...")
+                print(
+                    f"  - Found cached length-sorted indices for split '{split}' "
+                    f"(written by another process), loading..."
+                )
                 indices = _load_indices(cache_path)
                 return torch.utils.data.Subset(dataset, indices)
         raise TimeoutError(
