@@ -27,7 +27,7 @@ EMBEDDINGS_PATH="/home/ag619/experiments/Results/mimic-baselines/text_embedding_
 if [ ! -f "${EMBEDDINGS_PATH}" ]; then
     echo "Precomputing token embeddings..."
     python -m src.pipelines.precompute_token_embeddings \
-        --vocab_filepath  "/home/ag619/MIMIC-IV tokensiation/vocab.csv" \
+        --vocab_filepath  "/home/ag619/MIMIC-IV-tokenisation/vocab.csv" \
         --lookup_dir      "/home/ag619/MIMIC_data/hosp" \
         --model_name      "Qwen/Qwen3-Embedding-0.6B" \
         --output_path     "${EMBEDDINGS_PATH}" \

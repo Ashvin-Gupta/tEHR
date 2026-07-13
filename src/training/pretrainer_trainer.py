@@ -91,7 +91,11 @@ class EHRPretrainer:
         return run_name, report_to
     
     def load_model(self):
-        """Load model and tokenizer with Unsloth."""
+        """
+        Load model and tokenizer.
+        Uses Unsloth by default; set ``model.use_unsloth: false`` in config to
+        fall back to HuggingFace + BitsAndBytes (required for MedGemma).
+        """
         logger.info("\n" + "=" * 80)
         logger.info(f"Loading model: {self.model_config['model_name']}")
         logger.info("=" * 80)
@@ -101,35 +105,57 @@ class EHRPretrainer:
             logger.info(f"  - CUDA devices: {torch.cuda.device_count()}")
         else:
             logger.info(f"  - CUDA not available, using CPU")
-        
-        self.model, self.tokenizer = FastLanguageModel.from_pretrained(
-            model_name=self.model_config['model_name'],
-            max_seq_length=self.model_config['max_length'],
-            dtype=None,
-            load_in_4bit=self.training_config.get('load_in_4bit', True),
-            device_map={"": self.local_rank}
-        )
+
+        use_unsloth = self.model_config.get('use_unsloth', True)
+
+        if use_unsloth:
+            self.model, self.tokenizer = FastLanguageModel.from_pretrained(
+                model_name=self.model_config['model_name'],
+                max_seq_length=self.model_config['max_length'],
+                dtype=None,
+                load_in_4bit=self.training_config.get('load_in_4bit', True),
+                device_map={"": self.local_rank},
+            )
+        else:
+            from src.training.model_loader import load_hf_model
+            self.model, self.tokenizer = load_hf_model(
+                model_name=self.model_config['model_name'],
+                max_seq_length=self.model_config['max_length'],
+                load_in_4bit=self.training_config.get('load_in_4bit', True),
+                local_rank=self.local_rank,
+            )
     
     
     def apply_lora(self):
-        """Apply LoRA adapters to the model."""
-        self.model = FastLanguageModel.get_peft_model(
-            self.model,
-            r=self.lora_config.get('r', 16),
-            target_modules=self.lora_config.get('target_modules', [
-                "q_proj", "k_proj", "v_proj", "o_proj", 
-                "gate_proj", "up_proj", "down_proj", 
-                "embed_tokens", "lm_head"
-            ]),
-            lora_alpha=self.lora_config.get('lora_alpha', 16),
-            lora_dropout=self.lora_config.get('lora_dropout', 0.05),
-            bias=self.lora_config.get('bias', "none"),
-            use_gradient_checkpointing=self.training_config.get('gradient_checkpointing', 'unsloth'),
-            random_state=42,
-            use_rslora=self.lora_config.get('use_rslora', True),
-            loftq_config=self.lora_config.get('loftq_config', None),
-        )
-        logger.info("  - Applied LoRA adapters (PEFT) to the model.")
+        """
+        Apply LoRA adapters to the model.
+        Uses Unsloth's ``get_peft_model`` when ``use_unsloth=True``, otherwise
+        falls back to standard PEFT ``get_peft_model``.
+        """
+        use_unsloth = self.model_config.get('use_unsloth', True)
+
+        if use_unsloth:
+            self.model = FastLanguageModel.get_peft_model(
+                self.model,
+                r=self.lora_config.get('r', 16),
+                target_modules=self.lora_config.get('target_modules', [
+                    "q_proj", "k_proj", "v_proj", "o_proj",
+                    "gate_proj", "up_proj", "down_proj",
+                    "embed_tokens", "lm_head",
+                ]),
+                lora_alpha=self.lora_config.get('lora_alpha', 16),
+                lora_dropout=self.lora_config.get('lora_dropout', 0.05),
+                bias=self.lora_config.get('bias', "none"),
+                use_gradient_checkpointing=self.training_config.get('gradient_checkpointing', 'unsloth'),
+                random_state=42,
+                use_rslora=self.lora_config.get('use_rslora', True),
+                loftq_config=self.lora_config.get('loftq_config', None),
+            )
+        else:
+            from src.training.model_loader import apply_lora_peft
+            self.model = apply_lora_peft(self.model, self.lora_config)
+
+        logger.info("  - Applied LoRA adapters to the model.")
     
     def prepare_datasets(self) -> tuple[Dataset, Optional[Dataset]]:
         """
@@ -212,6 +238,28 @@ class EHRPretrainer:
         logger.info("Setting up training...")
         logger.info("=" * 80)
         
+        # Align AMP flags with the loaded model dtype.
+        # Unsloth patches SFTTrainer globally and raises if the model is float16
+        # while bf16=True (common for HF+BitsAndBytes MedGemma loads).
+        use_fp16 = bool(self.training_config.get("fp16", False))
+        use_bf16 = bool(self.training_config.get("bf16", True))
+        try:
+            param_dtype = next(self.model.parameters()).dtype
+        except StopIteration:
+            param_dtype = None
+        if param_dtype == torch.float16 and use_bf16 and not use_fp16:
+            logger.warning(
+                "Model parameters are float16 but training.bf16=True; "
+                "switching to fp16=True, bf16=False for Unsloth/SFTTrainer compatibility."
+            )
+            use_fp16, use_bf16 = True, False
+        elif param_dtype == torch.bfloat16 and use_fp16 and not use_bf16:
+            logger.warning(
+                "Model parameters are bfloat16 but training.fp16=True; "
+                "switching to bf16=True, fp16=False."
+            )
+            use_fp16, use_bf16 = False, True
+
         # Define the SFT configuration with all your detailed parameters
         training_args = SFTConfig(
             output_dir=self.training_config['output_dir'],
@@ -242,8 +290,8 @@ class EHRPretrainer:
             metric_for_best_model="loss" if val_dataset else None,
             
             # Performance
-            fp16=self.training_config.get('fp16', False),
-            bf16=self.training_config.get('bf16', True),
+            fp16=use_fp16,
+            bf16=use_bf16,
             gradient_accumulation_steps=self.training_config.get('gradient_accumulation_steps', 1),
             gradient_checkpointing=self.training_config.get('gradient_checkpointing', False),
             
@@ -289,13 +337,30 @@ class EHRPretrainer:
         effective_global_bs = per_device_bs * grad_acc * world_size
 
     
-    def train(self):
-        """Run the training loop."""
+    def train(self, resume_from_checkpoint: str | None = None):
+        """Run the training loop and report FLOPs on completion."""
         logger.info("\n" + "=" * 80)
         logger.info("Starting training...")
         logger.info("=" * 80 + "\n")
-        
-        self.trainer.train()
+
+        if resume_from_checkpoint:
+            logger.info(f"Resuming from checkpoint: {resume_from_checkpoint}")
+            self.trainer.train(resume_from_checkpoint=resume_from_checkpoint)
+        else:
+            self.trainer.train()
+
+        # ── FLOPs reporting ─────────────────────────────────────────────────
+        try:
+            from src.training.flops_counter import report_flops_from_trainer
+            report_flops_from_trainer(
+                trainer=self.trainer,
+                model=self.model,
+                seq_length=int(self.model_config.get("max_length", 8192)),
+                output_dir=self.training_config.get("output_dir"),
+                local_rank=self.local_rank,
+            )
+        except Exception as _flops_err:
+            logger.warning(f"FLOPs reporting failed (non-fatal): {_flops_err}")
     
     def save_model(self):
         """Save the final trained model."""
@@ -311,7 +376,7 @@ class EHRPretrainer:
         
         logger.info(f"  - Model + tokenizer saved to: {final_model_path}")
     
-    def run_full_pipeline(self):
+    def run_full_pipeline(self, resume_from_checkpoint: str | None = None):
         """
         Run the complete pretraining pipeline.
         
@@ -332,7 +397,7 @@ class EHRPretrainer:
         self.create_trainer(train_dataset, val_dataset, run_name, report_to)
         
         # Train
-        self.train()
+        self.train(resume_from_checkpoint=resume_from_checkpoint)
         
         # Save
         self.save_model()

@@ -1,0 +1,75 @@
+seed: 42
+training:
+  seed: 42
+  resume_from_last: false
+  epochs: 1
+  batch_size: 8
+  eval_batch_size: 8
+  weight_decay: 0.01
+  warmup_steps: 100
+  gradient_accumulation_steps: 2
+  fp16: false
+  bf16: true
+  logging_steps: 10
+  eval_steps: 1000
+  save_steps: 1000
+  save_total_limit: 2
+  load_in_4bit: true
+  multi_label: false
+  save_model: false
+  dataloader_num_workers: 0
+  overwrite_output_dir: true
+  output_dir: /home/ag619/experiments/Results/mimic-classifier-mistral-icu_mortality
+  learning_rate: 1e-6
+  data_cache_dir: /home/ag619/experiments/labels_cache/icu_mortality
+data:
+  data_dir: /home/ag619/MIMIC-IV-tokenisation
+  vocab_filepath: /home/ag619/MIMIC-IV-tokenisation/vocab.csv
+  lookup_dir: /home/ag619/MIMIC_data/hosp
+  dataset: MIMIC
+  task: prediction
+  sort_by_length: true
+  label_column: label
+  aces_label_dir: /home/ag619/MIMIC_data/labels/icu_mortality
+lora:
+  r: 16
+  target_modules:
+  - q_proj
+  - k_proj
+  - v_proj
+  - o_proj
+  - gate_proj
+  - up_proj
+  - down_proj
+  lora_alpha: 32
+  lora_dropout: 0.05
+  bias: none
+  use_rslora: true
+wandb:
+  enabled: true
+  project: MIMIC-IV-classification
+  run_name: classifier-mistral-icu_mortality
+name: mimic_classifier_mistral_icu_mortality
+model:
+  num_labels: 2
+  freeze_llm: true
+  train_lora: true
+  pooling: last_token
+  head_type: linear
+  head_hidden_size: 512
+  head_dropout: 0.1
+  model_name: unsloth/mistral-7b-v0.3-bnb-4bit
+  instruct_model_name: unsloth/mistral-7b-instruct-v0.3-bnb-4bit
+  pretrained_checkpoint: /home/ag619/experiments/Results/Pretrain-Mistral-7B-Mimic/checkpoint-14000
+  hidden_size: 4096
+  use_unsloth: true
+  max_length: 12000
+_aliases:
+  model_tag: mistral
+task:
+  name: icu_mortality
+  description: die in the ICU, given that roughly 7% of patients die in the ICU.
+_meta:
+  experiment: classifier
+  model: mistral
+  task: icu_mortality

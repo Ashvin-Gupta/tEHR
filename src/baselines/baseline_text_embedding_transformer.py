@@ -431,6 +431,12 @@ class TextEmbeddingTransformerBaseline:
 
         collate = self._build_collate(max_seq_length)
 
+        print(
+            f"  Building DataLoaders "
+            f"(batch_size={batch_size}, num_workers={num_workers}, "
+            f"train={len(datasets['train']):,})...",
+            flush=True,
+        )
         train_loader = DataLoader(
             datasets["train"],
             batch_size=batch_size,
@@ -444,6 +450,11 @@ class TextEmbeddingTransformerBaseline:
             shuffle=False,
             collate_fn=collate,
             num_workers=num_workers,
+        )
+        print(
+            f"  DataLoaders ready — {len(train_loader)} train batches / epoch. "
+            "First batch can be slow (worker spin-up + CUDA warmup).",
+            flush=True,
         )
 
         optimizer = torch.optim.AdamW(self.model.parameters(), lr=lr, weight_decay=wd)

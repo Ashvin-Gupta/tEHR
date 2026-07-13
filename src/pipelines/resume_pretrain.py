@@ -4,12 +4,12 @@ Pipeline script to resume LLM continued pretraining from a checkpoint.
 This script loads a saved checkpoint and continues training from where it left off.
 """
 import argparse
-import yaml
 import pprint
 import os
 
 from src.training.training_utils import seed_all
 from src.training.pretrainer_trainer import EHRPretrainer
+from src.training.config_utils import load_config
 
 
 
@@ -32,8 +32,7 @@ def main(config_path: str, checkpoint_path: str):
     print(f"\nLoading configuration from: {config_path}")
     print(f"Resuming from checkpoint: {checkpoint_path}")
     
-    with open(config_path, "r") as f:
-        config = yaml.safe_load(f)
+    config = load_config(config_path)
     
     # Verify checkpoint exists
     if not os.path.exists(checkpoint_path):

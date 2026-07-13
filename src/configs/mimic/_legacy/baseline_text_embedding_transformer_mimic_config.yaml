@@ -29,18 +29,18 @@ wandb:
   run_name: "baseline-text-embedding-transformer-mimic"
 
 training:
-  output_dir: "/home/ag619/experiments/Results/mimic-baselines/text_embedding_transformer-hospital-readmission"
+  output_dir: "/home/ag619/experiments/Results/mimic-baselines/text_embedding_transformer-icu-mortality"
   overwrite_output_dir: true
   epochs: 10
-  batch_size: 512
+  batch_size: 64
   learning_rate: 1e-4
   weight_decay: 0.01
   dataloader_num_workers: 2
 
 data:
-  data_dir: "/home/ag619/MIMIC-IV tokensiation"
-  vocab_filepath: "/home/ag619/MIMIC-IV tokensiation/vocab.csv"
-  aces_label_dir: "/home/ag619/MIMIC_data/labels/hospital_readmission"
+  data_dir: "/home/ag619/MIMIC-IV-tokenisation"
+  vocab_filepath: "/home/ag619/MIMIC-IV-tokenisation/vocab.csv"
+  aces_label_dir: "/home/ag619/MIMIC_data/labels/icu_mortality"
   lookup_dir: "/home/ag619/MIMIC_data/hosp"
   dataset: "MIMIC"
   task: "prediction"

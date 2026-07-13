@@ -1,0 +1,46 @@
+seed: 42
+training:
+  seed: 42
+  resume_from_last: false
+  data_cache_dir: /home/ag619/experiments/labels_cache/icu_mortality
+data:
+  data_dir: /home/ag619/MIMIC-IV-tokenisation
+  vocab_filepath: /home/ag619/MIMIC-IV-tokenisation/vocab.csv
+  lookup_dir: /home/ag619/MIMIC_data/hosp
+  dataset: MIMIC
+  task: prediction
+  sort_by_length: false
+  label_column: label
+  format: text
+  aces_label_dir: /home/ag619/MIMIC_data/labels/icu_mortality
+name: mimic_prompt_mistral_icu_mortality
+prompt:
+  filepath: src/resources/probability_task_prompt.txt
+  use_chat_template: true
+debug:
+  enabled: true
+  print_first_n: 5
+model:
+  load_in_4bit: true
+  model_name: unsloth/mistral-7b-instruct-v0.3-bnb-4bit
+  instruct_model_name: unsloth/mistral-7b-instruct-v0.3-bnb-4bit
+  pretrained_checkpoint: null
+  hidden_size: 4096
+  use_unsloth: true
+  max_length: 12000
+inference:
+  mode: generate_probability
+  batch_size: 1
+  max_new_tokens: 8
+  logit_low_threshold: -10.0
+output_dir: /home/ag619/experiments/Results/mimic-prompt-mistral-icu_mortality
+overwrite_output_dir: true
+_aliases:
+  model_tag: mistral
+task:
+  name: icu_mortality
+  description: die in the ICU, given that roughly 7% of patients die in the ICU.
+_meta:
+  experiment: prompt
+  model: mistral
+  task: icu_mortality

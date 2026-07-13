@@ -1,0 +1,43 @@
+# Exp 3: SFT to emit 0/1, then logit eval on test.
+# Usage: sbatch src/submissions/mimic/run.sh sft mistral hospital_mortality
+
+extends:
+  - ../shared/mimic_data.yaml
+  - ../shared/lora.yaml
+
+name: "mimic_sft_{model}_{task}"
+
+# task.description comes from mimic/tasks/<task>.yaml
+
+model:
+  max_length: 16000
+  load_in_4bit: true
+  logit_low_threshold: -10.0
+
+prompt:
+  filepath: "src/resources/sft_classifier_prompt.txt"
+
+wandb:
+  enabled: true
+  project: "MIMIC-IV-classification"
+  run_name: "sft-{model}-{task}"
+
+training:
+  output_dir: "/home/ag619/experiments/Results/mimic-sft-{model}-{task}"
+  epochs: 1
+  batch_size: 1
+  eval_batch_size: 1
+  learning_rate: 2e-5
+  weight_decay: 0.01
+  warmup_steps: 100
+  gradient_accumulation_steps: 2
+  fp16: false
+  bf16: true
+  logging_steps: 10
+  eval_steps: 1000
+  save_steps: 1000
+  save_total_limit: 2
+  dataloader_num_workers: 0
+
+data:
+  sort_by_length: false

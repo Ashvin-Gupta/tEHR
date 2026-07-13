@@ -1,0 +1,14 @@
+# Shared MIMIC-IV data paths.
+# Downstream label dir comes from mimic/tasks/<task>.yaml.
+# Length-sorted index caches live under:
+#   /home/ag619/experiments/labels_cache/{task}/MIMIC_{split}_sorted.pt
+# (set automatically by build_mimic_config → training.data_cache_dir)
+
+data:
+  data_dir: "/home/ag619/MIMIC-IV-tokenisation"
+  vocab_filepath: "/home/ag619/MIMIC-IV-tokenisation/vocab.csv"
+  lookup_dir: "/home/ag619/MIMIC_data/hosp"
+  dataset: "MIMIC"
+  task: "prediction"
+  sort_by_length: true
+  label_column: "label"

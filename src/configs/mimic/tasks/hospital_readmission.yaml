@@ -1,0 +1,8 @@
+# Downstream task: hospital readmission
+
+task:
+  name: "hospital_readmission"
+  description: "be readmitted to hospital, given that roughly 15% of patients are readmitted to hospital."
+
+data:
+  aces_label_dir: "/home/ag619/MIMIC_data/labels/hospital_readmission"

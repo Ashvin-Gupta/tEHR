@@ -2,10 +2,11 @@
 Utility functions for training.
 """
 from transformers import set_seed as hf_set_seed
+import os
 import random
 import numpy as np
 import torch
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, Tuple
 from tqdm import tqdm
 from datasets import Dataset
 import logging
@@ -179,6 +180,41 @@ def compute_and_sort_by_length(dataset, tokenizer, shuffle_buckets=True, num_buc
     
     return sorted_dataset
 
+def resolve_binary_label_token_ids(tokenizer) -> tuple[int, int]:
+    """
+    Resolve vocabulary IDs for the answer tokens ``0`` and ``1``.
+
+    Mistral / Llama SentencePiece tokenizers encode ``"0"`` as ``[▁, 0]``
+    (two tokens). Taking ``encode(...)[0]`` incorrectly picks the shared
+    spacepiece ``▁`` for both digits, which forces every softmax probability
+    to 0.5. Prefer the last non-special piece, then ``convert_tokens_to_ids``.
+    """
+    def _one(label: str) -> int:
+        ids = tokenizer.encode(label, add_special_tokens=False)
+        if not ids:
+            raise ValueError(f"Tokenizer produced no IDs for label {label!r}")
+        # Prefer a single-token encoding; otherwise take the final piece
+        # (the digit itself after a leading ▁).
+        if len(ids) == 1:
+            return int(ids[0])
+        tid = int(ids[-1])
+        # Sanity: decoded piece should contain the digit character.
+        piece = tokenizer.convert_ids_to_tokens(tid)
+        if piece is not None and label not in str(piece).replace("▁", ""):
+            alt = tokenizer.convert_tokens_to_ids(label)
+            if alt is not None and alt != tokenizer.unk_token_id:
+                return int(alt)
+        return tid
+
+    id0, id1 = _one("0"), _one("1")
+    if id0 == id1:
+        raise RuntimeError(
+            f"Label tokens '0' and '1' resolved to the same id ({id0}). "
+            "Logit-based binary scoring would be degenerate (always p=0.5)."
+        )
+    return id0, id1
+
+
 def seed_all(seed: int):
     """
     Set random seed for reproducibility across all libraries.
@@ -191,3 +227,106 @@ def seed_all(seed: int):
     torch.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
     hf_set_seed(seed)
+
+
+def resolve_seed(config: Dict[str, Any], cli_seed: Optional[int] = None) -> int:
+    """
+    Resolve the run seed.
+
+    Priority: CLI ``--seed`` > top-level ``seed`` > ``training.seed`` > ``42``.
+    """
+    if cli_seed is not None:
+        return int(cli_seed)
+    if config.get("seed") is not None:
+        return int(config["seed"])
+    training = config.get("training") or {}
+    if training.get("seed") is not None:
+        return int(training["seed"])
+    return 42
+
+
+def find_last_checkpoint(output_dir: Optional[str]) -> Optional[str]:
+    """
+    Return the newest ``checkpoint-*`` under ``output_dir``, or None.
+    Also checks ``output_dir/checkpoints`` (used by some baselines).
+    """
+    if not output_dir:
+        return None
+
+    try:
+        from transformers.trainer_utils import get_last_checkpoint
+    except Exception:
+        get_last_checkpoint = None
+
+    candidates = [output_dir, os.path.join(output_dir, "checkpoints")]
+    for path in candidates:
+        if not path or not os.path.isdir(path):
+            continue
+        last = None
+        if get_last_checkpoint is not None:
+            try:
+                last = get_last_checkpoint(path)
+            except Exception:
+                last = None
+        if last:
+            return last
+    return None
+
+
+def prepare_run_reproducibility(
+    config: Dict[str, Any],
+    *,
+    cli_seed: Optional[int] = None,
+    cli_checkpoint: Optional[str] = None,
+    use_seed_subdir: bool = False,
+) -> Tuple[int, Optional[str]]:
+    """
+    Apply seed globally and optionally resolve a resume checkpoint.
+
+    Config knobs
+    ------------
+    - ``seed`` / ``training.seed``: fixed seed (default 42)
+    - ``training.resume_from_last``: if true, resume from newest checkpoint
+      under ``training.output_dir`` (or ``.../checkpoints``)
+    - CLI ``--seed`` / ``--checkpoint_path`` override config
+
+    When ``use_seed_subdir`` is true, outputs go to ``<output_dir>/seed_<seed>/``
+    (classifier / SFT convention).
+
+    Returns:
+        ``(seed, resume_checkpoint_or_None)``
+    """
+    training = config.setdefault("training", {})
+    seed = resolve_seed(config, cli_seed=cli_seed)
+    config["seed"] = seed
+    training["seed"] = seed
+    seed_all(seed)
+    logger.info(f"Using seed: {seed}")
+
+    if use_seed_subdir:
+        base_output_dir = training.get("output_dir")
+        if base_output_dir:
+            seed_name = f"seed_{seed}"
+            # Avoid nesting seed_42/seed_42 if already applied.
+            if os.path.basename(os.path.normpath(base_output_dir)) != seed_name:
+                training["data_cache_dir"] = training.get("data_cache_dir", base_output_dir)
+                training["output_dir"] = os.path.join(base_output_dir, seed_name)
+            logger.info(f"Outputs will be written to: {training['output_dir']}")
+
+    resume_path = cli_checkpoint
+    if resume_path is None and bool(training.get("resume_from_last", False)):
+        resume_path = find_last_checkpoint(training.get("output_dir"))
+        if resume_path:
+            logger.info(f"resume_from_last=true → resuming from {resume_path}")
+            # Never wipe an output dir we are about to resume into.
+            training["overwrite_output_dir"] = False
+        else:
+            logger.info(
+                "resume_from_last=true but no checkpoint found under "
+                f"{training.get('output_dir')}; starting fresh"
+            )
+
+    if resume_path and not os.path.exists(resume_path):
+        raise FileNotFoundError(f"Resume checkpoint not found: {resume_path}")
+
+    return seed, resume_path

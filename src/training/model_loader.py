@@ -1,5 +1,14 @@
 """
 Model loading utilities for pretrained models with LoRA adapters.
+
+Two loading backends are supported:
+  - Unsloth (default, use_unsloth=True): fast kernels, 4-bit NF4, best for
+    supported models (Mistral, Llama, Qwen, Gemma 2, …).
+  - HuggingFace + BitsAndBytes (use_unsloth=False): compatible with any model,
+    including multimodal ones such as google/medgemma-1.5-4b-it whose
+    Gemma3ForConditionalGeneration architecture is not registered with Unsloth.
+    The language-model backbone is extracted automatically when a multimodal
+    checkpoint is loaded.
 """
 import os
 import json
@@ -7,11 +16,180 @@ import torch
 from unsloth import FastLanguageModel
 from typing import Tuple, Any, Optional, Dict, List
 
-from transformers import AutoModel, AutoTokenizer
-from peft import LoraConfig, get_peft_model, TaskType
+from transformers import (
+    AutoModelForCausalLM,
+    AutoModelForImageTextToText,
+    AutoModel,
+    AutoTokenizer,
+    BitsAndBytesConfig,
+)
+from peft import (
+    LoraConfig,
+    get_peft_model,
+    TaskType,
+    PeftModel,
+    prepare_model_for_kbit_training,
+)
+# For explicit Levenshtein compatibility with different PEFT import names if needed
+from peft import LoraConfig as PeftLoraConfig, get_peft_model as peft_get_peft_model, TaskType as PeftTaskType
 
 from src.models.qwen3_embedding_classifier import Qwen3EmbeddingClassifier
 
+
+# ---------------------------------------------------------------------------
+# HuggingFace + BitsAndBytes backend (use_unsloth=False)
+# ---------------------------------------------------------------------------
+
+def load_hf_model(
+    model_name: str,
+    max_seq_length: int = 8192,
+    load_in_4bit: bool = True,
+    local_rank: int = 0,
+) -> Tuple[Any, Any]:
+    """
+    Load a model using standard HuggingFace transformers + BitsAndBytes 4-bit
+    quantisation.  Supports any architecture including multimodal models such
+    as google/medgemma-1.5-4b-it: if AutoModelForCausalLM fails the full
+    multimodal model is loaded and its ``language_model`` backbone is returned.
+    """
+
+    print(f"\nLoading model (HF backend): {model_name}")
+
+    # Gated models (e.g. MedGemma) need an authenticated HF token.
+    hf_token = (
+        os.environ.get("HF_TOKEN")
+        or os.environ.get("HUGGING_FACE_HUB_TOKEN")
+        or True  # fall back to cached huggingface-cli login
+    )
+
+    tokenizer = AutoTokenizer.from_pretrained(model_name, token=hf_token)
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
+    tokenizer.padding_side = "right"
+
+    quantization_config: Optional[Any] = None
+    if load_in_4bit:
+        quantization_config = BitsAndBytesConfig(
+            load_in_4bit=True,
+            bnb_4bit_compute_dtype=torch.bfloat16,
+            bnb_4bit_use_double_quant=True,
+            bnb_4bit_quant_type="nf4",
+        )
+
+    device = {"": local_rank} if torch.cuda.is_available() else "auto"
+    extra_kwargs: Dict[str, Any] = dict(
+        quantization_config=quantization_config,
+        device_map=device,
+        trust_remote_code=True,
+        token=hf_token,
+    )
+    if not load_in_4bit:
+        extra_kwargs["torch_dtype"] = torch.bfloat16
+
+    # --- Try CausalLM first ---
+    try:
+        model = AutoModelForCausalLM.from_pretrained(model_name, **extra_kwargs)
+        print(f"  - Loaded as AutoModelForCausalLM (vocab size: {len(tokenizer)})")
+        return model, tokenizer
+    except Exception as causal_err:
+        print(f"  - AutoModelForCausalLM failed ({type(causal_err).__name__}), "
+              "trying multimodal path...")
+
+    # --- Fallback: multimodal model, extract language_model component ---
+    try:
+        
+        full_model = AutoModelForImageTextToText.from_pretrained(model_name, **extra_kwargs)
+    except Exception:
+        full_model = AutoModel.from_pretrained(model_name, **extra_kwargs)
+
+    if hasattr(full_model, "language_model"):
+        model = full_model.language_model
+        print(f"  - Extracted language_model component from multimodal model "
+              f"(type: {type(model).__name__})")
+        # Resize token embeddings to match tokenizer if necessary
+        if hasattr(model, "resize_token_embeddings"):
+            model.resize_token_embeddings(len(tokenizer))
+        return model, tokenizer
+
+    raise RuntimeError(
+        f"Cannot load {model_name} as a language model: "
+        f"AutoModelForCausalLM failed and the multimodal fallback model "
+        f"({type(full_model).__name__}) has no 'language_model' attribute."
+    )
+
+
+def apply_lora_peft(model: Any, lora_config: Dict[str, Any]) -> Any:
+    """
+    Apply LoRA adapters to *model* using standard PEFT (no Unsloth).
+    Handles BitsAndBytes-quantised models via ``prepare_model_for_kbit_training``.
+    """
+    
+
+    # Prepare quantised model (enable gradient checkpointing, cast norms, …)
+    try:
+        model = prepare_model_for_kbit_training(model, use_gradient_checkpointing=True)
+        print("  - prepare_model_for_kbit_training applied")
+    except Exception:
+        pass  # Not quantised or already prepared
+
+    peft_cfg = PeftLoraConfig(
+        r=int(lora_config.get("r", 16)),
+        target_modules=lora_config.get(
+            "target_modules",
+            ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
+        ),
+        lora_alpha=int(lora_config.get("lora_alpha", 32)),
+        lora_dropout=float(lora_config.get("lora_dropout", 0.05)),
+        bias=str(lora_config.get("bias", "none")),
+        task_type=PeftTaskType.CAUSAL_LM,
+    )
+
+    model = peft_get_peft_model(model, peft_cfg)
+    model.print_trainable_parameters()
+    print(f"  - Applied LoRA via PEFT (r={peft_cfg.r}, alpha={peft_cfg.lora_alpha})")
+    return model
+
+
+def load_pretrained_lora_model_hf(
+    pretrained_checkpoint: str,
+    max_seq_length: int = 8192,
+    load_in_4bit: bool = True,
+    local_rank: int = 0,
+) -> Tuple[Any, Any]:
+    """
+    Load a pretrained model+LoRA checkpoint saved by the HF/PEFT backend.
+    Reads ``adapter_config.json`` to find the base model, loads it via
+    ``load_hf_model``, then wraps it with ``PeftModel.from_pretrained``.
+    """
+
+    if not os.path.exists(pretrained_checkpoint):
+        raise ValueError(f"Checkpoint not found: {pretrained_checkpoint}")
+
+    adapter_cfg_path = os.path.join(pretrained_checkpoint, "adapter_config.json")
+    if not os.path.exists(adapter_cfg_path):
+        raise ValueError(f"No adapter_config.json in {pretrained_checkpoint}")
+
+    with open(adapter_cfg_path) as fh:
+        adapter_cfg = json.load(fh)
+
+    base_model_name = adapter_cfg.get("base_model_name_or_path")
+    print(f"  - Base model (from adapter_config): {base_model_name}")
+
+    base_model, tokenizer = load_hf_model(
+        model_name=base_model_name,
+        max_seq_length=max_seq_length,
+        load_in_4bit=load_in_4bit,
+        local_rank=local_rank,
+    )
+
+    model = PeftModel.from_pretrained(base_model, pretrained_checkpoint)
+    print(f"  - Loaded LoRA adapters from {pretrained_checkpoint}")
+    return model, tokenizer
+
+
+# ---------------------------------------------------------------------------
+# Unsloth backend (original, use_unsloth=True)
+# ---------------------------------------------------------------------------
 
 def load_pretrained_lora_model(
     pretrained_checkpoint: str,

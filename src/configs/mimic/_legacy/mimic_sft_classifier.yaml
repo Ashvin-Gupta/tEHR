@@ -5,7 +5,7 @@ name: "sft_llm_classifier_mimic"
 # Examples: "die in the ICU", "be readmitted to hospital"
 # ------------------------------------------------------------------
 task:
-  description: "REQUIRED: set this to e.g. 'die in the ICU' or 'be readmitted to hospital'"
+  description: "die in the ICU"
 
 model:
   # Base instruct model (or path to a domain-pretrained checkpoint).
@@ -34,8 +34,8 @@ wandb:
 training:
   output_dir: "/home/ag619/experiments/Results/mimic-sft-classification"
   epochs: 1
-  batch_size: 4
-  eval_batch_size: 4
+  batch_size: 1
+  eval_batch_size: 1
   learning_rate: 2e-5
   weight_decay: 0.01
   warmup_steps: 100
@@ -49,8 +49,8 @@ training:
   dataloader_num_workers: 0
 
 data:
-  data_dir: "/home/ag619/MIMIC-IV tokensiation"
-  vocab_filepath: "/home/ag619/MIMIC-IV tokensiation/vocab.csv"
+  data_dir: "/home/ag619/MIMIC-IV-tokenisation"
+  vocab_filepath: "/home/ag619/MIMIC-IV-tokenisation/vocab.csv"
   aces_label_dir: "/home/ag619/MIMIC_data/labels/icu_mortality"
   lookup_dir: "/home/ag619/MIMIC_data/hosp"
   dataset: "MIMIC"

@@ -21,7 +21,7 @@ class MIMICDataset(BaseDataset):
         self,
         data_dir: str,
         vocab_file: str,
-        aces_label_dir: str,
+        aces_label_dir: Optional[str],
         lookup_dir: str,
         task: str = "pretrain",
         split: str = "train",
@@ -45,7 +45,7 @@ class MIMICDataset(BaseDataset):
         )
 
         # Load patient records
-        limit = 5 if split in ['tuning'] else None
+        limit = 2 if split in ['tuning'] else None
         self.patient_records = self._load_data(data_dir, split, limit=limit)
 
         # For prediction task: build ACES-keyed examples
@@ -53,6 +53,11 @@ class MIMICDataset(BaseDataset):
         self.subject_to_records: Dict[str, List[Dict]] = {}
 
         if self.task == 'prediction':
+            if not aces_label_dir:
+                raise ValueError(
+                    "aces_label_dir is required when task='prediction' "
+                    "(set via mimic/tasks/<task>.yaml)."
+                )
             self._build_prediction_examples(aces_label_dir)
         
         logger.info(
@@ -69,6 +74,7 @@ class MIMICDataset(BaseDataset):
             logger.warning("ACES labels file not found: %s", aces_path)
             return
         
+        print(f"  Building prediction examples from {aces_path}...", flush=True)
         aces_df = pl.read_parquet(aces_path).to_pandas()
 
         #subject_id -> list of records
@@ -85,6 +91,12 @@ class MIMICDataset(BaseDataset):
                 continue
             self.examples.append(row.to_dict())
 
+        print(
+            f"  Loaded {len(self.patient_records):,} patient trajectories → "
+            f"{len(self.examples):,} prediction examples "
+            f"({skipped:,} ACES rows skipped, no trajectory found)",
+            flush=True,
+        )
         logger.info(
             "  Loaded %d patient trajectories → %d prediction examples "
             "(%d ACES rows skipped, no trajectory found)",

@@ -1,0 +1,41 @@
+# Exp: continued pretraining on MIMIC EHR text (LoRA).
+# Usage: sbatch src/submissions/mimic/run.sh pretrain mistral
+#        sbatch src/submissions/mimic/run.sh pretrain medgemma
+
+extends:
+  - ../shared/mimic_data.yaml
+  - ../shared/lora.yaml
+
+name: "mimic_pretrain_{model}"
+
+wandb:
+  enabled: true
+  project: "Pretrain-MIMIC"
+  run_name: "pretrain-{model}"
+
+model:
+  max_length: 12000
+
+training:
+  output_dir: "/home/ag619/experiments/Results/Pretrain-{model}-Mimic"
+  overwrite_output_dir: true
+  load_in_4bit: true
+  epochs: 1
+  batch_size: 8
+  eval_batch_size: 8
+  learning_rate: 1e-5
+  weight_decay: 0.05
+  warmup_steps: 500
+  gradient_accumulation_steps: 2
+  gradient_checkpointing: true
+  fp16: false
+  bf16: true
+  logging_steps: 10
+  eval_steps: 500
+  save_steps: 1000
+  save_total_limit: 3
+  dataloader_num_workers: 4
+
+data:
+  task: "pretrain"
+  sort_by_length: false
