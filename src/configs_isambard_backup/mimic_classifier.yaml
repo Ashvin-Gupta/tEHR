@@ -1,0 +1,63 @@
+# src/configs_isambard/mimic_classifier.yaml
+# Template: ${HOME} and ${PROJECTDIR} are expanded at runtime by envsubst.
+
+name: "llm_classifier"
+
+model:
+  # pretrained_checkpoint: "${HOME}/Pretrain-Mistral-7B-Mimic/checkpoint-14000"
+  pretrained_checkpoint: "/home/u6ps/ashvingupta812.u6ps/Pretrain-Mistral-7B-Mimic/checkpoint-14000"
+  # Must match pretrain max_length (8192). Unsloth breaks if this exceeds the
+  # checkpoint's trained context (inputs_embeds vs attention_mask shape mismatch).
+  max_length: 12000
+  hidden_size: 4096
+  num_labels: 2
+  freeze_llm: true
+  train_lora: true
+  head_type: "linear"
+  head_hidden_size: 512
+  head_dropout: 0.1
+
+wandb:
+  enabled: true
+  project: "MIMIC-IV-classification"
+  run_name: "mimic-icu-mortality-mistral"
+
+training:
+  # output_dir: "${PROJECTDIR}/TextCancEHR2/experiments/Results/mimic-icu-mortality"
+  output_dir: "/home/u6ps/ashvingupta812.u6ps/icu-classification-isambard"
+  overwrite_output_dir: false
+  # Shared length-sort cache directory across seeds. Cache files are task-specific
+  # (keyed by aces label subdir, e.g. icu_mortality vs hospital_mortality) and by
+  # cohort size (n<len>) so a stale/differently-sized cache can never be reused.
+  # New dir (…-v2) so previously-built caches are preserved for reuse if needed.
+  # data_cache_dir: "${PROJECTDIR}/TextCancEHR2/experiments/Results/mimic-shared-cache-v2"
+  epochs: 1
+  batch_size: 8
+  eval_batch_size: 8
+  learning_rate: 1e-6
+  weight_decay: 0.01
+  warmup_steps: 100
+  gradient_accumulation_steps: 2
+  fp16: false
+  bf16: true
+  logging_steps: 10
+  eval_steps: 50
+  save_steps: 200
+  save_total_limit: 2
+  load_in_4bit: true
+  multi_label: false
+  save_model: false
+  dataloader_num_workers: 0
+
+data:
+  # data_dir: "${HOME}/MIMIC-IV_tokenisation"
+  data_dir: "/home/u6ps/ashvingupta812.u6ps/MIMIC-IV_tokenisation"
+  # vocab_filepath: "${HOME}/MIMIC-IV_tokenisation/vocab.csv"
+  vocab_filepath: "/home/u6ps/ashvingupta812.u6ps/MIMIC-IV_tokenisation/vocab.csv"
+  # aces_label_dir: "${HOME}/MIMIC_data/labels/icu_mortality"
+  aces_label_dir: "/home/u6ps/ashvingupta812.u6ps/MIMIC_data/labels/icu_mortality"
+  # lookup_dir: "${HOME}/MIMIC_data/hosp"
+  lookup_dir: "/home/u6ps/ashvingupta812.u6ps/MIMIC_data/hosp"
+  dataset: "MIMIC"
+  task: "prediction"
+  sort_by_length: true

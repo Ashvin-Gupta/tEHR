@@ -1,0 +1,42 @@
+# src/configs_isambard/baseline_xgboost_bow_config.yaml
+# Template: ${HOME} and ${PROJECTDIR} are expanded at runtime by envsubst.
+
+name: "xgboost_bow_baseline"
+
+hyperparameter_search:
+  enabled: false
+  selection_metric: "auroc"
+  max_depth_values: [5, 6, 7, 8, 9, 10]
+  learning_rate_values: [0.01, 0.05, 0.1, 0.2]
+  subsample_values: [0.6, 0.8, 1.0]
+  gamma_log_uniform:
+    min: 0.1
+    max: 5.0
+  gamma_samples: 2
+  random_seed: 42
+
+model:
+  max_depth: 6
+  learning_rate: 0.1
+  n_estimators: 100
+  subsample: 0.8
+  colsample_bytree: 0.8
+  min_child_weight: 1
+  gamma: 0
+  reg_alpha: 0
+  reg_lambda: 1
+
+training:
+  output_dir: "${PROJECTDIR}/TextCancEHR2/experiments/Results/mimic-baselines/xgboost_bow"
+  overwrite_output_dir: true
+  early_stopping_rounds: 10
+  verbose: true
+  n_jobs: -1
+
+data:
+  data_dir: "${HOME}/MIMIC-IV_tokenisation"
+  vocab_filepath: "${HOME}/MIMIC-IV_tokenisation/vocab.csv"
+  aces_label_dir: "${HOME}/MIMIC_data/labels/icu_mortality"
+  lookup_dir: "${HOME}/MIMIC_data/hosp"
+  dataset: "MIMIC"
+  task: "prediction"
