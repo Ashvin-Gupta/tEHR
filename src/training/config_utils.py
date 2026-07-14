@@ -75,11 +75,76 @@ def load_config(config_path: str) -> Dict[str, Any]:
     return deep_merge(merged, raw)
 
 
+# Default (ag619 / ix) length-sort cache root. Sites may override via
+# ``shared/sites/<site>.yaml`` → ``_site.labels_cache_root``.
+DEFAULT_LABELS_CACHE_ROOT = "/home/ag619/experiments/labels_cache"
+
+
+def _load_site_meta(site: Optional[str], configs_root: str) -> Dict[str, Any]:
+    """Load ``shared/sites/<site>.yaml`` metadata (empty for default / ag619)."""
+    if not site or site in {"default", "ag619", "ix"}:
+        return {
+            "name": "default",
+            "labels_cache_root": DEFAULT_LABELS_CACHE_ROOT,
+            "path_rewrite": [],
+        }
+    site_path = os.path.join(configs_root, "shared", "sites", f"{site}.yaml")
+    if not os.path.exists(site_path):
+        sites_dir = os.path.join(configs_root, "shared", "sites")
+        available = []
+        if os.path.isdir(sites_dir):
+            available = sorted(
+                f[:-5] for f in os.listdir(sites_dir) if f.endswith(".yaml")
+            )
+        raise FileNotFoundError(
+            f"Unknown site '{site}'. Expected: {site_path}\n"
+            f"Available: {available or ['(none)']}"
+        )
+    raw = load_config(site_path)
+    meta = raw.get("_site") or {}
+    if not isinstance(meta, dict):
+        raise ValueError(f"Site file must contain a `_site` mapping: {site_path}")
+    meta.setdefault("name", site)
+    meta.setdefault("labels_cache_root", DEFAULT_LABELS_CACHE_ROOT)
+    meta.setdefault("path_rewrite", [])
+    return meta
+
+
+def _rewrite_paths(obj: Any, rewrites: List[Dict[str, str]]) -> Any:
+    """Apply longest-prefix path rewrites to all string leaves in a config tree."""
+    if not rewrites:
+        return obj
+    ordered = sorted(
+        rewrites,
+        key=lambda r: len(str(r.get("from", ""))),
+        reverse=True,
+    )
+
+    def _one(s: str) -> str:
+        for rule in ordered:
+            src = rule.get("from")
+            dst = rule.get("to")
+            if not src or dst is None:
+                continue
+            if s == src or s.startswith(src.rstrip("/") + "/"):
+                return dst + s[len(src) :]
+        return s
+
+    if isinstance(obj, dict):
+        return {k: _rewrite_paths(v, rewrites) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_rewrite_paths(v, rewrites) for v in obj]
+    if isinstance(obj, str):
+        return _one(obj)
+    return obj
+
+
 def build_mimic_config(
     experiment: str,
     model: Optional[str] = None,
     task: Optional[str] = None,
     configs_root: Optional[str] = None,
+    site: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Build a MIMIC experiment config by merging:
@@ -88,6 +153,7 @@ def build_mimic_config(
       2. ``mimic/models/<model>.yaml`` (optional model overlay)
       3. ``mimic/tasks/<task>.yaml``   (optional task overlay; default icu_mortality
          for prediction experiments)
+      4. Optional ``shared/sites/<site>.yaml`` path remaps (e.g. ``isambard``)
 
     For instruct-style experiments (``sft``, ``prompt``), ``model.model_name`` is
     rewritten to ``model.instruct_model_name`` and ``pretrained_checkpoint`` is
@@ -100,6 +166,8 @@ def build_mimic_config(
             os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
             "configs",
         )
+
+    site_meta = _load_site_meta(site, configs_root)
 
     # Pretrain has no downstream labels; skip task overlay unless explicitly given.
     TASK_OPTIONAL_EXPERIMENTS = {"pretrain"}
@@ -173,6 +241,7 @@ def build_mimic_config(
     # Stamp identity for output naming / wandb
     cfg.setdefault("_meta", {})
     cfg["_meta"]["experiment"] = experiment
+    cfg["_meta"]["site"] = site_meta.get("name", "default")
     if model:
         cfg["_meta"]["model"] = model
     if task:
@@ -181,13 +250,13 @@ def build_mimic_config(
     # Shared length-sorted index cache: labels_cache/{task}/
     # Approximate length order is shared across models (good enough for packing);
     # exact token lengths differ slightly by tokenizer but indices stay valid.
-    LABELS_CACHE_ROOT = "/home/ag619/experiments/labels_cache"
+    labels_cache_root = site_meta["labels_cache_root"]
     task_name = (cfg.get("task") or {}).get("name") or task
     if task_name:
         training = cfg.setdefault("training", {})
         training.setdefault(
             "data_cache_dir",
-            os.path.join(LABELS_CACHE_ROOT, str(task_name)),
+            os.path.join(labels_cache_root, str(task_name)),
         )
 
     # Resolve {experiment} / {model} / {task} placeholders in string fields.
@@ -197,6 +266,9 @@ def build_mimic_config(
         "task": task or "na",
     }
     cfg = _format_placeholders(cfg, tag)
+
+    # Site-specific filesystem remaps (ag619 paths → Isambard, etc.).
+    cfg = _rewrite_paths(cfg, site_meta.get("path_rewrite") or [])
 
     return cfg
 
@@ -238,6 +310,11 @@ def _cli():
     build.add_argument("--experiment", required=True)
     build.add_argument("--model", default=None)
     build.add_argument("--task", default=None, help="Downstream task (default: icu_mortality)")
+    build.add_argument(
+        "--site",
+        default=None,
+        help="Cluster site remaps (e.g. isambard). Default = ag619 paths.",
+    )
     build.add_argument("--out", default=None, help="Write resolved YAML here")
     build.add_argument("--print", action="store_true", dest="do_print")
 
@@ -248,7 +325,12 @@ def _cli():
     args = parser.parse_args()
 
     if args.cmd == "build":
-        cfg = build_mimic_config(args.experiment, model=args.model, task=args.task)
+        cfg = build_mimic_config(
+            args.experiment,
+            model=args.model,
+            task=args.task,
+            site=args.site,
+        )
         if args.out:
             save_config(cfg, args.out)
             print(args.out)

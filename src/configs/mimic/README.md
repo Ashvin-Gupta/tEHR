@@ -6,6 +6,14 @@ One dispatcher runs the full experiment matrix:
 sbatch src/submissions/mimic/run.sh <experiment> [model] [task]
 ```
 
+On Isambard, use the same args with path remaps:
+
+```bash
+sbatch src/submissions/isambard/run.sh <experiment> [model] [task]
+```
+
+See `src/submissions/isambard/README.md` and `src/configs/shared/sites/isambard.yaml`.
+
 Model and task args can be in **any order**.
 
 ## Arguments
