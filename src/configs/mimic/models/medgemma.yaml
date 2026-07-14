@@ -9,6 +9,20 @@ model:
   hidden_size: 2560
   use_unsloth: false
   max_length: 12000
+  # For logit_01: prefill "Answer:" so next-token mass is on digit tokens.
+  # (Free-form generate without a digit prefix just emits <eos>.)
+  assistant_prefill: "Answer:"
+
+# Zero-shot prompting: score P(1) via softmax over next-token logits for "0"/"1".
+# MedGemma will not reliably free-generate decimals like "0.25" (immediate <eos>).
+# Digit token ids are distinct (e.g. 236771 / 236770) — logit_01 uses those.
+prompt:
+  filepath: "src/resources/binary_task_prompt.txt"
+
+inference:
+  mode: logit_01
+  batch_size: 2
+  logit_low_threshold: -10.0
 
 # Slightly smaller batches for the multimodal-derived backbone.
 # HF+BitsAndBytes loads often report float16; Unsloth SFTTrainer requires

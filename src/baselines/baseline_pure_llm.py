@@ -10,6 +10,7 @@ Two inference modes (``inference.mode``):
 """
 import os
 import re
+import math
 import torch
 import numpy as np
 from typing import Dict, Any, List, Optional, Tuple
@@ -85,6 +86,25 @@ class PureLLMBaseline(BaseBaseline):
                 self.model_config.get("use_chat_template", True),
             )
         )
+        # Prefill policy (overridable via prompt.assistant_prefill / model overlay):
+        #   Mistral: "Answer:" after [/INST]
+        #   Gemma + logit_01: "Answer:" after model turn (forward-only; OK)
+        #   Gemma + generate: "0." so the model continues with digits
+        #                     (open-ended generate otherwise emits <eos>)
+        model_name_l = str(self.model_config.get("model_name", "")).lower()
+        self._is_gemma_family = any(
+            tag in model_name_l for tag in ("gemma", "medgemma")
+        )
+        if self._is_gemma_family and self.inference_mode == "generate_probability":
+            default_prefill = "0."
+        else:
+            default_prefill = "Answer:"
+        self.assistant_prefill = str(
+            prompt_cfg.get(
+                "assistant_prefill",
+                self.model_config.get("assistant_prefill", default_prefill),
+            )
+        )
 
         # Counters for low-logit / parse fallback diagnostics
         self.total_predictions = 0
@@ -92,6 +112,8 @@ class PureLLMBaseline(BaseBaseline):
         self.parse_fallbacks = 0
         self._debug_printed = 0
         self._prompt_overhead_tokens: int | None = None
+        self._eos_token_ids: List[int] | None = None
+        self._suppress_tokens: List[int] | None = None
     
     def load_model(self):
         """Load base Qwen model (no pretraining, no LoRA)."""
@@ -128,6 +150,14 @@ class PureLLMBaseline(BaseBaseline):
                 local_rank=0,
             )
 
+        # Decoder-only generation must left-pad; HF MedGemma loader defaults right.
+        self.tokenizer.padding_side = "left"
+        if self.tokenizer.pad_token_id is None and self.tokenizer.eos_token_id is not None:
+            self.tokenizer.pad_token = self.tokenizer.eos_token
+
+        self._eos_token_ids = self._resolve_eos_token_ids()
+        self._suppress_tokens = self._resolve_suppress_tokens()
+
         print(f"  - Model loaded successfully")
         print(f"  - Vocab size: {len(self.tokenizer)}")
 
@@ -139,9 +169,53 @@ class PureLLMBaseline(BaseBaseline):
         print(
             f"  - Token IDs: '0' → {self._token_id_0}, '1' → {self._token_id_1}"
         )
+        print(
+            "  - Token pieces: "
+            f"'0' → {self.tokenizer.convert_ids_to_tokens(self._token_id_0)!r}, "
+            f"'1' → {self.tokenizer.convert_ids_to_tokens(self._token_id_1)!r}"
+        )
+        # How "0.25" tokenises — relevant for generate_probability parsing.
+        sample_ids = self.tokenizer.encode("0.25", add_special_tokens=False)
+        sample_pieces = [self.tokenizer.convert_ids_to_tokens(i) for i in sample_ids]
+        print(f"  - encode('0.25') → ids={sample_ids} pieces={sample_pieces}")
         self._prompt_overhead_tokens = self._measure_prompt_overhead()
         print(f"  - Prompt overhead ≈ {self._prompt_overhead_tokens} tokens")
         print(f"  - use_chat_template = {self.use_chat_template}")
+        print(f"  - gemma_family = {self._is_gemma_family}")
+        print(f"  - assistant_prefill = {self.assistant_prefill!r}")
+        print(f"  - padding_side = {self.tokenizer.padding_side}")
+        print(f"  - eos_token_ids = {self._eos_token_ids}")
+        print(f"  - suppress_tokens = {self._suppress_tokens}")
+
+    def _resolve_eos_token_ids(self) -> List[int]:
+        """Gemma chat turns end on <end_of_turn>, which is often not eos_token_id."""
+        ids: List[int] = []
+        eos = self.tokenizer.eos_token_id
+        if eos is not None:
+            ids.append(int(eos))
+        eot = self.tokenizer.convert_tokens_to_ids("<end_of_turn>")
+        if (
+            isinstance(eot, int)
+            and eot >= 0
+            and self.tokenizer.convert_ids_to_tokens(eot) == "<end_of_turn>"
+            and eot not in ids
+        ):
+            ids.append(int(eot))
+        return ids
+
+    def _resolve_suppress_tokens(self) -> List[int]:
+        """
+        Gemma has a real <pad> id (often 0). Greedy decode can emit only pads
+        when pad stays unsuppressed — that is what job 64503 showed.
+        Never suppress eos / end_of_turn.
+        """
+        pad = self.tokenizer.pad_token_id
+        if pad is None:
+            return []
+        eos_set = set(self._eos_token_ids or [])
+        if int(pad) in eos_set:
+            return []
+        return [int(pad)]
 
     def _measure_prompt_overhead(self) -> int:
         """Tokens used by the prompt wrapper with an empty EHR (+ chat template)."""
@@ -189,9 +263,11 @@ class PureLLMBaseline(BaseBaseline):
         """
         Format EHR text with prompt template, optionally wrap in chat template.
 
-        For instruct models the cue ``Answer:`` must come *after* ``[/INST]``
-        (i.e. after ``add_generation_prompt``), otherwise we score the first
-        assistant token where the model prefers prose ("Based", "Output", …).
+        Mistral: cue ``Answer:`` after ``[/INST]`` (assistant prefill) so the next
+        token is the score rather than prose.
+
+        Gemma/MedGemma: keep ``Answer:`` inside the user turn and do not prefill
+        the model turn — assistant prefills often collapse to ``<pad>`` dumps.
         """
         if truncate_ehr and self.tokenizer is not None:
             ehr_text = self._truncate_ehr(ehr_text)
@@ -202,11 +278,15 @@ class PureLLMBaseline(BaseBaseline):
         except KeyError:
             user_text = self.prompt_template.format(ehr_text=ehr_text)
 
-        # Keep "Answer:" as a post-chat suffix, not inside the user turn.
         answer_suffix = "Answer:"
         stripped = user_text.rstrip()
-        if stripped.endswith(answer_suffix):
+        has_answer_cue = stripped.endswith(answer_suffix)
+        if has_answer_cue and self.assistant_prefill:
+            # Move cue out of the user turn; re-attach after chat wrap.
             user_text = stripped[: -len(answer_suffix)].rstrip() + "\n"
+        elif not has_answer_cue and not self.assistant_prefill:
+            # Ensure the user turn still asks for an Answer: line.
+            user_text = stripped + "\n\n" + answer_suffix + "\n"
 
         if (
             self.use_chat_template
@@ -219,11 +299,13 @@ class PureLLMBaseline(BaseBaseline):
                     tokenize=False,
                     add_generation_prompt=True,
                 )
-                return wrapped + answer_suffix
+                return wrapped + self.assistant_prefill
             except Exception as exc:
                 print(f"  - WARNING: apply_chat_template failed ({exc}); using raw prompt")
-                return user_text + answer_suffix
-        return user_text if user_text.rstrip().endswith(answer_suffix) else user_text + answer_suffix
+                return user_text + self.assistant_prefill
+        if self.assistant_prefill and not user_text.rstrip().endswith(self.assistant_prefill):
+            return user_text + self.assistant_prefill
+        return user_text
 
     def _preview_prompt(self, prompt: str, max_chars: int = 1200) -> str:
         """Keep head + tail of a long prompt so the Answer: suffix stays visible."""
@@ -263,6 +345,8 @@ class PureLLMBaseline(BaseBaseline):
         print(f"  tokens = {n_tokens}  truncated = {truncated}", flush=True)
         if generated is not None:
             print(f"  generated = {generated!r}  parsed P = {prob:.4f}", flush=True)
+            if top_tokens:
+                print(f"  gen detail: {top_tokens}", flush=True)
         else:
             print(f"  logit_0 = {logit_0:.4f}  logit_1 = {logit_1:.4f}  P(1) = {prob:.4f}", flush=True)
             print(f"  top next-tokens: {top_tokens}", flush=True)
@@ -296,6 +380,9 @@ class PureLLMBaseline(BaseBaseline):
         If both logits are below `logit_low_threshold` the model is not expressing
         a clear binary preference, so we return 0.5.
         """
+        if not (math.isfinite(logit_0) and math.isfinite(logit_1)):
+            self.low_logit_fallbacks += 1
+            return 0.5
         if max(logit_0, logit_1) < self.logit_low_threshold:
             self.low_logit_fallbacks += 1
             return 0.5
@@ -329,28 +416,36 @@ class PureLLMBaseline(BaseBaseline):
                 batch_prompts = [self.format_prompt(t) for t in batch_texts]
                 inputs = self._tokenize_prompts(batch_prompts, max_length)
 
-                with torch.cuda.amp.autocast():
-                    outputs = self.model(**inputs)
+                # No fp16 autocast: MedGemma is loaded with bf16 4-bit compute;
+                # default cuda amp (fp16) NaNs the LM head (digit logits → nan,
+                # top-k collapses to special-token ids 0..4). See job 64505.
+                outputs = self.model(**inputs)
 
                 next_token_logits = outputs.logits
                 attention_mask = inputs["attention_mask"]
                 last_indices = attention_mask.long().cumsum(dim=1).argmax(dim=1)
                 batch_sz = next_token_logits.size(0)
-                last_logits = next_token_logits[range(batch_sz), last_indices, :]
+                # float32 for stable softmax over the two digit logits
+                last_logits = next_token_logits[
+                    range(batch_sz), last_indices, :
+                ].float()
 
-                logit_0 = last_logits[:, self._token_id_0].cpu().float()
-                logit_1 = last_logits[:, self._token_id_1].cpu().float()
+                logit_0 = last_logits[:, self._token_id_0].cpu()
+                logit_1 = last_logits[:, self._token_id_1].cpu()
 
                 for j in range(batch_sz):
                     self.total_predictions += 1
-                    l0 = logit_0[j].item()
-                    l1 = logit_1[j].item()
+                    l0 = float(logit_0[j].item())
+                    l1 = float(logit_1[j].item())
                     prob = self._logits_to_prob(l0, l1)
                     probs.append(prob)
 
                     n_tokens = int(attention_mask[j].sum().item())
                     top_ids = torch.topk(last_logits[j], k=5).indices.tolist()
+                    last_tok = int(inputs["input_ids"][j, last_indices[j]].item())
                     top_tokens = [
+                        f"last_tok={self.tokenizer.decode([last_tok], skip_special_tokens=False)!r}"
+                    ] + [
                         repr(self.tokenizer.decode([tid], skip_special_tokens=False))
                         for tid in top_ids
                     ]
@@ -371,7 +466,7 @@ class PureLLMBaseline(BaseBaseline):
                 f"\nLogit diagnostics: "
                 f"{self.low_logit_fallbacks}/{self.total_predictions} "
                 f"({fallback_rate:.2f}%) samples fell back to 0.5 "
-                f"(both logits < {self.logit_low_threshold})."
+                f"(both logits < {self.logit_low_threshold} or non-finite)."
             )
         return np.array(probs, dtype=np.float32)
 
@@ -388,31 +483,46 @@ class PureLLMBaseline(BaseBaseline):
         # Generation with variable-length prompts is simplest at batch_size=1
         # when left-padded; keep configurable but default small.
         batch_size = max(1, int(batch_size))
+        eos_token_id = self._eos_token_ids or self.tokenizer.eos_token_id
+        gen_kwargs = dict(
+            max_new_tokens=self.max_new_tokens,
+            do_sample=False,
+            pad_token_id=self.tokenizer.pad_token_id,
+            eos_token_id=eos_token_id,
+        )
+        if self._suppress_tokens:
+            gen_kwargs["suppress_tokens"] = self._suppress_tokens
+        # MedGemma often emits <eos> as the first token on open generations;
+        # force a few tokens so a decimal (after "0." prefill) can appear.
+        if self._is_gemma_family:
+            gen_kwargs["min_new_tokens"] = min(3, self.max_new_tokens)
 
         with torch.no_grad():
             for i in tqdm(range(0, len(texts), batch_size), desc="Generate P"):
                 batch_texts = texts[i:i + batch_size]
                 batch_prompts = [self.format_prompt(t) for t in batch_texts]
                 inputs = self._tokenize_prompts(batch_prompts, max_length)
+                prompt_width = inputs["input_ids"].shape[1]
                 prompt_lens = inputs["attention_mask"].sum(dim=1).tolist()
 
-                with torch.cuda.amp.autocast():
-                    generated = self.model.generate(
-                        **inputs,
-                        max_new_tokens=self.max_new_tokens,
-                        do_sample=False,
-                        temperature=1.0,
-                        pad_token_id=self.tokenizer.pad_token_id,
-                        eos_token_id=self.tokenizer.eos_token_id,
-                    )
+                # Avoid amp for generate — 4-bit Gemma can collapse to pad argmax.
+                generated = self.model.generate(**inputs, **gen_kwargs)
 
                 for j in range(len(batch_prompts)):
                     self.total_predictions += 1
-                    prompt_len = inputs["input_ids"].shape[1]
-                    new_ids = generated[j][prompt_len:]
+                    # Always slice from padded width (correct for left- and right-pad).
+                    new_ids = generated[j][prompt_width:]
+                    # Drop leading pads if any slipped through.
+                    pad_id = self.tokenizer.pad_token_id
+                    ids_list = new_ids.tolist()
+                    if pad_id is not None:
+                        ids_list = [t for t in ids_list if t != pad_id]
                     gen_text = self.tokenizer.decode(
-                        new_ids, skip_special_tokens=True
+                        ids_list, skip_special_tokens=True
                     ).strip()
+                    gen_raw = self.tokenizer.decode(
+                        new_ids, skip_special_tokens=False
+                    )
 
                     parsed = self._parse_probability(gen_text)
                     if parsed is None:
@@ -431,7 +541,10 @@ class PureLLMBaseline(BaseBaseline):
                         logit_0=0.0,
                         logit_1=0.0,
                         prob=prob,
-                        top_tokens=[],
+                        top_tokens=[
+                            f"new_ids={new_ids.tolist()}",
+                            f"raw={gen_raw!r}",
+                        ],
                         generated=gen_text,
                     )
 

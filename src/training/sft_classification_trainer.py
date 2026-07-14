@@ -19,13 +19,53 @@ from datasets import Dataset as HFDataset
 from tqdm import tqdm
 from unsloth import FastLanguageModel
 from trl import SFTTrainer, SFTConfig
+from transformers import TrainerCallback
 
 from src.data.dataset_factory import get_dataset
-from src.evaluations.evaluations import compute_baseline_metrics, plot_all_curves, save_results
+from src.evaluations.evaluations import (
+    compute_baseline_metrics,
+    plot_all_curves,
+    save_results,
+    print_results,
+)
 from src.training.training_utils import resolve_binary_label_token_ids
 
 import logging
 logger = logging.getLogger(__name__)
+
+
+class _LogitClassificationCallback(TrainerCallback):
+    """
+    SFTTrainer's built-in eval only reports next-token CE loss.
+
+    After each Trainer evaluate(), run logit-based P(y=1) extraction on the
+    classification val set and log AUROC / AUPR / ECE / accuracy / F1 like the
+    logistic classifier.
+    """
+
+    def __init__(
+        self,
+        outer: "SFTClassificationTrainer",
+        eval_dataset: "_SFTDataset",
+        batch_size: int,
+    ):
+        self.outer = outer
+        self.eval_dataset = eval_dataset
+        self.batch_size = batch_size
+
+    def on_evaluate(self, args, state, control, metrics=None, **kwargs):
+        if self.outer.local_rank != 0:
+            return
+        clf_metrics = self.outer.compute_logit_metrics(
+            self.eval_dataset,
+            batch_size=self.batch_size,
+        )
+        print_results(clf_metrics, "eval (logit)")
+        log_dict = {f"eval_{k}": float(v) for k, v in clf_metrics.items()}
+        if metrics is not None:
+            metrics.update(log_dict)
+        if self.outer.wandb_config.get("enabled", False):
+            wandb.log({**log_dict, "train/global_step": state.global_step}, step=state.global_step)
 
 
 # ---------------------------------------------------------------------------
@@ -514,6 +554,13 @@ class SFTClassificationTrainer:
             train_dataset=train_hf,
             eval_dataset=val_hf,
             args=sft_config,
+            callbacks=[
+                _LogitClassificationCallback(
+                    self,
+                    splits["tuning"],
+                    batch_size=int(self.training_config.get("eval_batch_size", 4)),
+                )
+            ],
         )
         print("  SFTTrainer ready — starting training loop.", flush=True)
 
@@ -548,27 +595,16 @@ class SFTClassificationTrainer:
         pair = torch.tensor([logit_0, logit_1], dtype=torch.float32)
         return float(torch.softmax(pair, dim=0)[1].item())
 
-    def evaluate_split(
+    def _predict_probs(
         self,
         sft_dataset: "_SFTDataset",
-        split_name: str,
         batch_size: int = 4,
-    ) -> Dict[str, float]:
-        """
-        Evaluate on one split using logit-based probability extraction.
-
-        Args:
-            sft_dataset: The _SFTDataset for this split.
-            split_name:  Name for logging / file output.
-            batch_size:  Inference batch size.
-
-        Returns:
-            Dict of metric names to values.
-        """
-        logger.info(f"\nEvaluating [{split_name}] ({len(sft_dataset.samples)} samples)...")
-
+        split_name: str = "eval",
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        """Forward-pass logit extraction → P(y=1) for every sample."""
         prompts, true_labels = sft_dataset.prompts_and_labels()
 
+        was_training = self.model.training
         self.model.eval()
         probs = []
         low_logit_fallbacks = 0
@@ -586,11 +622,11 @@ class SFTClassificationTrainer:
                     max_length=max_length,
                 ).to(self.model.device)
 
-                with torch.cuda.amp.autocast():
-                    outputs = self.model(**inputs)
+                # Avoid default fp16 autocast with bf16 4-bit MedGemma (NaN logits).
+                outputs = self.model(**inputs)
 
                 # Last non-pad token (correct for left- and right-padding).
-                last_logits = outputs.logits  # (B, T, V)
+                last_logits = outputs.logits.float()  # (B, T, V)
                 last_indices = inputs["attention_mask"].long().cumsum(dim=1).argmax(dim=1)
                 batch_sz = last_logits.size(0)
                 next_logits = last_logits[range(batch_sz), last_indices, :]
@@ -604,16 +640,59 @@ class SFTClassificationTrainer:
                         low_logit_fallbacks += 1
                     probs.append(p)
 
+        if was_training:
+            self.model.train()
+
         if len(prompts) > 0:
             fallback_rate = 100.0 * low_logit_fallbacks / len(prompts)
-            logger.info(
+            print(
                 f"  Logit fallbacks: {low_logit_fallbacks}/{len(prompts)} "
-                f"({fallback_rate:.1f}%) defaulted to 0.5"
+                f"({fallback_rate:.1f}%) defaulted to 0.5",
+                flush=True,
             )
 
-        probs_arr = np.array(probs, dtype=np.float32)
-        labels_arr = np.array(true_labels, dtype=np.int32)
+        return (
+            np.array(true_labels, dtype=np.int32),
+            np.array(probs, dtype=np.float32),
+        )
 
+    def compute_logit_metrics(
+        self,
+        sft_dataset: "_SFTDataset",
+        batch_size: int = 4,
+        split_name: str = "eval",
+    ) -> Dict[str, float]:
+        """AUROC / AUPR / ECE / accuracy / F1 via logit-based P(y=1)."""
+        labels_arr, probs_arr = self._predict_probs(
+            sft_dataset, batch_size=batch_size, split_name=split_name
+        )
+        return compute_baseline_metrics(labels_arr, probs_arr)
+
+    def evaluate_split(
+        self,
+        sft_dataset: "_SFTDataset",
+        split_name: str,
+        batch_size: int = 4,
+    ) -> Dict[str, float]:
+        """
+        Evaluate on one split using logit-based probability extraction.
+
+        Args:
+            sft_dataset: The _SFTDataset for this split.
+            split_name:  Name for logging / file output.
+            batch_size:  Inference batch size.
+
+        Returns:
+            Dict of metric names to values.
+        """
+        print(
+            f"\nEvaluating [{split_name}] ({len(sft_dataset.samples)} samples)...",
+            flush=True,
+        )
+
+        labels_arr, probs_arr = self._predict_probs(
+            sft_dataset, batch_size=batch_size, split_name=split_name
+        )
         metrics = compute_baseline_metrics(labels_arr, probs_arr)
 
         plot_dir = os.path.join(self.output_dir, "plots", split_name)
@@ -626,8 +705,9 @@ class SFTClassificationTrainer:
             f"{split_name}_results.json",
         )
 
-        for k, v in metrics.items():
-            logger.info(f"  {k}: {v:.4f}")
+        print_results(metrics, split_name)
+        if self.wandb_config.get("enabled", False) and self.local_rank == 0:
+            wandb.log({f"{split_name}_{k}": float(v) for k, v in metrics.items()})
 
         return metrics
 
@@ -656,9 +736,13 @@ class SFTClassificationTrainer:
         summary_path = os.path.join(self.output_dir, "summary.json")
         with open(summary_path, "w") as f:
             json.dump(summary, f, indent=2)
-        logger.info(f"\nSummary saved to: {summary_path}")
+        print(f"\nSummary saved to: {summary_path}", flush=True)
 
         if self.wandb_config.get("enabled") and self.local_rank == 0:
+            wandb.summary.update(
+                {f"final_tuning_{k}": v for k, v in val_metrics.items()}
+                | {f"final_held_out_{k}": v for k, v in test_metrics.items()}
+            )
             wandb.finish()
 
         return val_metrics, test_metrics

@@ -2,8 +2,9 @@
 # Usage: sbatch src/submissions/mimic/run.sh prompt mistral hospital_readmission
 #
 # inference.mode:
-#   generate_probability — model writes e.g. 0.23 (default; better for soft scores)
+#   generate_probability — model writes e.g. 0.23 (default for Mistral)
 #   logit_01             — softmax over next-token logits for "0"/"1"
+#                          (default for MedGemma via models/medgemma.yaml)
 
 extends:
   - ../shared/mimic_data.yaml
@@ -13,6 +14,9 @@ name: "mimic_prompt_{model}_{task}"
 prompt:
   filepath: "src/resources/probability_task_prompt.txt"
   use_chat_template: true  # required for mistral-instruct / medgemma-it
+  # assistant_prefill is model-specific (see models/*.yaml / PureLLMBaseline):
+  #   mistral  → "Answer:" after [/INST]
+  #   medgemma → logit_01 + "Answer:" (generate of free-form decimals EOS's)
 
 debug:
   enabled: true

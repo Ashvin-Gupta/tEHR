@@ -9,4 +9,4 @@ seed: 42
 
 training:
   seed: 42
-  resume_from_last: false
+  resume_from_last: true

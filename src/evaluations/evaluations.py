@@ -9,24 +9,22 @@ import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
 from sklearn.metrics import (
-    roc_auc_score, 
+    roc_auc_score,
     average_precision_score,
+    accuracy_score,
+    precision_recall_fscore_support,
     roc_curve,
-    precision_recall_curve
+    precision_recall_curve,
 )
 from sklearn.calibration import calibration_curve
 
 
 def compute_baseline_metrics(labels: np.ndarray, probs: np.ndarray) -> dict:
     """
-    Compute AUROC, AUPR, and Expected Calibration Error (ECE) for binary classification.
-    
-    Args:
-        labels: True binary labels (shape: [n_samples])
-        probs: Predicted probabilities for positive class (shape: [n_samples])
-    
-    Returns:
-        Dictionary with 'auroc', 'aupr', and 'ece' metrics
+    Compute binary classification metrics from predicted probabilities.
+
+    Returns AUROC / AUPR / ECE plus threshold-0.5 accuracy / precision / recall / F1
+    (same set used by the logistic classifier eval).
     """
     # Ensure arrays are numpy
     labels = np.asarray(labels)
@@ -35,10 +33,24 @@ def compute_baseline_metrics(labels: np.ndarray, probs: np.ndarray) -> dict:
     # Validate inputs
     if len(labels) != len(probs):
         raise ValueError(f"Labels and probabilities must have same length. Got {len(labels)} and {len(probs)}")
+
+    preds = (probs >= 0.5).astype(int)
+    accuracy = float(accuracy_score(labels, preds))
+    precision, recall, f1, _ = precision_recall_fscore_support(
+        labels, preds, average="binary", zero_division=0
+    )
     
     if len(np.unique(labels)) < 2:
-        print("Warning: Only one class present in labels. Setting metrics to 0.0")
-        return {'auroc': 0.0, 'aupr': 0.0, 'ece': 0.0}
+        print("Warning: Only one class present in labels. Setting ranking metrics to 0.0")
+        return {
+            "accuracy": accuracy,
+            "precision": float(precision),
+            "recall": float(recall),
+            "f1": float(f1),
+            "auroc": 0.0,
+            "aupr": 0.0,
+            "ece": 0.0,
+        }
     
     # Compute AUROC
     try:
@@ -58,9 +70,13 @@ def compute_baseline_metrics(labels: np.ndarray, probs: np.ndarray) -> dict:
     ece = compute_ece(labels, probs)
     
     return {
-        'auroc': float(auroc),
-        'aupr': float(aupr),
-        'ece': float(ece)
+        "accuracy": accuracy,
+        "precision": float(precision),
+        "recall": float(recall),
+        "f1": float(f1),
+        "auroc": float(auroc),
+        "aupr": float(aupr),
+        "ece": float(ece),
     }
 
 
