@@ -27,26 +27,31 @@ class MIMICDataset(BaseDataset):
         split: str = "train",
         label_column: str = "label",
         format: str = "text",
+        surface_form: str = "text",
+        scramble_seed: int = 42,
     ):
         self.task = task
         self.split = split
         self.label_column = label_column
         self.format = format
+        self.surface_form = surface_form
+        self.scramble_seed = scramble_seed
         
         # Vocabulary: token_id -> token_string
         vocab_df = pd.read_csv(vocab_file, dtype={'str': str})
         self.id_to_token = pd.Series(vocab_df['str'].values, index=vocab_df['token']).to_dict()
 
-        # Translator (MIMIC specific)
+        # Translator (MIMIC specific). surface_form controls lexical ablations.
         self.translator = MIMICTokenTranslator.from_csv_files(
             labitems_file = os.path.join(lookup_dir, "d_labitems.csv.gz"),
             diagnoses_file = os.path.join(lookup_dir, "d_icd_diagnoses.csv.gz"),
             procedures_file = os.path.join(lookup_dir, "d_icd_procedures.csv.gz"),
+            surface_form=surface_form,
+            scramble_seed=scramble_seed,
         )
 
-        # Load patient records
-        limit = 2 if split in ['tuning'] else None
-        self.patient_records = self._load_data(data_dir, split, limit=limit)
+        # Load patient records (full split — do not limit tuning/val shards)
+        self.patient_records = self._load_data(data_dir, split, limit=None)
 
         # For prediction task: build ACES-keyed examples
         self.examples: List[Dict] = []
@@ -61,8 +66,8 @@ class MIMICDataset(BaseDataset):
             self._build_prediction_examples(aces_label_dir)
         
         logger.info(
-            "MIMICDataset split='%s' task='%s': %d examples",
-            split, task, len(self),
+            "MIMICDataset split='%s' task='%s' surface_form='%s': %d examples",
+            split, task, surface_form, len(self),
         )
     
     def _build_prediction_examples(self, aces_label_dir: str):

@@ -9,5 +9,6 @@ unsloth_compiled_cache/
 *.log
 __pycache__/
 .ipynb_checkpoints/
+analysis_out/
 Miniconda3-latest-Linux-x86_64.sh
 

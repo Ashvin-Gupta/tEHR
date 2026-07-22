@@ -154,10 +154,10 @@ class TextEmbeddingTransformer(nn.Module):
         """
         batch_size, seq_len, D = embeddings.shape
 
-        # Truncate if needed
+        # Truncate if needed — keep the most recent events (tail), matching the LLM path
         if seq_len > self.max_seq_length:
-            embeddings = embeddings[:, : self.max_seq_length, :]
-            attention_mask = attention_mask[:, : self.max_seq_length]
+            embeddings = embeddings[:, -self.max_seq_length :, :]
+            attention_mask = attention_mask[:, -self.max_seq_length :]
             seq_len = self.max_seq_length
 
         # Add positional encodings to token embeddings (positions 1..seq_len)
@@ -239,8 +239,8 @@ class _EmbeddingLookupDataset(Dataset):
             D = self.embedding_matrix.shape[1]
             emb = torch.zeros(1, D, dtype=torch.float32)
         else:
-            # Truncate before indexing to avoid building very large tensors
-            rows = rows[: self.max_seq_length]
+            # Keep the most recent events (tail), matching ClassificationCollator
+            rows = rows[-self.max_seq_length :]
             row_tensor = torch.tensor(rows, dtype=torch.long)
             emb = self.embedding_matrix[row_tensor].float()  # (seq_len, D)
 
@@ -267,7 +267,8 @@ def _collate_fn(
     attention_mask = torch.zeros(len(batch), max_len, dtype=torch.long)
 
     for i, (emb, length) in enumerate(zip(embeddings_list, lengths)):
-        padded[i, :length, :] = emb[:length, :]
+        # emb may be longer than max_seq_length; keep the tail
+        padded[i, :length, :] = emb[-length:, :]
         attention_mask[i, :length] = 1
 
     return {"embeddings": padded, "attention_mask": attention_mask, "labels": labels}

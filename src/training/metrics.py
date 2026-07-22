@@ -3,14 +3,19 @@ Evaluation metrics for classification tasks.
 """
 import torch
 import numpy as np
-from sklearn.metrics import accuracy_score, precision_recall_fscore_support, roc_auc_score
+from sklearn.metrics import (
+    accuracy_score,
+    average_precision_score,
+    precision_recall_fscore_support,
+    roc_auc_score,
+)
 
 
 def compute_classification_metrics(eval_pred):
     """
     Compute classification metrics for evaluation.
     
-    Calculates accuracy, precision, recall, F1, and AUROC for binary classification.
+    Calculates accuracy, precision, recall, F1, AUROC, and AUPR for binary classification.
     
     Args:
         eval_pred: EvalPrediction object with predictions and labels.
@@ -46,11 +51,17 @@ def compute_classification_metrics(eval_pred):
         auroc = roc_auc_score(labels, probs)
     except ValueError:
         auroc = 0.0  # Only one class present
+
+    try:
+        aupr = average_precision_score(labels, probs)
+    except ValueError:
+        aupr = 0.0
     
     return {
         'accuracy': accuracy,
         'precision': precision,
         'recall': recall,
         'f1': f1,
-        'auroc': auroc
+        'auroc': auroc,
+        'aupr': aupr,
     }

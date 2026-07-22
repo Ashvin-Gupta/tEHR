@@ -22,3 +22,9 @@ _site:
       to: "/projects/u6ps/TextCancEHR2/experiments/Results"
     - from: "/home/ag619/experiments/labels_cache"
       to: "/projects/u6ps/TextCancEHR2/experiments/labels_cache"
+
+# Unsloth discards attention_mask in train mode but builds a dense 4D mask
+# in eval. At max_length=12000 that spikes VRAM vs the other cluster
+# (FlashAttn/xformers + shorter early length-sorted train batches).
+training:
+  eval_batch_size: 1

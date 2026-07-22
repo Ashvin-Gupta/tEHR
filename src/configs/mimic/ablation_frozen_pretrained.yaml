@@ -14,7 +14,7 @@ model:
   num_labels: 2
   freeze_llm: true
   train_lora: false
-  pooling: "mean"
+  pooling: "last_token"
   head_type: "linear"
   head_hidden_size: 512
   head_dropout: 0.1

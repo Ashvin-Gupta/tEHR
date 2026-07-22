@@ -28,12 +28,16 @@
 #   ablation_no_pretrain_lora   # 5a, no pretraining and just doing sft with LORA and head
 #   ablation_frozen_pretrained  # 5b, pretrained LLM but frozen and only doing sft on head
 #   ablation_frozen_nopretrain  # 5c, no pretraining and frozen LLM, only doing sft on head
+#   surface_raw                 # lexical ablation: raw codes (no CPT, like 5a)
+#   surface_scramble_hash       # lexical ablation: Concept_<hash> titles
+#   surface_scramble_shuffle    # lexical ablation: shuffled real titles
 #
 # Experiments (no model):
-#   xgboost | encoder | text_embedding
+#   xgboost | encoder | encoder_frozen_head | text_embedding
 #
 # Examples:
 #   sbatch src/submissions/mimic/run.sh classifier mistral icu_mortality
+#   sbatch src/submissions/mimic/run.sh surface_raw mistral icu_mortality
 #   sbatch src/submissions/mimic/run.sh sft medgemma hospital_readmission
 #   sbatch src/submissions/mimic/run.sh xgboost hospital_mortality
 #   sbatch src/submissions/mimic/run.sh prompt mistral hospital_readmission
@@ -159,12 +163,17 @@ case "${EXPERIMENT}" in
         require_model
         run_torch src/pipelines/llm_pretrain.py
         ;;
-    classifier|ablation_no_pretrain_lora|ablation_frozen_pretrained)
+    classifier|ablation_no_pretrain_lora|ablation_frozen_pretrained|surface_raw|surface_scramble_hash|surface_scramble_shuffle)
         require_model
         run_torch src/pipelines/finetune_llm_classifier.py
         ;;
     ablation_frozen_nopretrain)
         require_model
+        # Plain python (not torchrun). Pin to one GPU so HF Trainer does not
+        # wrap the 4-bit model in DataParallel across all allocated GPUs.
+        _first_gpu="${CUDA_VISIBLE_DEVICES%%,*}"
+        export CUDA_VISIBLE_DEVICES="${_first_gpu:-0}"
+        echo "ablation_frozen_nopretrain: pinning CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES}"
         python -m src.pipelines.run_baseline \
             --baseline frozen_llm_linear \
             --config_filepath "${RESOLVED_CFG}"
@@ -184,7 +193,7 @@ case "${EXPERIMENT}" in
             --baseline xgboost_bow \
             --config_filepath "${RESOLVED_CFG}"
         ;;
-    encoder)
+    encoder|encoder_frozen_head)
         python -m src.pipelines.run_baseline \
             --baseline encoder_transformer \
             --config_filepath "${RESOLVED_CFG}"
@@ -212,7 +221,8 @@ case "${EXPERIMENT}" in
         echo "ERROR: unknown experiment '${EXPERIMENT}'"
         echo "Known: pretrain classifier prompt sft ablation_no_pretrain_lora"
         echo "       ablation_frozen_pretrained ablation_frozen_nopretrain"
-        echo "       xgboost encoder text_embedding"
+        echo "       surface_raw surface_scramble_hash surface_scramble_shuffle"
+        echo "       xgboost encoder encoder_frozen_head text_embedding"
         exit 1
         ;;
 esac

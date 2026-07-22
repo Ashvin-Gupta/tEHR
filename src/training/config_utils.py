@@ -87,6 +87,7 @@ def _load_site_meta(site: Optional[str], configs_root: str) -> Dict[str, Any]:
             "name": "default",
             "labels_cache_root": DEFAULT_LABELS_CACHE_ROOT,
             "path_rewrite": [],
+            "overlay": {},
         }
     site_path = os.path.join(configs_root, "shared", "sites", f"{site}.yaml")
     if not os.path.exists(site_path):
@@ -101,12 +102,15 @@ def _load_site_meta(site: Optional[str], configs_root: str) -> Dict[str, Any]:
             f"Available: {available or ['(none)']}"
         )
     raw = load_config(site_path)
-    meta = raw.get("_site") or {}
+    meta = raw.pop("_site", None) or {}
     if not isinstance(meta, dict):
         raise ValueError(f"Site file must contain a `_site` mapping: {site_path}")
     meta.setdefault("name", site)
     meta.setdefault("labels_cache_root", DEFAULT_LABELS_CACHE_ROOT)
     meta.setdefault("path_rewrite", [])
+    # Remaining top-level keys (e.g. training.eval_batch_size) override the
+    # resolved experiment config for this site.
+    meta["overlay"] = raw
     return meta
 
 
@@ -186,6 +190,14 @@ def build_mimic_config(
             f"Expected file: {exp_path}\nAvailable: {available}"
         )
 
+    # Snapshot leaf experiment ``model:`` / ``training:`` keys (ignore extends) so
+    # they win over the model overlay — e.g. pretrain.yaml ``batch_size: 1``
+    # must beat medgemma.yaml ``batch_size: 4``.
+    with open(exp_path, "r") as f:
+        exp_leaf = yaml.safe_load(f) or {}
+    exp_model_leaf = dict(exp_leaf.get("model") or {}) if isinstance(exp_leaf, dict) else {}
+    exp_training_leaf = dict(exp_leaf.get("training") or {}) if isinstance(exp_leaf, dict) else {}
+
     # Shared seed / resume defaults, then experiment overrides.
     cfg: Dict[str, Any] = {}
     repro_path = os.path.join(configs_root, "shared", "reproducibility.yaml")
@@ -205,6 +217,11 @@ def build_mimic_config(
                 f"Expected file: {model_path}\nAvailable: {available}"
             )
         cfg = deep_merge(cfg, load_config(model_path))
+        # Re-apply experiment-leaf model keys so they override the model overlay.
+        if exp_model_leaf:
+            cfg.setdefault("model", {}).update(copy.deepcopy(exp_model_leaf))
+        if exp_training_leaf:
+            cfg.setdefault("training", {}).update(copy.deepcopy(exp_training_leaf))
 
     if task:
         task_path = os.path.join(configs_root, "mimic", "tasks", f"{task}.yaml")
@@ -235,6 +252,10 @@ def build_mimic_config(
         "pretrain",
         "ablation_no_pretrain_lora",
         "ablation_frozen_nopretrain",
+        # Lexical surface-form ablations: fair comparison without text CPT mismatch.
+        "surface_raw",
+        "surface_scramble_hash",
+        "surface_scramble_shuffle",
     }:
         cfg.setdefault("model", {})["pretrained_checkpoint"] = None
 
@@ -250,13 +271,19 @@ def build_mimic_config(
     # Shared length-sorted index cache: labels_cache/{task}/
     # Approximate length order is shared across models (good enough for packing);
     # exact token lengths differ slightly by tokenizer but indices stay valid.
+    # Surface-form ablations change string lengths substantially → separate cache.
     labels_cache_root = site_meta["labels_cache_root"]
     task_name = (cfg.get("task") or {}).get("name") or task
     if task_name:
         training = cfg.setdefault("training", {})
+        surface = (cfg.get("data") or {}).get("surface_form", "text")
+        if surface and surface != "text":
+            cache_subdir = os.path.join(str(task_name), f"surface_{surface}")
+        else:
+            cache_subdir = str(task_name)
         training.setdefault(
             "data_cache_dir",
-            os.path.join(labels_cache_root, str(task_name)),
+            os.path.join(labels_cache_root, cache_subdir),
         )
 
     # Resolve {experiment} / {model} / {task} placeholders in string fields.
@@ -269,6 +296,11 @@ def build_mimic_config(
 
     # Site-specific filesystem remaps (ag619 paths → Isambard, etc.).
     cfg = _rewrite_paths(cfg, site_meta.get("path_rewrite") or [])
+
+    # Optional site overrides (VRAM / hyperparams), applied after remaps.
+    overlay = site_meta.get("overlay") or {}
+    if overlay:
+        cfg = deep_merge(cfg, overlay)
 
     return cfg
 

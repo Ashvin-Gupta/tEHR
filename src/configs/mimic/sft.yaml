@@ -1,5 +1,8 @@
 # Exp 3: SFT to emit 0/1, then logit eval on test.
 # Usage: sbatch src/submissions/mimic/run.sh sft mistral hospital_mortality
+#
+# Keys under ``model:`` in this file win over ``models/<model>.yaml``
+# (e.g. max_length here overrides mistral's 12000).
 
 extends:
   - ../shared/mimic_data.yaml
@@ -10,7 +13,7 @@ name: "mimic_sft_{model}_{task}"
 # task.description comes from mimic/tasks/<task>.yaml
 
 model:
-  max_length: 16000
+  max_length: 8000
   load_in_4bit: true
   logit_low_threshold: -10.0
 

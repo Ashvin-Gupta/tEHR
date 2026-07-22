@@ -9,6 +9,11 @@ from src.baselines.base_baselines import BaseBaseline
 from src.data.classification_collator import ClassificationCollator
 from src.models.llm_classifier import LLMClassifier
 from src.training.metrics import compute_classification_metrics
+from src.training.eval_schedule import (
+    EvalAtStepsCallback,
+    eval_optimizer_steps_from_fractions,
+    get_eval_epoch_fractions,
+)
 from src.evaluations.evaluations import compute_baseline_metrics, plot_all_curves, save_results, print_results
 import os
 
@@ -58,7 +63,7 @@ class BaseLLMClassifierBaseline(BaseBaseline):
         """Override in subclasses to allow different parameters to be trained."""
         return []
 
-    def _build_training_args(self, run_name: str) -> TrainingArguments:
+    def _build_training_args(self, run_name: str, eval_steps: int, save_steps: int) -> TrainingArguments:
         """Build TrainingArguments from config. Shared across all LLM classifier baselines."""
         device_pref = str(self.training_config.get("device", "auto")).lower()
         if device_pref not in {"auto", "cpu", "cuda"}:
@@ -107,9 +112,9 @@ class BaseLLMClassifierBaseline(BaseBaseline):
             no_cuda=use_no_cuda,
             logging_steps=int(self.training_config.get("logging_steps", 50)),
             eval_strategy="steps",
-            eval_steps=int(self.training_config.get("eval_steps", 250)),
+            eval_steps=eval_steps,
             save_strategy="steps",
-            save_steps=int(self.training_config.get("save_steps", 500)),
+            save_steps=save_steps,
             save_total_limit=int(self.training_config.get("save_total_limit", 2)),
             load_best_model_at_end=True,
             metric_for_best_model="auroc",
@@ -126,14 +131,38 @@ class BaseLLMClassifierBaseline(BaseBaseline):
             binary_classification=not self.training_config.get("multi_label", False),
             truncation=False,
         )
+
+        per_device_batch = int(self.training_config.get("batch_size", 2))
+        grad_accum = int(self.training_config.get("gradient_accumulation_steps", 2))
+        raw_fractions = self.training_config.get("eval_epoch_fractions", "default")
+        use_fraction_schedule = raw_fractions not in (None, False, "steps", "legacy")
+        callbacks = []
+        if use_fraction_schedule:
+            fractions = get_eval_epoch_fractions(self.training_config)
+            eval_at_steps = eval_optimizer_steps_from_fractions(
+                len(train_dataset),
+                fractions,
+                per_device_batch=per_device_batch,
+                grad_accum=grad_accum,
+            )
+            eval_steps = 10**9
+            save_steps = 10**9
+            callbacks.append(EvalAtStepsCallback(eval_at_steps, fractions=fractions))
+            print(f"  - Eval epoch fractions: {fractions}")
+            print(f"  - Eval optimizer steps: {eval_at_steps}")
+        else:
+            eval_steps = int(self.training_config.get("eval_steps", 250))
+            save_steps = int(self.training_config.get("save_steps", 500))
+
         self.trainer = Trainer(
             model=self.classifier_model,
-            args=self._build_training_args(run_name),
+            args=self._build_training_args(run_name, eval_steps=eval_steps, save_steps=save_steps),
             train_dataset=train_dataset,
             eval_dataset=val_dataset,
             tokenizer=self.tokenizer,
             data_collator=collator,
             compute_metrics=compute_classification_metrics,
+            callbacks=callbacks,
         )
 
     def predict(self, dataset) -> np.ndarray:
@@ -144,6 +173,19 @@ class BaseLLMClassifierBaseline(BaseBaseline):
         return torch.softmax(torch.tensor(logits), dim=1).numpy()[:, 1]
 
     def run(self):
+        # Prefer a single visible GPU for this plain-python path. Must run
+        # before model load; run.sh also pins CUDA_VISIBLE_DEVICES for safety.
+        visible = os.environ.get("CUDA_VISIBLE_DEVICES", "")
+        if "," in visible:
+            first = visible.split(",")[0].strip() or "0"
+            os.environ["CUDA_VISIBLE_DEVICES"] = first
+            logger.warning(
+                "Multiple GPUs in CUDA_VISIBLE_DEVICES (%s); pinning to %s "
+                "for single-process 4-bit LLM baseline training.",
+                visible,
+                first,
+            )
+
         run_name = self.setup_wandb()
         self.load_model()
         self.create_classifier()

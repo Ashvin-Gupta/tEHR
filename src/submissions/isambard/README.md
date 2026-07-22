@@ -15,6 +15,7 @@ sbatch --gpus=4 src/submissions/isambard/run.sh <experiment> [model] [task]
 
 # CPU jobs
 sbatch src/submissions/isambard/run_cpu.sh <experiment> [task]
+# experiments: xgboost | clinicalbert | rare_code | qualitative_dump | preview_surface
 ```
 
 `torchrun --nproc_per_node` follows the allocated GPU count automatically.
@@ -27,6 +28,9 @@ sbatch src/submissions/isambard/run.sh sft mistral hospital_mortality
 sbatch src/submissions/isambard/run.sh pretrain mistral
 sbatch --gpus=1 src/submissions/isambard/run.sh classifier mistral icu_mortality
 sbatch src/submissions/isambard/run_cpu.sh xgboost icu_mortality
+sbatch src/submissions/isambard/run_cpu.sh rare_code icu_mortality
+sbatch src/submissions/isambard/run_cpu.sh qualitative_dump hospital_mortality
+sbatch src/submissions/isambard/run_cpu.sh preview_surface icu_mortality
 ```
 
 ## How paths work

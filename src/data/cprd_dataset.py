@@ -59,9 +59,8 @@ class CPRDDataset(BaseDataset):
             time_lookup_file,
         )
 
-        # Patient records
-        limit = 1 if split in ['tuning'] else None
-        self.patient_records = self._load_data(data_dir, split, limit=limit)
+        # Patient records (full split — do not limit tuning/val shards)
+        self.patient_records = self._load_data(data_dir, split, limit=None)
 
     def _load_labels(self, labels_file:str):
         df = pd.read_csv(

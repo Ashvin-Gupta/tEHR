@@ -15,12 +15,15 @@ class FrozenLLMLinearBaseline(BaseLLMClassifierBaseline):
         use_unsloth = self.model_config.get("use_unsloth", True)
         if use_unsloth:
             
+            # Keep the whole 4-bit model on one device. device_map="auto" plus
+            # HF Trainer DataParallel (multiple visible GPUs) causes
+            # cuda:0 vs cuda:1 mismatches in bitsandbytes matmul.
             self.base_model, self.tokenizer = FastLanguageModel.from_pretrained(
                 model_name=self.model_config["model_name"],
                 max_seq_length=self.model_config.get("max_length", 8192),
                 dtype=None,
                 load_in_4bit=self.model_config.get("load_in_4bit", True),
-                device_map="auto",
+                device_map={"": 0},
             )
         else:
             from src.training.model_loader import load_hf_model

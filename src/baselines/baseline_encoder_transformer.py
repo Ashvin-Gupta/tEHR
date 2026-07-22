@@ -10,7 +10,7 @@ import copy
 import torch
 import torch.nn as nn
 import numpy as np
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Sequence
 from torch.utils.data import Dataset, DataLoader, ConcatDataset
 from tqdm import tqdm
 from collections import Counter
@@ -258,11 +258,11 @@ class EHRTransformerEncoder(nn.Module):
         """
         batch_size, seq_len = token_ids.shape
         
-        # Truncate if sequence exceeds max_seq_length (safety check)
+        # Truncate if sequence exceeds max_seq_length — keep most recent events
         if seq_len > self.max_seq_length:
-            token_ids = token_ids[:, :self.max_seq_length]
+            token_ids = token_ids[:, -self.max_seq_length:]
             if attention_mask is not None:
-                attention_mask = attention_mask[:, :self.max_seq_length]
+                attention_mask = attention_mask[:, -self.max_seq_length:]
             seq_len = self.max_seq_length
         
         # Embeddings + positional encoding (positions 0..seq_len-1)
@@ -298,11 +298,11 @@ class EHRTransformerEncoder(nn.Module):
         """
         batch_size, seq_len = token_ids.shape
 
-        # Truncate
+        # Truncate — keep most recent events
         if seq_len > self.max_seq_length:
-            token_ids = token_ids[:, :self.max_seq_length]
+            token_ids = token_ids[:, -self.max_seq_length:]
             if attention_mask is not None:
-                attention_mask = attention_mask[:, :self.max_seq_length]
+                attention_mask = attention_mask[:, -self.max_seq_length:]
             seq_len = self.max_seq_length
 
         if self.pooling == 'cls':
@@ -417,12 +417,28 @@ class EncoderTransformerBaseline:
 
     def _load_pretrained_checkpoint(self, checkpoint_path: str, device: torch.device):
         """
-        Load a stage-1 pretrained encoder checkpoint and restore vocab + weights.
+        Load an encoder checkpoint and restore vocab + weights.
+
+        Accepts either:
+          - stage-1 MLM bundle: ``{encoder_state_dict, vocab, ...}``
+          - raw ``state_dict`` (e.g. ``best_model.pt`` / ``pytorch_model.bin``)
         """
         print(f"\nLoading pretrained encoder checkpoint: {checkpoint_path}")
         checkpoint = torch.load(checkpoint_path, map_location=device)
 
-        ckpt_vocab = checkpoint.get("vocab")
+        if isinstance(checkpoint, dict) and (
+            "encoder_state_dict" in checkpoint
+            or "model_state_dict" in checkpoint
+            or "vocab" in checkpoint
+        ):
+            ckpt_vocab = checkpoint.get("vocab")
+            state_dict = checkpoint.get(
+                "encoder_state_dict", checkpoint.get("model_state_dict")
+            )
+        else:
+            ckpt_vocab = None
+            state_dict = checkpoint
+
         if ckpt_vocab is not None:
             self.vocab = ckpt_vocab
             self.token_to_id = ckpt_vocab.get("token_to_id", {})
@@ -431,19 +447,60 @@ class EncoderTransformerBaseline:
         elif self.vocab is None:
             raise ValueError(
                 "Checkpoint missing `vocab`, and no in-memory vocab available. "
-                "Build vocab first or provide a checkpoint saved by this baseline."
+                "Use the stage-1 MLM checkpoint (has vocab), or build vocab first."
             )
 
         if self.model is None:
             self.create_model()
         self.model = self.model.to(device)
 
-        state_dict = checkpoint.get("encoder_state_dict", checkpoint.get("model_state_dict"))
         if state_dict is None:
-            raise ValueError("Checkpoint missing `encoder_state_dict` (or `model_state_dict`).")
-        self.model.load_state_dict(state_dict, strict=True)
-        print("  - Loaded pretrained encoder weights successfully")
-    
+            raise ValueError(
+                "Checkpoint missing weights "
+                "(`encoder_state_dict` / `model_state_dict` / raw state_dict)."
+            )
+        incompatible = self.model.load_state_dict(state_dict, strict=False)
+        if incompatible.missing_keys:
+            print(f"  - Missing keys (ok if reiniting head): {incompatible.missing_keys[:8]}")
+        if incompatible.unexpected_keys:
+            print(f"  - Unexpected keys ignored: {incompatible.unexpected_keys[:8]}")
+        print("  - Loaded encoder weights successfully")
+
+    def _freeze_encoder_train_head_only(self, reinit_classifier: bool = True):
+        """
+        Freeze token embeddings + transformer; train only the classification head.
+
+        Mirrors LLM ablation 5b (frozen pretrained backbone + trainable head).
+        """
+        if self.model is None:
+            raise RuntimeError("Model must be created/loaded before freezing.")
+
+        if reinit_classifier:
+            hidden_dim = int(self.model_config.get("hidden_dim", 512))
+            num_labels = int(self.model_config.get("num_labels", 2))
+            head_type = self.model_config.get("head_type", "linear")
+            head_hidden_size = int(self.model_config.get("head_hidden_size", 256))
+            dropout = float(self.model_config.get("dropout", 0.1))
+            device = next(self.model.parameters()).device
+            self.model.classifier = build_head(
+                head_type, hidden_dim, num_labels, head_hidden_size, dropout
+            ).to(device)
+            print("  - Re-initialized classification head")
+
+        n_frozen = 0
+        n_train = 0
+        for name, param in self.model.named_parameters():
+            train = "classifier" in name
+            param.requires_grad = train
+            if train:
+                n_train += param.numel()
+            else:
+                n_frozen += param.numel()
+
+        print(
+            f"  - Freeze encoder: trainable={n_train:,} params (head only), "
+            f"frozen={n_frozen:,}"
+        )    
     def build_vocabulary(self, datasets: Dict[str, Dataset]):
         """
         Build vocabulary from all datasets.
@@ -592,9 +649,9 @@ class EncoderTransformerBaseline:
                 tokens = sample.get('tokens', [])
                 token_ids = self.tokenize_sequence(tokens)
                 
-                # Truncate to max_seq_length if needed
+                # Keep the most recent events (tail), matching the LLM path
                 if len(token_ids) > max_seq_length:
-                    token_ids = token_ids[:max_seq_length]
+                    token_ids = token_ids[-max_seq_length:]
                 
                 token_ids_list.append(token_ids)
                 max_len = max(max_len, len(token_ids))
@@ -746,7 +803,7 @@ class EncoderTransformerBaseline:
         return torch.softmax(logits, dim=1)[:, 1]
 
     def train_epoch(self, train_loader, optimizer, criterion, device):
-        """Train for one epoch."""
+        """Train for one epoch (no mid-epoch evaluation)."""
         self.model.train()
         total_loss = 0
         num_batches = 0
@@ -772,8 +829,127 @@ class EncoderTransformerBaseline:
             num_batches += 1
         
         return total_loss / num_batches
+
+    def train_epoch_with_fraction_evals(
+        self,
+        train_loader,
+        val_loader,
+        optimizer,
+        criterion,
+        device,
+        *,
+        n_train: int,
+        fractions: Sequence[float],
+        best_val_auroc: float,
+        convergence_path: str,
+        source: str = "encoder",
+    ):
+        """
+        One supervised epoch with validation at matched epoch fractions
+        (examples_seen / n_train), mirroring the LLM classifier schedule.
+        """
+        from src.training.eval_schedule import next_fraction_targets, save_convergence_point
+
+        self.model.train()
+        total_loss = 0.0
+        num_batches = 0
+        examples_seen = 0
+        optimizer_steps = 0
+        head_type = getattr(self, "head_type", "linear")
+        pending = next_fraction_targets(fractions)
+
+        for batch in tqdm(train_loader, desc="Training"):
+            token_ids = batch["token_ids"].to(device)
+            attention_mask = batch["attention_mask"].to(device)
+            labels = batch["labels"].to(device)
+
+            optimizer.zero_grad()
+            logits = self.model(token_ids, attention_mask)
+
+            if head_type == "logistic":
+                loss = criterion(logits.squeeze(1), labels.float())
+            else:
+                loss = criterion(logits, labels)
+
+            loss.backward()
+            optimizer.step()
+
+            total_loss += loss.item()
+            num_batches += 1
+            optimizer_steps += 1
+            examples_seen += int(labels.shape[0])
+            progress = min(1.0, examples_seen / max(1, n_train))
+
+            while pending and progress + 1e-12 >= pending[0]:
+                frac = pending.pop(0)
+                print(
+                    f"\n  [Matched eval] epoch_fraction={frac:.2f} "
+                    f"(examples_seen={examples_seen}/{n_train}, step={optimizer_steps})"
+                )
+                val_metrics = self.evaluate(
+                    val_loader, device, "validation", save_artifacts=False
+                )
+                save_convergence_point(
+                    convergence_path,
+                    source=source,
+                    epoch_fraction=frac,
+                    examples_seen=examples_seen,
+                    n_train=n_train,
+                    step=optimizer_steps,
+                    metrics=val_metrics,
+                )
+                print(
+                    f"  - Val AUROC={val_metrics['auroc']:.4f} "
+                    f"AUPR={val_metrics['aupr']:.4f}"
+                )
+                if val_metrics["auroc"] > best_val_auroc:
+                    best_val_auroc = val_metrics["auroc"]
+                    os.makedirs(os.path.join(self.output_dir, "models"), exist_ok=True)
+                    torch.save(
+                        self.model.state_dict(),
+                        os.path.join(self.output_dir, "models", "best_model.pt"),
+                    )
+                    print(f"  - Saved best model (val AUROC {best_val_auroc:.4f})")
+                self.model.train()
+
+        # Ensure fraction 1.0 fired even if rounding left it pending.
+        if pending:
+            frac = pending[-1]
+            print(
+                f"\n  [Matched eval] epoch_fraction={frac:.2f} "
+                f"(examples_seen={examples_seen}/{n_train}, step={optimizer_steps})"
+            )
+            val_metrics = self.evaluate(
+                val_loader, device, "validation", save_artifacts=False
+            )
+            save_convergence_point(
+                convergence_path,
+                source=source,
+                epoch_fraction=frac,
+                examples_seen=examples_seen,
+                n_train=n_train,
+                step=optimizer_steps,
+                metrics=val_metrics,
+            )
+            if val_metrics["auroc"] > best_val_auroc:
+                best_val_auroc = val_metrics["auroc"]
+                os.makedirs(os.path.join(self.output_dir, "models"), exist_ok=True)
+                torch.save(
+                    self.model.state_dict(),
+                    os.path.join(self.output_dir, "models", "best_model.pt"),
+                )
+                print(f"  - Saved best model (val AUROC {best_val_auroc:.4f})")
+
+        avg_loss = total_loss / max(num_batches, 1)
+        return avg_loss, best_val_auroc
     
-    def evaluate(self, data_loader, device, split_name: str = "validation") -> Dict[str, float]:
+    def evaluate(
+        self,
+        data_loader,
+        device,
+        split_name: str = "validation",
+        save_artifacts: bool = True,
+    ) -> Dict[str, float]:
         """
         Evaluate model on a dataset.
         
@@ -781,6 +957,7 @@ class EncoderTransformerBaseline:
             data_loader: DataLoader instance
             device: Device to run on
             split_name: Name of the split
+            save_artifacts: If False, skip plots/JSON (used for mid-epoch matched evals)
         
         Returns:
             Dictionary of metrics
@@ -810,18 +987,19 @@ class EncoderTransformerBaseline:
         
         # Print results
         print_results(metrics, split_name)
-        
-        # Save all plots (ROC, PR, and Calibration)
-        plot_dir = os.path.join(self.output_dir, 'plots', split_name)
-        plot_all_curves(all_labels, all_probs, plot_dir)
-        
-        # Save predictions
-        results = {
-            'metrics': metrics,
-            'labels': all_labels.tolist(),
-            'probs': all_probs.tolist()
-        }
-        save_results(results, os.path.join(self.output_dir, 'results'), f'{split_name}_results.json')
+
+        if save_artifacts:
+            # Save all plots (ROC, PR, and Calibration)
+            plot_dir = os.path.join(self.output_dir, 'plots', split_name)
+            plot_all_curves(all_labels, all_probs, plot_dir)
+            
+            # Save predictions
+            results = {
+                'metrics': metrics,
+                'labels': all_labels.tolist(),
+                'probs': all_probs.tolist()
+            }
+            save_results(results, os.path.join(self.output_dir, 'results'), f'{split_name}_results.json')
         
         return metrics
     
@@ -846,10 +1024,15 @@ class EncoderTransformerBaseline:
         checkpoint_path = self.pretrain_config.get("pretrained_checkpoint")
         force_pretrain = bool(self.pretrain_config.get("force_pretrain", False))
 
+        if checkpoint_path and not os.path.exists(checkpoint_path):
+            print(
+                f"  - pretrain.pretrained_checkpoint not found: {checkpoint_path}\n"
+                "  - Will run stage-1 MLM pretraining and save a new checkpoint."
+            )
+            checkpoint_path = None
+
         if checkpoint_path:
             # Reuse a previously pretrained stage-1 encoder and skip MLM by default.
-            if not os.path.exists(checkpoint_path):
-                raise FileNotFoundError(f"pretrain.pretrained_checkpoint not found: {checkpoint_path}")
             self._load_pretrained_checkpoint(checkpoint_path, device)
             if self.pretrain_config.get("enabled", False) and not force_pretrain:
                 print("  - pretrain.enabled=True but pretrained_checkpoint provided; skipping stage-1 MLM.")
@@ -924,9 +1107,16 @@ class EncoderTransformerBaseline:
 
             # Persist stage-1 encoder so it can be reused independently of stage-2.
             if self.pretrain_config.get("save_model", True):
-                pretrain_model_dir = os.path.join(self.output_dir, "models")
+                configured_ckpt = self.pretrain_config.get("pretrained_checkpoint")
+                if configured_ckpt:
+                    pretrain_model_path = configured_ckpt
+                    pretrain_model_dir = os.path.dirname(pretrain_model_path)
+                else:
+                    pretrain_model_dir = os.path.join(self.output_dir, "models")
+                    pretrain_model_path = os.path.join(
+                        pretrain_model_dir, "pretrained_encoder_stage1_mlm.pt"
+                    )
                 os.makedirs(pretrain_model_dir, exist_ok=True)
-                pretrain_model_path = os.path.join(pretrain_model_dir, "pretrained_encoder_stage1_mlm.pt")
                 torch.save(
                     {
                         "encoder_state_dict": self.model.state_dict(),
@@ -943,6 +1133,24 @@ class EncoderTransformerBaseline:
             for p in self.model.classifier.parameters():
                 p.requires_grad = True
         
+        # Optional: freeze encoder backbone, train head only (LLM-5b analogue).
+        freeze_encoder = bool(self.training_config.get("freeze_encoder", False))
+        if freeze_encoder:
+            if not checkpoint_path:
+                raise RuntimeError(
+                    "training.freeze_encoder=True requires "
+                    "pretrain.pretrained_checkpoint to load a frozen backbone "
+                    "(use the stage-1 MLM checkpoint)."
+                )
+            print("\n" + "=" * 80)
+            print("Freezing encoder; training classification head only")
+            print("=" * 80)
+            self._freeze_encoder_train_head_only(
+                reinit_classifier=bool(
+                    self.training_config.get("reinit_classifier", True)
+                )
+            )
+
         # Create data loaders for supervised training
         batch_size = int(self.training_config.get('batch_size', 32))
         train_loader = DataLoader(
@@ -968,37 +1176,77 @@ class EncoderTransformerBaseline:
         )
         
         # Training setup for supervised classification
+        trainable_params = [p for p in self.model.parameters() if p.requires_grad]
+        if not trainable_params:
+            raise RuntimeError("No trainable parameters — check freeze_encoder settings.")
         optimizer = torch.optim.AdamW(
-            self.model.parameters(),
+            trainable_params,
             lr=float(self.training_config.get('learning_rate', 1e-4)),
             weight_decay=float(self.training_config.get('weight_decay', 0.01))
         )
         criterion = self._get_criterion()
         
         # Train
-        num_epochs = int(self.training_config.get('epochs', 10))
+        num_epochs = int(self.training_config.get('epochs', 1))
+        from src.training.eval_schedule import get_eval_epoch_fractions
+        raw_fractions = self.training_config.get("eval_epoch_fractions", "default")
+        use_fraction_schedule = raw_fractions not in (None, False, "steps", "legacy")
+        fractions = get_eval_epoch_fractions(self.training_config) if use_fraction_schedule else []
+        n_train = len(filtered_datasets["train"])
+        convergence_path = os.path.join(self.output_dir, "results", "convergence.jsonl")
+        if use_fraction_schedule and os.path.exists(convergence_path):
+            os.remove(convergence_path)
+
         print(f"\n" + "=" * 80)
-        print(f"Stage 2: Supervised training for {num_epochs} epochs...")
+        stage_label = (
+            "Stage 2: Head-only training (encoder frozen)"
+            if freeze_encoder
+            else f"Stage 2: Supervised training for {num_epochs} epoch(s)"
+        )
+        print(f"{stage_label}...")
+        if use_fraction_schedule:
+            print(f"  Matched eval fractions: {fractions}")
+            print(f"  Convergence log → {convergence_path}")
         print("=" * 80)
         
         best_val_auroc = 0.0
+        source = "encoder_frozen" if freeze_encoder else "encoder"
         
         for epoch in range(num_epochs):
             print(f"\n[Classification] Epoch {epoch + 1}/{num_epochs}")
-            train_loss = self.train_epoch(train_loader, optimizer, criterion, device)
-            print(f"  - Train loss: {train_loss:.4f}")
-            
-            # Validate
-            val_metrics = self.evaluate(val_loader, device, 'validation')
-            if val_metrics['auroc'] > best_val_auroc:
-                best_val_auroc = val_metrics['auroc']
-                # Save best model (by validation AUROC)
-                os.makedirs(os.path.join(self.output_dir, 'models'), exist_ok=True)
-                torch.save(self.model.state_dict(), os.path.join(self.output_dir, 'models', 'best_model.pt'))
-                print(f"  - Saved best model (val AUROC {best_val_auroc:.4f})")
+            if use_fraction_schedule:
+                train_loss, best_val_auroc = self.train_epoch_with_fraction_evals(
+                    train_loader,
+                    val_loader,
+                    optimizer,
+                    criterion,
+                    device,
+                    n_train=n_train,
+                    fractions=fractions,
+                    best_val_auroc=best_val_auroc,
+                    convergence_path=convergence_path,
+                    source=source,
+                )
+                print(f"  - Train loss: {train_loss:.4f}")
+            else:
+                train_loss = self.train_epoch(train_loader, optimizer, criterion, device)
+                print(f"  - Train loss: {train_loss:.4f}")
+                
+                # Validate (legacy epoch-end only)
+                val_metrics = self.evaluate(val_loader, device, 'validation')
+                if val_metrics['auroc'] > best_val_auroc:
+                    best_val_auroc = val_metrics['auroc']
+                    os.makedirs(os.path.join(self.output_dir, 'models'), exist_ok=True)
+                    torch.save(self.model.state_dict(), os.path.join(self.output_dir, 'models', 'best_model.pt'))
+                    print(f"  - Saved best model (val AUROC {best_val_auroc:.4f})")
         
         # Load best model (by validation AUROC) for final evaluation and saving
         best_path = os.path.join(self.output_dir, 'models', 'best_model.pt')
+        if not os.path.exists(best_path):
+            # No improvement recorded (e.g. empty schedule) — save current weights.
+            os.makedirs(os.path.join(self.output_dir, 'models'), exist_ok=True)
+            torch.save(self.model.state_dict(), best_path)
+            print("  - No best checkpoint yet; saved final weights as best_model.pt")
         self.model.load_state_dict(torch.load(best_path, map_location=device))
         print(f"\nLoaded best model (best val AUROC) for final evaluation.")
         
@@ -1015,7 +1263,10 @@ class EncoderTransformerBaseline:
         # Save summary
         summary = {
             'validation': val_metrics,
-            'test': test_metrics
+            'test': test_metrics,
+            'best_val_auroc': best_val_auroc,
+            'eval_epoch_fractions': fractions if use_fraction_schedule else None,
+            'supervised_epochs': num_epochs,
         }
         save_results(summary, self.output_dir, 'summary.json')
         

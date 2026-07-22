@@ -1,5 +1,11 @@
 # Baseline: custom transformer encoder on full vocabulary (+ optional MLM).
 # Usage: sbatch src/submissions/mimic/run.sh encoder icu_mortality
+#
+# Supervised protocol (matched to LLM classifier):
+#   - 1 labeled epoch
+#   - validation AUROC/AUPR at epoch fractions 0.05..1.00
+#   - report best-val checkpoint
+# MLM pretrain epochs remain separate and are not matched.
 
 extends:
   - ../shared/mimic_data.yaml
@@ -22,11 +28,12 @@ model:
 training:
   output_dir: "/home/ag619/experiments/Results/mimic-encoder-transformer-{task}"
   overwrite_output_dir: true
-  epochs: 30
+  epochs: 1
   batch_size: 128
   learning_rate: 1e-4
   weight_decay: 0.01
   dataloader_num_workers: 2
+  eval_epoch_fractions: [0.05, 0.10, 0.20, 0.40, 0.60, 0.80, 1.00]
 
 pretrain:
   enabled: true

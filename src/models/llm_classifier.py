@@ -192,6 +192,36 @@ class LLMClassifier(nn.Module):
             batch_size = hidden_states.size(0)
             return hidden_states[range(batch_size), sequence_lengths]
 
+    def _forward_backbone(self, input_ids: torch.Tensor, attention_mask: torch.Tensor):
+        """
+        Run the decoder backbone and return hidden states.
+
+        Unsloth's causal-LM wrapper sets ``_has_no_labels = True`` when LM labels
+        are omitted (classification). That enables a broken
+        ``inputs_embeds *= attention_mask`` path if ``max_seq_length`` is stale
+        (often 4096) while sequences are 12000. Hitting the inner model and
+        clearing the flag avoids it.
+
+        Still required on Isambard (GH200 / torch 2.12) even with Unsloth 2026.2.x;
+        the other cluster (x86 / torch 2.10) can survive the direct backbone path.
+        """
+        backbone = getattr(self.base_model, "model", self.base_model)
+        inner = getattr(backbone, "model", None)
+        if inner is not None:
+            inner._has_no_labels = False
+            return inner(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                output_hidden_states=True,
+                return_dict=True,
+            )
+        return backbone(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            output_hidden_states=True,
+            return_dict=True,
+        )
+
     def get_patient_representation(
         self,
         input_ids: torch.Tensor,
@@ -208,14 +238,7 @@ class LLMClassifier(nn.Module):
         Returns:
             Tensor of shape (batch_size, hidden_size) representing each patient.
         """
-        backbone = getattr(self.base_model, "model", self.base_model)
-
-        outputs = backbone(
-            input_ids=input_ids,
-            attention_mask=attention_mask,
-            output_hidden_states=True,
-            return_dict=True,
-        )
+        outputs = self._forward_backbone(input_ids, attention_mask)
 
         if hasattr(outputs, "last_hidden_state"):
             hidden_states = outputs.last_hidden_state
@@ -241,12 +264,6 @@ class LLMClassifier(nn.Module):
         Returns:
             Dict with 'loss' and 'logits'.
         """
-        # Get the base model (unwrap if needed).
-        # For PEFT/Unsloth models self.base_model is a PeftModel; .model is the
-        # underlying MistralForCausalLM.  LoRA is injected at the linear-layer
-        # level so it IS applied even when calling the base model directly.
-        backbone = getattr(self.base_model, "model", self.base_model)
-
         # One-time check: verify LoRA adapters exist and are in the call graph.
         if not self._lora_verified:
             lora_params = [(n, p) for n, p in self.base_model.named_parameters() if "lora_A" in n]
@@ -265,13 +282,7 @@ class LLMClassifier(nn.Module):
                 )
             self._lora_verified = True
 
-        # Forward pass
-        outputs = backbone(
-            input_ids=input_ids,
-            attention_mask=attention_mask,
-            output_hidden_states=True,
-            return_dict=True
-        )
+        outputs = self._forward_backbone(input_ids, attention_mask)
         
         # Extract last layer's hidden states: (batch_size, seq_len, hidden_size)
         if hasattr(outputs, "last_hidden_state"):

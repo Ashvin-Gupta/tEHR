@@ -47,6 +47,8 @@ def get_dataset(
             label_column = data_config.get('label_column', 'label'),
             task = data_config.get('task', 'pretrain'),
             format = data_config.get('format', 'text'),
+            surface_form = data_config.get('surface_form', 'text'),
+            scramble_seed = int(data_config.get('scramble_seed', 42)),
         )
     elif dataset_name == 'EHRSHOT':
         return EHRSHOTDataset(

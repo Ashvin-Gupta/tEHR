@@ -35,21 +35,42 @@ Model and task args can be in **any order**.
 | `ablation_no_pretrain_lora` | required | yes | **5a** |
 | `ablation_frozen_pretrained` | required | yes | **5b** |
 | `ablation_frozen_nopretrain` | required | yes | **5c** |
+| `surface_raw` | required | yes | Lexical ablation: raw codes (no CPT, like 5a) |
+| `surface_scramble_hash` | required | yes | Lexical ablation: `Concept_<hash>` titles |
+| `surface_scramble_shuffle` | required | yes | Lexical ablation: shuffled titles |
 | `xgboost` | — | yes | XGBoost bag-of-words (CPU: `run_cpu.sh`) |
 | `clinicalbert` | — | yes | Bio_ClinicalBERT fine-tune (CPU: `run_cpu.sh`) |
 | `encoder` | — | yes | Custom transformer encoder |
+| `encoder_frozen_head` | — | yes | Freeze MLM encoder; train head only (≈ LLM 5b) |
 | `text_embedding` | — | yes | Qwen3 embeddings → transformer |
 
 ## Examples
 
 ```bash
 sbatch src/submissions/mimic/run.sh classifier mistral icu_mortality
+sbatch src/submissions/mimic/run.sh surface_raw mistral icu_mortality
+sbatch src/submissions/mimic/run.sh surface_scramble_hash mistral hospital_mortality
 sbatch src/submissions/mimic/run.sh sft medgemma hospital_readmission
 sbatch src/submissions/mimic/run.sh prompt mistral hospital_mortality
 sbatch src/submissions/mimic/run_cpu.sh xgboost hospital_readmission
 sbatch src/submissions/mimic/run_cpu.sh clinicalbert icu_mortality
 sbatch src/submissions/mimic/run.sh encoder   # defaults to icu_mortality
 sbatch --gres=gpu:2 src/submissions/mimic/run.sh pretrain mistral
+```
+
+## Lexical / analysis helpers
+
+Surface-form ablations (`surface_raw`, `surface_scramble_*`) match **5a** (no EHR CPT;
+fresh LLM + LoRA + head) so the comparison isolates lexical grounding.
+Fair text control: `ablation_no_pretrain_lora`.
+
+```bash
+# Paired subgroup analysis (rare-code + length strata, prevalence %, Δ vs encoder)
+sbatch src/submissions/isambard/run_cpu.sh subgroup_full icu_mortality
+sbatch src/submissions/isambard/run_cpu.sh subgroup_full hospital_mortality
+sbatch src/submissions/isambard/run_cpu.sh subgroup_frozen icu_mortality   # after encoder_frozen_head
+sbatch src/submissions/isambard/run_cpu.sh preview_surface icu_mortality
+sbatch src/submissions/isambard/run_cpu.sh qualitative_dump icu_mortality
 ```
 
 ## Config layout

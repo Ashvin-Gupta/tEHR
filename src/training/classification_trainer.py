@@ -6,6 +6,12 @@ import time
 import torch
 from typing import Dict, Any
 from transformers import TrainingArguments, Trainer, EarlyStoppingCallback
+
+from src.training.eval_schedule import (
+    EvalAtStepsCallback,
+    eval_optimizer_steps_from_fractions,
+    get_eval_epoch_fractions,
+)
 import wandb
 from torch.utils.data import ConcatDataset
 
@@ -404,6 +410,32 @@ class EHRClassificationTrainer:
         # Control whether checkpoints are written with safetensors.
         save_safetensors = bool(self.training_config.get("save_safetensors", False))
 
+        per_device_batch = int(self.training_config.get('batch_size', 8))
+        grad_accum = int(self.training_config.get('gradient_accumulation_steps', 1))
+        raw_fractions = self.training_config.get("eval_epoch_fractions", "default")
+        use_fraction_schedule = raw_fractions not in (None, False, "steps", "legacy")
+        fractions = get_eval_epoch_fractions(self.training_config) if use_fraction_schedule else []
+
+        # Matched paper schedule: eval only at epoch fractions (not fixed step gaps).
+        # Disable the built-in interval by using a huge eval/save interval; the
+        # EvalAtStepsCallback fires should_evaluate / should_save at fraction steps.
+        if use_fraction_schedule:
+            eval_at_steps = eval_optimizer_steps_from_fractions(
+                len(train_dataset),
+                fractions,
+                per_device_batch=per_device_batch,
+                grad_accum=grad_accum,
+            )
+            eval_steps = 10**9
+            save_steps = 10**9
+            print(f"  - Train size: {len(train_dataset)}")
+            print(f"  - Eval epoch fractions: {fractions}")
+            print(f"  - Eval optimizer steps: {eval_at_steps}")
+        else:
+            eval_at_steps = None
+            eval_steps = int(self.training_config.get('eval_steps', 100))
+            save_steps = int(self.training_config.get('save_steps', 500))
+
         training_args_kwargs = dict(
             output_dir=self.training_config['output_dir'],
             overwrite_output_dir=bool(self.training_config.get("overwrite_output_dir", False)),
@@ -412,14 +444,14 @@ class EHRClassificationTrainer:
             
             # Training hyperparameters
             num_train_epochs=int(self.training_config.get('epochs', 10)),
-            per_device_train_batch_size=int(self.training_config.get('batch_size', 8)),
+            per_device_train_batch_size=per_device_batch,
             per_device_eval_batch_size=int(self.training_config.get('eval_batch_size', 8)),
             learning_rate=float(self.training_config.get('learning_rate', 1e-3)),
             weight_decay=float(self.training_config.get('weight_decay', 0.01)),
             warmup_steps=int(self.training_config.get('warmup_steps', 100)),
             
             # Gradient settings
-            gradient_accumulation_steps=int(self.training_config.get('gradient_accumulation_steps', 1)),
+            gradient_accumulation_steps=grad_accum,
             gradient_checkpointing=True,
             
             # Multi-GPU settings
@@ -433,12 +465,12 @@ class EHRClassificationTrainer:
             # Logging and evaluation
             logging_steps=int(self.training_config.get('logging_steps', 10)),
             eval_strategy="steps",
-            eval_steps=int(self.training_config.get('eval_steps', 100)),
+            eval_steps=eval_steps,
             save_strategy="steps",
-            save_steps=int(self.training_config.get('save_steps', 500)),
+            save_steps=save_steps,
             save_total_limit=int(self.training_config.get('save_total_limit', 2)),
             
-            # Best model tracking
+            # Best model tracking (early-stop selection among fraction checkpoints)
             load_best_model_at_end=True,
             metric_for_best_model="auroc",
             greater_is_better=True,
@@ -452,6 +484,8 @@ class EHRClassificationTrainer:
         
         # Create callbacks
         callbacks = []
+        if eval_at_steps is not None:
+            callbacks.append(EvalAtStepsCallback(eval_at_steps, fractions=fractions))
         early_stopping_patience = self.training_config.get('early_stopping_patience')
         if early_stopping_patience:
             callbacks.append(EarlyStoppingCallback(
@@ -791,26 +825,41 @@ class EHRClassificationTrainer:
         """
         Extract patient IDs in prediction order when available.
 
-        Supports base datasets exposing `patient_records`, and torch Subset
-        wrappers used by cached length-sorting.
+        Prediction datasets index into ACES `examples` (one row per label), not
+        `patient_records` (one trajectory per subject). Length-sorted Subsets
+        therefore must resolve subject_id from examples[i].
         """
-        if isinstance(dataset, torch.utils.data.Subset):
-            base_dataset = dataset.dataset
+        def _ids_from_base(base_dataset, indices):
+            examples = getattr(base_dataset, "examples", None) or None
+            if examples:
+                return [
+                    str(examples[i].get("subject_id", i))
+                    for i in indices
+                ]
             if hasattr(base_dataset, "patient_records"):
                 return [
                     str(base_dataset.patient_records[i].get("subject_id", i))
-                    for i in dataset.indices
+                    for i in indices
                 ]
-            return [str(i) for i in dataset.indices]
+            return [str(i) for i in indices]
+
+        if isinstance(dataset, torch.utils.data.Subset):
+            return _ids_from_base(dataset.dataset, list(dataset.indices))
+
+        if hasattr(dataset, "examples") and dataset.examples:
+            return _ids_from_base(dataset, range(len(dataset)))
 
         if hasattr(dataset, "patient_records"):
-            return [
-                str(dataset.patient_records[i].get("subject_id", i))
-                for i in range(len(dataset))
-            ]
+            return _ids_from_base(dataset, range(len(dataset)))
 
         # Fallback for datasets without explicit subject IDs (e.g. ConcatDataset)
         return [str(i) for i in range(len(dataset))]
+
+    def _extract_example_indices(self, dataset):
+        """Return base-dataset example indices in prediction order (for Subsets)."""
+        if isinstance(dataset, torch.utils.data.Subset):
+            return [int(i) for i in dataset.indices]
+        return list(range(len(dataset)))
 
     def _save_split_predictions(
         self,
@@ -822,10 +871,12 @@ class EHRClassificationTrainer:
         """Persist per-sample labels and probabilities for a split."""
         labels, probs = self._pred_to_labels_and_probs(pred_output)
         patient_ids = self._extract_patient_ids(dataset)
+        example_indices = self._extract_example_indices(dataset)
 
         results_payload = {
             "metrics": metrics or {},
             "patient_ids": [str(pid) for pid in patient_ids],
+            "example_indices": example_indices,
             "labels": labels.tolist() if hasattr(labels, "tolist") else list(labels),
             "probs": probs.tolist() if hasattr(probs, "tolist") else list(probs),
         }
