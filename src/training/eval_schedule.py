@@ -125,6 +125,84 @@ def EvalAtStepsCallback(*args, **kwargs):
     return _EvalAtStepsCallback(*args, **kwargs)
 
 
+def MaxRuntimeCallback(*args, **kwargs):
+    """Lazy wrapper so importing this module does not load transformers."""
+    import time
+    from transformers import TrainerCallback, TrainerControl, TrainerState, TrainingArguments
+
+    class _MaxRuntimeCallback(TrainerCallback):
+        """
+        Stop training after ``max_runtime_hours`` wall-clock from train start.
+
+        Leaves time before a SLURM walltime kill for the usual post-train
+        val/test evaluation in ``run_full_pipeline`` / baseline ``run()``.
+        """
+
+        def __init__(self, max_runtime_hours: float):
+            hours = float(max_runtime_hours)
+            if hours <= 0:
+                raise ValueError(f"max_runtime_hours must be > 0, got {hours}")
+            self.max_runtime_sec = hours * 3600.0
+            self._start: Optional[float] = None
+            self._stopped = False
+
+        def on_train_begin(
+            self,
+            args: TrainingArguments,
+            state: TrainerState,
+            control: TrainerControl,
+            **kwargs,
+        ):
+            self._start = time.monotonic()
+            print(
+                f"  - Max runtime: {self.max_runtime_sec / 3600.0:.1f}h from train start "
+                f"(early stop → final val/test eval before walltime kill)"
+            )
+            return control
+
+        def on_step_end(
+            self,
+            args: TrainingArguments,
+            state: TrainerState,
+            control: TrainerControl,
+            **kwargs,
+        ):
+            if self._stopped or self._start is None:
+                return control
+            elapsed = time.monotonic() - self._start
+            if elapsed >= self.max_runtime_sec:
+                self._stopped = True
+                print(
+                    f"\n  - Max runtime reached ({elapsed / 3600.0:.2f}h at step "
+                    f"{state.global_step}); stopping training for final evaluation.\n",
+                    flush=True,
+                )
+                control.should_training_stop = True
+                control.should_save = True
+                control.should_evaluate = True
+            return control
+
+    return _MaxRuntimeCallback(*args, **kwargs)
+
+
+def append_max_runtime_callback(
+    callbacks: List[Any],
+    training_config: Dict[str, Any],
+) -> List[Any]:
+    """Append ``MaxRuntimeCallback`` when ``training.max_runtime_hours`` is set."""
+    raw = training_config.get("max_runtime_hours")
+    if raw is None or raw is False:
+        return callbacks
+    try:
+        hours = float(raw)
+    except (TypeError, ValueError):
+        raise ValueError(f"training.max_runtime_hours must be a number, got {raw!r}")
+    if hours <= 0:
+        return callbacks
+    callbacks.append(MaxRuntimeCallback(hours))
+    return callbacks
+
+
 def save_convergence_point(
     path: str,
     *,

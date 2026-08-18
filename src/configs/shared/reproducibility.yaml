@@ -4,6 +4,8 @@
 # seed: fixed RNG seed for python / numpy / torch / HF
 # training.resume_from_last: if true, auto-resume from newest checkpoint-*
 #   under training.output_dir (or training.output_dir/checkpoints)
+# CLI: --resume_from_last / --no-resume_from_last
+#   (or RESUME_FROM_LAST=true|false with sbatch run.sh)
 
 seed: 42
 

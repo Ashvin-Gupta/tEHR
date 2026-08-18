@@ -11,6 +11,7 @@ from src.models.llm_classifier import LLMClassifier
 from src.training.metrics import compute_classification_metrics
 from src.training.eval_schedule import (
     EvalAtStepsCallback,
+    append_max_runtime_callback,
     eval_optimizer_steps_from_fractions,
     get_eval_epoch_fractions,
 )
@@ -154,6 +155,8 @@ class BaseLLMClassifierBaseline(BaseBaseline):
             eval_steps = int(self.training_config.get("eval_steps", 250))
             save_steps = int(self.training_config.get("save_steps", 500))
 
+        append_max_runtime_callback(callbacks, self.training_config)
+
         self.trainer = Trainer(
             model=self.classifier_model,
             args=self._build_training_args(run_name, eval_steps=eval_steps, save_steps=save_steps),
@@ -171,6 +174,130 @@ class BaseLLMClassifierBaseline(BaseBaseline):
         if isinstance(logits, tuple):
             logits = logits[0]
         return torch.softmax(torch.tensor(logits), dim=1).numpy()[:, 1]
+
+    def _restore_weights_from_checkpoint(self, checkpoint_path: str):
+        """
+        Load LoRA + classifier-head weights from a Trainer checkpoint into
+        ``self.classifier_model``, without touching optimizer / step counter.
+
+        Head-only runs (``train_lora: false``) legitimately have no LoRA keys;
+        those just restore ``classifier.*``.
+        """
+        print("\n" + "=" * 80)
+        print("Loading weights from checkpoint (eval-only)...")
+        print("=" * 80)
+        print(f"  - Source checkpoint: {checkpoint_path}")
+
+        weights_file = os.path.join(checkpoint_path, "model.safetensors")
+        if not os.path.exists(weights_file):
+            weights_file = os.path.join(checkpoint_path, "pytorch_model.bin")
+        if not os.path.exists(weights_file):
+            raise FileNotFoundError(
+                f"No model weights found in checkpoint directory: {checkpoint_path}"
+            )
+
+        try:
+            from safetensors.torch import load_file as _st_load
+            ckpt_state = _st_load(weights_file)
+        except Exception:
+            ckpt_state = torch.load(weights_file, map_location="cpu", weights_only=True)
+
+        lora_keywords = (
+            "lora_A", "lora_B", "lora_magnitude_vector",
+            "lora_embedding_A", "lora_embedding_B",
+        )
+        transfer_state = {
+            k: v for k, v in ckpt_state.items()
+            if any(kw in k for kw in lora_keywords) or k.startswith("classifier.")
+        }
+        lora_keys = [k for k in transfer_state if any(kw in k for kw in lora_keywords)]
+        head_keys = [k for k in transfer_state if k.startswith("classifier.")]
+
+        if not transfer_state:
+            raise RuntimeError(
+                f"No LoRA or classifier.* keys found in {weights_file}."
+            )
+
+        missing, unexpected = self.classifier_model.load_state_dict(
+            transfer_state, strict=False
+        )
+        print(f"  - Loaded {len(lora_keys)} LoRA tensors, {len(head_keys)} head tensors.")
+        if unexpected:
+            print(
+                f"  - WARNING: {len(unexpected)} keys did not match the current model "
+                f"and were dropped: {unexpected[:5]}"
+            )
+        unexpected_missing = [
+            k for k in missing
+            if any(kw in k for kw in lora_keywords) or k.startswith("classifier.")
+        ]
+        if unexpected_missing:
+            print(
+                f"  - WARNING: {len(unexpected_missing)} LoRA/classifier keys missing "
+                f"from checkpoint: {unexpected_missing[:5]}"
+            )
+
+    def run_eval_only(self, checkpoint_path: str):
+        """
+        Score an existing checkpoint on held_out only, with no training.
+
+        Same role as ``EHRClassificationTrainer.run_eval_only`` for the
+        plain-python baseline path (``ablation_frozen_nopretrain`` / clinicalbert).
+        """
+        print("\n" + "=" * 80)
+        print("Evaluation-only run (held_out, no training)")
+        print(f"  - Checkpoint: {checkpoint_path}")
+        print("=" * 80)
+
+        self.training_config["overwrite_output_dir"] = False
+
+        # Prefer a single visible GPU, same as run().
+        visible = os.environ.get("CUDA_VISIBLE_DEVICES", "")
+        if "," in visible:
+            first = visible.split(",")[0].strip() or "0"
+            os.environ["CUDA_VISIBLE_DEVICES"] = first
+
+        self.load_model()
+        self.create_classifier()
+        self._restore_weights_from_checkpoint(checkpoint_path)
+
+        datasets = self.load_datasets(splits=["held_out"])
+        # create_trainer needs a train slot for the fraction schedule math; the
+        # test split stands in — no training loop runs.
+        self.create_trainer(datasets["held_out"], datasets["held_out"], "eval-only")
+
+        test_metrics = self.evaluate_split(datasets["held_out"], "held_out")
+
+        if self.local_rank == 0:
+            import json
+            import time
+
+            step = None
+            base = os.path.basename(os.path.normpath(checkpoint_path))
+            if base.startswith("checkpoint-"):
+                try:
+                    step = int(base.split("-")[-1])
+                except ValueError:
+                    pass
+            payload = {
+                "evaluated_checkpoint": checkpoint_path,
+                "checkpoint_step": step,
+                "produced_by": "src.pipelines.run_baseline --eval_only",
+                "note": (
+                    "Metrics come from the checkpoint above (test/held_out only), "
+                    "not from a training run that reached its final step."
+                ),
+                "n_test": len(datasets["held_out"]),
+                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
+            }
+            results_dir = os.path.join(self.output_dir, "results")
+            os.makedirs(results_dir, exist_ok=True)
+            path = os.path.join(results_dir, "eval_provenance.json")
+            with open(path, "w") as f:
+                json.dump(payload, f, indent=2)
+            print(f"  - Provenance written to {path}")
+
+        return None, test_metrics
 
     def run(self):
         # Prefer a single visible GPU for this plain-python path. Must run

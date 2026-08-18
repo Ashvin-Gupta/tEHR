@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --time=24:00:00
+#SBATCH --time=1:00:00
 #SBATCH --nodes=1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=64G
@@ -19,11 +19,15 @@
 #   subgroup_frozen    # LLM 5b vs encoder_frozen_head (matched frozen backbone)
 #   subgroup_analysis  # custom pair (set PRIMARY_JSON, COMPARE_JSON, ...)
 #   rare_code          # alias for subgroup_analysis
-#   qualitative_dump | preview_surface | plot_convergence
+#   qualitative_dump | preview_surface | plot_convergence | plot_ablation
+#   explain_select     # pick 20 stratified ICU cases (no GPU / no generation)
 #
 # Examples:
 #   sbatch src/submissions/isambard/run_cpu.sh subgroup_full icu_mortality
 #   sbatch src/submissions/isambard/run_cpu.sh subgroup_frozen hospital_mortality
+#   sbatch src/submissions/isambard/run_cpu.sh explain_select icu_mortality
+#   sbatch src/submissions/isambard/run_cpu.sh plot_ablation
+#   # or dedicated: sbatch src/submissions/isambard/plot_ablation_auroc.sh
 # =============================================================================
 
 set -euo pipefail
@@ -33,12 +37,12 @@ shift || true
 
 if [[ -z "${EXPERIMENT}" ]]; then
     echo "Usage: sbatch $0 <experiment> [task]"
-    echo "  CPU experiments: xgboost clinicalbert subgroup_full subgroup_frozen subgroup_analysis rare_code qualitative_dump preview_surface plot_convergence"
-    echo "  tasks: icu_mortality | hospital_mortality | hospital_readmission"
+    echo "  CPU experiments: xgboost clinicalbert subgroup_full subgroup_frozen subgroup_analysis rare_code qualitative_dump preview_surface plot_convergence plot_ablation explain_select"
+    echo "  tasks: icu_mortality | hospital_mortality | hospital_readmission | icu_readmission"
     exit 1
 fi
 
-KNOWN_TASKS=("icu_mortality" "hospital_mortality" "hospital_readmission")
+KNOWN_TASKS=("icu_mortality" "hospital_mortality" "hospital_readmission" "icu_readmission")
 TASK=""
 
 is_in() {
@@ -127,7 +131,7 @@ case "${EXPERIMENT}" in
             --out "${RESOLVED_CFG}"
         echo "Resolved config → ${RESOLVED_CFG}"
         ;;
-    rare_code|qualitative_dump|preview_surface|plot_convergence|subgroup_full|subgroup_frozen|subgroup_analysis)
+    rare_code|qualitative_dump|preview_surface|plot_convergence|plot_ablation|subgroup_full|subgroup_frozen|subgroup_analysis|explain_select)
         RESOLVED_CFG="${RESOLVED_DIR}/classifier-${MODEL}-${TASK}.yaml"
         python -m src.training.config_utils build \
             --experiment classifier \
@@ -139,8 +143,8 @@ case "${EXPERIMENT}" in
         ;;
     *)
         echo "ERROR: '${EXPERIMENT}' is not a CPU experiment."
-        echo "Use run_cpu.sh for: xgboost clinicalbert subgroup_full subgroup_frozen subgroup_analysis rare_code qualitative_dump preview_surface plot_convergence"
-        echo "Use run.sh (GPU) for everything else."
+        echo "Use run_cpu.sh for: xgboost clinicalbert subgroup_full subgroup_frozen subgroup_analysis rare_code qualitative_dump preview_surface plot_convergence plot_ablation explain_select"
+        echo "Use run.sh (GPU) for everything else (including explain)."
         exit 1
         ;;
 esac
@@ -206,6 +210,33 @@ case "${EXPERIMENT}" in
             --n_cases 3 \
             --dump_only
         ;;
+    explain_select)
+        OUT_DIR="${OUT_DIR:-${BASE_DIR}/analysis_out/explain-${MODEL}-${TASK}}"
+        mkdir -p "${OUT_DIR}"
+        _rerun="${RESULTS_ROOT}/mimic-classifier-${MODEL}-${TASK}-rerun/seed_${SEED}/results/test_results.json"
+        if [[ -z "${RESULTS_JSON}" ]]; then
+            if [[ -f "${_rerun}" ]]; then
+                RESULTS_JSON="${_rerun}"
+            else
+                RESULTS_JSON="${_DEFAULT_PRIMARY_FULL}"
+            fi
+        fi
+        echo "RESULTS_JSON → ${RESULTS_JSON}"
+        echo "OUT_DIR      → ${OUT_DIR}"
+        if [[ ! -f "${RESULTS_JSON}" ]]; then
+            echo "ERROR: results file not found: ${RESULTS_JSON}"
+            echo "Override with RESULTS_JSON=/path/to/test_results.json"
+            exit 1
+        fi
+        python -m src.analysis.prediction_explain \
+            --config_filepath "${RESOLVED_CFG}" \
+            --results_json "${RESULTS_JSON}" \
+            --out_dir "${OUT_DIR}" \
+            --seed "${SEED}" \
+            --split held_out \
+            --n_per_cell 5 \
+            --select_only
+        ;;
     preview_surface)
         mkdir -p "${OUT_DIR}"
         python -m src.analysis.preview_surface_forms \
@@ -233,6 +264,19 @@ case "${EXPERIMENT}" in
         fi
         echo "OUT_DIR → ${OUT_DIR}"
         python -m src.analysis.plot_training_convergence "${PLOT_ARGS[@]}"
+        ;;
+    plot_ablation)
+        OUT_DIR="${OUT_DIR:-${BASE_DIR}/analysis_out/ablations}"
+        CSV="${CSV:-${OUT_DIR}/results.csv}"
+        STYLE="${STYLE:-all}"
+        mkdir -p "${OUT_DIR}"
+        echo "CSV     → ${CSV}"
+        echo "OUT_DIR → ${OUT_DIR}"
+        echo "STYLE   → ${STYLE}"
+        python -m src.analysis.plot_ablation_auroc \
+            --csv "${CSV}" \
+            --out-dir "${OUT_DIR}" \
+            --style "${STYLE}"
         ;;
 esac
 

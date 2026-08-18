@@ -1,5 +1,9 @@
-# Baseline: frozen text embeddings → transformer encoder.
+# Baseline: frozen phrase embeddings → transformer encoder.
+# Matched to encoder_supervised: hidden=512, mean pool, linear head, 1 epoch.
 # Usage: sbatch src/submissions/mimic/run.sh text_embedding icu_mortality
+#
+# Requires phrase-level cache (last-token pooled). Old token_embeddings_*.pt
+# files are rejected — run.sh regenerates phrase_embeddings_qwen3_0.6B.pt.
 
 extends:
   - ../shared/mimic_data.yaml
@@ -8,17 +12,20 @@ name: "mimic_text_embedding_transformer_{task}"
 
 embedder:
   model_name: "Qwen/Qwen3-Embedding-0.6B"
-  precomputed_embeddings_path: "/home/ag619/experiments/Results/mimic-baselines/text_embedding_transformer/token_embeddings_qwen3_0.6B.pt"
+  precomputed_embeddings_path: "/home/ag619/experiments/Results/mimic-baselines/text_embedding_transformer/phrase_embeddings_qwen3_0.6B.pt"
 
 model:
+  hidden_dim: 512
   num_layers: 6
   num_heads: 8
   ff_dim: 2048
   dropout: 0.1
   max_seq_length: 512
   num_labels: 2
-  head_type: "logistic"
+  head_type: "linear"
+  pooling: "mean"
   head_hidden_size: 256
+  pos_init_std: 0.02
 
 wandb:
   enabled: false
@@ -28,8 +35,9 @@ wandb:
 training:
   output_dir: "/home/ag619/experiments/Results/mimic-text-embedding-transformer-{task}"
   overwrite_output_dir: true
-  epochs: 30
+  epochs: 1
   batch_size: 128
   learning_rate: 1e-4
   weight_decay: 0.01
   dataloader_num_workers: 2
+  eval_epoch_fractions: [0.05, 0.10, 0.20, 0.40, 0.60, 0.80, 1.00]

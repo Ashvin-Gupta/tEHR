@@ -1,6 +1,8 @@
 # Exp: continued pretraining on MIMIC EHR text (LoRA).
 # Usage: sbatch src/submissions/mimic/run.sh pretrain mistral
 #        sbatch src/submissions/mimic/run.sh pretrain medgemma
+#        sbatch src/submissions/mimic/run.sh pretrain qwen0.6
+#        sbatch src/submissions/mimic/run.sh pretrain qwen8
 
 extends:
   - ../shared/mimic_data.yaml
@@ -16,7 +18,7 @@ wandb:
 model:
   # MedGemma HF (no Unsloth/FlashAttn on Isambard): attention ~ O(S^2).
   # Drop to 4096 if 8000 still OOMs; Mistral can use 12000 via its overlay.
-  max_length: 1024
+  max_length: 12000
 
 training:
   output_dir: "/home/ag619/experiments/Results/Pretrain-{model}-Mimic"
@@ -34,6 +36,9 @@ training:
   bf16: true
   logging_steps: 10
   eval_steps: 500
+  # Only used with eval_on_main_process_only: rank 0 evaluates alone, so cap the
+  # batches instead of walking the whole ~16k-sequence packed val set each time.
+  eval_max_batches: 200
   save_steps: 1000
   save_total_limit: 3
   dataloader_num_workers: 4

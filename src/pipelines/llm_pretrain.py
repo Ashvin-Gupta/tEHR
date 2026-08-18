@@ -27,7 +27,12 @@ DEFAULT_INFERENCE_PROMPT = (
 )
 
 
-def main(config_path: str, seed: int | None = None, checkpoint_path: str | None = None):
+def main(
+    config_path: str,
+    seed: int | None = None,
+    checkpoint_path: str | None = None,
+    resume_from_last: bool | None = None,
+):
     """
     Main function to run LLM continued pretraining.
     
@@ -35,6 +40,7 @@ def main(config_path: str, seed: int | None = None, checkpoint_path: str | None 
         config_path: Path to YAML configuration file.
         seed: Optional CLI seed override.
         checkpoint_path: Optional explicit checkpoint; else ``training.resume_from_last``.
+        resume_from_last: Optional CLI override for ``training.resume_from_last``.
     """
     print("=" * 80)
     print("LLM Continued Pretraining")
@@ -47,6 +53,7 @@ def main(config_path: str, seed: int | None = None, checkpoint_path: str | None 
         config,
         cli_seed=seed,
         cli_checkpoint=checkpoint_path,
+        cli_resume_from_last=resume_from_last,
         use_seed_subdir=False,  # keep stable pretrain output paths
     )
     print(f"Using seed: {seed}")
@@ -87,6 +94,17 @@ if __name__ == "__main__":
         default=None,
         help="Explicit Trainer checkpoint to resume from (overrides resume_from_last)",
     )
+    parser.add_argument(
+        "--resume_from_last",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Override training.resume_from_last (auto-resume newest checkpoint-*)",
+    )
     args = parser.parse_args()
     
-    main(args.config_filepath, seed=args.seed, checkpoint_path=args.checkpoint_path)
+    main(
+        args.config_filepath,
+        seed=args.seed,
+        checkpoint_path=args.checkpoint_path,
+        resume_from_last=args.resume_from_last,
+    )

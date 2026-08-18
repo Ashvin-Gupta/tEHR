@@ -1,0 +1,53 @@
+seed: 42
+training:
+  seed: 42
+  resume_from_last: true
+  output_dir: /projects/u6ps/TextCancEHR2/experiments/Results/mimic-encoder-supervised-icu_readmission
+  overwrite_output_dir: true
+  epochs: 1
+  batch_size: 128
+  learning_rate: 1e-4
+  weight_decay: 0.01
+  dataloader_num_workers: 2
+  eval_epoch_fractions:
+  - 0.05
+  - 0.1
+  - 0.2
+  - 0.4
+  - 0.6
+  - 0.8
+  - 1.0
+  data_cache_dir: /projects/u6ps/TextCancEHR2/experiments/labels_cache/icu_readmission
+  eval_batch_size: 1
+data:
+  data_dir: /home/u6ps/ashvingupta812.u6ps/MIMIC-IV_tokenisation
+  vocab_filepath: /home/u6ps/ashvingupta812.u6ps/MIMIC-IV_tokenisation/vocab.csv
+  lookup_dir: /home/u6ps/ashvingupta812.u6ps/MIMIC_data/hosp
+  dataset: MIMIC
+  task: prediction
+  sort_by_length: true
+  label_column: label
+  aces_label_dir: /home/u6ps/ashvingupta812.u6ps/MIMIC_data/labels/icu_readmission
+name: mimic_encoder_supervised_icu_readmission
+model:
+  vocab_size: null
+  hidden_dim: 512
+  num_layers: 6
+  num_heads: 8
+  ff_dim: 2048
+  dropout: 0.1
+  max_seq_length: 512
+  num_labels: 2
+  head_type: linear
+  head_hidden_size: 256
+  pooling: mean
+pretrain:
+  enabled: false
+task:
+  name: icu_readmission
+  description: be readmitted to the ICU, given that roughly 15% of patients are readmitted
+    to the ICU.
+_meta:
+  experiment: encoder_supervised
+  site: isambard
+  task: icu_readmission

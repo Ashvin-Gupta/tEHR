@@ -1,5 +1,6 @@
-# Baseline: Bio_ClinicalBERT fine-tune (CPU-friendly).
-# Usage: sbatch src/submissions/mimic/run_cpu.sh clinicalbert hospital_readmission
+# Baseline: Bio_ClinicalBERT fine-tune.
+# Usage: sbatch src/submissions/mimic/run.sh clinicalbert hospital_readmission
+#        sbatch src/submissions/mimic/run_cpu.sh clinicalbert hospital_readmission
 
 extends:
   - ../shared/mimic_data.yaml
@@ -19,7 +20,7 @@ wandb:
 training:
   output_dir: "/home/ag619/experiments/Results/mimic-clinicalbert-{task}"
   overwrite_output_dir: true
-  device: "cpu"
+  device: "auto"
   require_cuda: false
   epochs: 1
   batch_size: 32

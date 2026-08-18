@@ -10,6 +10,7 @@ logits for the literal tokens "0" and "1" are extracted.  If both logits are bel
 import os
 import json
 import random
+import time
 import torch
 import numpy as np
 import wandb
@@ -22,6 +23,7 @@ from trl import SFTTrainer, SFTConfig
 from transformers import TrainerCallback
 
 from src.data.dataset_factory import get_dataset
+from src.training.eval_schedule import append_max_runtime_callback
 from src.evaluations.evaluations import (
     compute_baseline_metrics,
     plot_all_curves,
@@ -311,6 +313,25 @@ class _SFTDataset:
         labels = [s["label"] for s in self.samples]
         return prompts, labels
 
+    def subset(self, max_samples: int, seed: int = 42) -> "_SFTDataset":
+        """
+        Return a shallow copy with at most ``max_samples`` examples (for cheap
+        mid-training eval). Final val/test should keep the full set.
+        """
+        n = len(self.samples)
+        if max_samples is None or max_samples <= 0 or max_samples >= n:
+            return self
+        rng = random.Random(seed)
+        indices = sorted(rng.sample(range(n), int(max_samples)))
+        out = object.__new__(_SFTDataset)
+        out.prompt_template = self.prompt_template
+        out.task_description = self.task_description
+        out.tokenizer = self.tokenizer
+        out.max_length = self.max_length
+        out._prompt_overhead_tokens = self._prompt_overhead_tokens
+        out.samples = [self.samples[i] for i in indices]
+        return out
+
 
 # ---------------------------------------------------------------------------
 # Main trainer
@@ -411,6 +432,9 @@ class SFTClassificationTrainer:
                 "target_modules",
                 ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
             )
+            # Under DDP, Unsloth's "unsloth" (reentrant) checkpointing marks LoRA
+            # params ready twice and crashes on the first backward. Use standard
+            # non-reentrant checkpointing instead (same as pretrain).
             self.model = FastLanguageModel.get_peft_model(
                 self.model,
                 r=int(self.lora_config.get("r", 16)),
@@ -418,7 +442,7 @@ class SFTClassificationTrainer:
                 lora_alpha=int(self.lora_config.get("lora_alpha", 32)),
                 lora_dropout=float(self.lora_config.get("lora_dropout", 0.05)),
                 bias="none",
-                use_gradient_checkpointing="unsloth",
+                use_gradient_checkpointing=True,
                 random_state=42,
             )
         else:
@@ -456,14 +480,79 @@ class SFTClassificationTrainer:
         logger.info(f"  - Total parameters:     {total_params:,}")
         logger.info(f"  - Trainable parameters: {trainable_params:,}")
 
+    def load_model_from_checkpoint(self, checkpoint_path: str):
+        """
+        Load base model + LoRA adapters from a Trainer ``checkpoint-*`` directory.
+        Used by eval-only runs (no training).
+        """
+        logger.info("=" * 80)
+        logger.info("Loading SFT model from checkpoint...")
+        logger.info("=" * 80)
+        logger.info(f"  - Checkpoint: {checkpoint_path}")
+
+        max_length = int(self.model_config.get("max_length", 8192))
+        load_in_4bit = bool(self.model_config.get("load_in_4bit", True))
+        use_unsloth = bool(self.model_config.get("use_unsloth", True))
+
+        if use_unsloth:
+            self.model, self.tokenizer = FastLanguageModel.from_pretrained(
+                model_name=checkpoint_path,
+                max_seq_length=max_length,
+                dtype=None,
+                load_in_4bit=load_in_4bit,
+                device_map={"": self.local_rank},
+            )
+            FastLanguageModel.for_inference(self.model)
+        else:
+            from src.training.model_loader import load_pretrained_lora_model_hf
+
+            self.model, self.tokenizer = load_pretrained_lora_model_hf(
+                pretrained_checkpoint=checkpoint_path,
+                max_seq_length=max_length,
+                load_in_4bit=load_in_4bit,
+                local_rank=self.local_rank,
+            )
+
+        if self.tokenizer.pad_token is None:
+            self.tokenizer.pad_token = self.tokenizer.eos_token
+
+        self._token_id_0, self._token_id_1 = resolve_binary_label_token_ids(
+            self.tokenizer
+        )
+        logger.info(
+            f"  - Token IDs: '0' → {self._token_id_0}, '1' → {self._token_id_1}"
+        )
+
     # ------------------------------------------------------------------
     # Dataset preparation
     # ------------------------------------------------------------------
 
-    def _load_split(self, split: str) -> "_SFTDataset":
+    def _load_split(
+        self,
+        split: str,
+        *,
+        file_fraction: float | None = None,
+        file_fraction_label: str | None = None,
+    ) -> "_SFTDataset":
         data_cfg = dict(self.data_config)
         data_cfg["format"] = "text"
         data_cfg["task"] = "prediction"
+        frac = file_fraction
+        if frac is None and split == "train":
+            train_frac = data_cfg.get("train_file_fraction")
+            if train_frac is not None and float(train_frac) < 1.0:
+                frac = float(train_frac)
+                file_fraction_label = file_fraction_label or "train"
+        if frac is not None and float(frac) < 1.0:
+            data_cfg["file_fraction"] = float(frac)
+            data_cfg["file_fraction_seed"] = int(
+                self.training_config.get("seed", 42)
+            )
+            label = file_fraction_label or split
+            print(
+                f"  Using {float(frac) * 100:.0f}% of {label} pickle shards",
+                flush=True,
+            )
         base = get_dataset(data_cfg.get("dataset", "MIMIC"), data_cfg, split)
         max_length = int(self.model_config.get("max_length", 8192))
         return _SFTDataset(
@@ -491,6 +580,59 @@ class SFTClassificationTrainer:
             print(f"    {len(splits[split].samples):,} samples ready", flush=True)
         return splits
 
+    def prepare_eval_splits(self) -> Dict[str, "_SFTDataset"]:
+        """Load tuning + held_out only (skips train) for eval-only runs."""
+        print("=" * 80, flush=True)
+        print("Preparing SFT eval datasets (tuning + held_out)...", flush=True)
+        print("=" * 80, flush=True)
+        splits = {}
+        for split in ("tuning", "held_out"):
+            print(f"  - Loading {split} shards + building prediction examples...", flush=True)
+            splits[split] = self._load_split(split)
+            print(f"    {len(splits[split].samples):,} samples ready", flush=True)
+        return splits
+
+    def _mid_train_eval_dataset(self, full_tuning: "_SFTDataset") -> "_SFTDataset":
+        """
+        Build a cheap mid-training eval set.
+
+        Preference order:
+          1. ``data.eval_file_fraction`` — reload tuning from a shard subset
+          2. ``training.eval_max_samples`` — subsample already-loaded tuning
+          3. else use the full tuning set
+
+        Final ``evaluate_split`` on tuning/held_out always uses the full sets.
+        """
+        eval_frac = self.data_config.get("eval_file_fraction")
+        if eval_frac is not None and float(eval_frac) < 1.0:
+            print(
+                f"  Mid-train eval: reloading tuning with "
+                f"eval_file_fraction={float(eval_frac)}",
+                flush=True,
+            )
+            return self._load_split(
+                "tuning",
+                file_fraction=float(eval_frac),
+                file_fraction_label="mid-train tuning",
+            )
+
+        max_samples = self.training_config.get("eval_max_samples")
+        if max_samples is not None:
+            n = int(max_samples)
+            subset = full_tuning.subset(
+                n, seed=int(self.training_config.get("seed", 42))
+            )
+            if subset is not full_tuning:
+                print(
+                    f"  Mid-train eval: subsampled {len(subset.samples):,} / "
+                    f"{len(full_tuning.samples):,} tuning samples "
+                    f"(eval_max_samples={n})",
+                    flush=True,
+                )
+            return subset
+
+        return full_tuning
+
     # ------------------------------------------------------------------
     # Training
     # ------------------------------------------------------------------
@@ -502,10 +644,12 @@ class SFTClassificationTrainer:
         print("=" * 80, flush=True)
 
         max_length = int(self.model_config.get("max_length", 8192))
+        mid_eval = self._mid_train_eval_dataset(splits["tuning"])
         print(
             f"  Building pre-tokenised datasets "
             f"(train={len(splits['train'].samples):,}, "
-            f"val={len(splits['tuning'].samples):,})...",
+            f"mid_eval={len(mid_eval.samples):,} / "
+            f"full_tuning={len(splits['tuning'].samples):,})...",
             flush=True,
         )
         # Pre-tokenise with prompt labels masked to -100.  Unsloth's SFTTrainer
@@ -513,10 +657,18 @@ class SFTClassificationTrainer:
         # which is incompatible with completion_only_loss), so we prepare the
         # tokenised form ourselves and let Unsloth skip dataset prep.
         train_hf = splits["train"].as_tokenized_hf_dataset(self.tokenizer, max_length)
-        val_hf = splits["tuning"].as_tokenized_hf_dataset(self.tokenizer, max_length)
+        val_hf = mid_eval.as_tokenized_hf_dataset(self.tokenizer, max_length)
         print("  Tokenised datasets ready.", flush=True)
 
         report_to = "wandb" if self.wandb_config.get("enabled") else "none"
+        eval_steps = int(self.training_config.get("eval_steps", 2000))
+        save_steps = int(self.training_config.get("save_steps", eval_steps))
+
+        print(
+            f"  Eval schedule: every {eval_steps} steps on "
+            f"{len(mid_eval.samples):,} samples (CE loss + logit AUROC)",
+            flush=True,
+        )
         sft_config = SFTConfig(
             output_dir=self.output_dir,
             overwrite_output_dir=bool(self.training_config.get("overwrite_output_dir", False)),
@@ -533,8 +685,8 @@ class SFTClassificationTrainer:
             bf16=bool(self.training_config.get("bf16", True)),
             logging_steps=int(self.training_config.get("logging_steps", 10)),
             eval_strategy="steps",
-            eval_steps=int(self.training_config.get("eval_steps", 200)),
-            save_steps=int(self.training_config.get("save_steps", 200)),
+            eval_steps=eval_steps,
+            save_steps=save_steps,
             save_total_limit=int(self.training_config.get("save_total_limit", 2)),
             load_best_model_at_end=False,
             report_to=report_to,
@@ -545,22 +697,28 @@ class SFTClassificationTrainer:
             packing=False,
             dataloader_num_workers=int(self.training_config.get("dataloader_num_workers", 0)),
             remove_unused_columns=False,
+            # DDP + checkpointing: non-reentrant required (see isa-mimic-run-5975278).
+            gradient_checkpointing=True,
+            gradient_checkpointing_kwargs={"use_reentrant": False},
+            ddp_find_unused_parameters=False,
         )
 
         print("  Constructing SFTTrainer...", flush=True)
+        sft_callbacks: List[Any] = [
+            _LogitClassificationCallback(
+                self,
+                mid_eval,
+                batch_size=int(self.training_config.get("eval_batch_size", 4)),
+            )
+        ]
+        append_max_runtime_callback(sft_callbacks, self.training_config)
         trainer = SFTTrainer(
             model=self.model,
             processing_class=self.tokenizer,
             train_dataset=train_hf,
             eval_dataset=val_hf,
             args=sft_config,
-            callbacks=[
-                _LogitClassificationCallback(
-                    self,
-                    splits["tuning"],
-                    batch_size=int(self.training_config.get("eval_batch_size", 4)),
-                )
-            ],
+            callbacks=sft_callbacks,
         )
         print("  SFTTrainer ready — starting training loop.", flush=True)
 
@@ -732,6 +890,15 @@ class SFTClassificationTrainer:
         val_metrics = self.evaluate_split(splits["tuning"], "tuning", batch_size=eval_batch_size)
         test_metrics = self.evaluate_split(splits["held_out"], "held_out", batch_size=eval_batch_size)
 
+        print(
+            f"\nFinal metrics — "
+            f"val AUROC={val_metrics['auroc']:.4f}, "
+            f"val AUPR={val_metrics['aupr']:.4f}, "
+            f"test AUROC={test_metrics['auroc']:.4f}, "
+            f"test AUPR={test_metrics['aupr']:.4f}",
+            flush=True,
+        )
+
         summary = {"validation": val_metrics, "test": test_metrics}
         summary_path = os.path.join(self.output_dir, "summary.json")
         with open(summary_path, "w") as f:
@@ -739,6 +906,100 @@ class SFTClassificationTrainer:
         print(f"\nSummary saved to: {summary_path}", flush=True)
 
         if self.wandb_config.get("enabled") and self.local_rank == 0:
+            wandb.summary.update(
+                {f"final_tuning_{k}": v for k, v in val_metrics.items()}
+                | {f"final_held_out_{k}": v for k, v in test_metrics.items()}
+            )
+            wandb.finish()
+
+        return val_metrics, test_metrics
+
+    def _write_eval_provenance(
+        self,
+        checkpoint_path: str,
+        val_metrics: Dict[str, float],
+        test_metrics: Dict[str, float],
+    ):
+        if self.local_rank != 0:
+            return
+
+        step = None
+        base = os.path.basename(os.path.normpath(checkpoint_path))
+        if base.startswith("checkpoint-"):
+            try:
+                step = int(base.split("-")[-1])
+            except ValueError:
+                pass
+
+        payload = {
+            "evaluated_checkpoint": checkpoint_path,
+            "checkpoint_step": step,
+            "produced_by": "src.pipelines.evaluate_checkpoint (sft)",
+            "note": (
+                "Metrics come from the checkpoint above (tuning + held_out), "
+                "not from a training run that reached its final step."
+            ),
+            "validation_auroc": val_metrics.get("auroc"),
+            "test_auroc": test_metrics.get("auroc"),
+            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        }
+        results_dir = os.path.join(self.output_dir, "results")
+        os.makedirs(results_dir, exist_ok=True)
+        path = os.path.join(results_dir, "eval_provenance.json")
+        with open(path, "w") as f:
+            json.dump(payload, f, indent=2)
+        print(f"  - Provenance written to {path}", flush=True)
+
+    def run_eval_only(self, checkpoint_path: str):
+        """
+        Score an existing SFT checkpoint on tuning (validation) and held_out
+        (test), with no training.
+
+        Recovers metrics for runs killed after their last checkpoint but before
+        the final evaluation. The train split is never loaded.
+        """
+        if self.local_rank != 0:
+            return None, None
+
+        os.makedirs(self.output_dir, exist_ok=True)
+
+        print("\n" + "=" * 80, flush=True)
+        print("SFT evaluation-only run (tuning + held_out, no training)", flush=True)
+        print(f"  - Checkpoint: {checkpoint_path}", flush=True)
+        print("=" * 80, flush=True)
+
+        self.training_config["overwrite_output_dir"] = False
+
+        self.setup_wandb()
+        self.load_model_from_checkpoint(checkpoint_path)
+        splits = self.prepare_eval_splits()
+
+        eval_batch_size = int(self.training_config.get("eval_batch_size", 4))
+        val_metrics = self.evaluate_split(
+            splits["tuning"], "tuning", batch_size=eval_batch_size
+        )
+        test_metrics = self.evaluate_split(
+            splits["held_out"], "held_out", batch_size=eval_batch_size
+        )
+
+        print(
+            f"\nFinal metrics — "
+            f"val AUROC={val_metrics['auroc']:.4f}, "
+            f"val AUPR={val_metrics['aupr']:.4f}, "
+            f"test AUROC={test_metrics['auroc']:.4f}, "
+            f"test AUPR={test_metrics['aupr']:.4f}",
+            flush=True,
+        )
+
+        summary = {"validation": val_metrics, "test": test_metrics}
+        summary_path = os.path.join(self.output_dir, "summary.json")
+        with open(summary_path, "w") as f:
+            json.dump(summary, f, indent=2)
+        print(f"\nSummary saved to: {summary_path}", flush=True)
+
+        self._write_eval_provenance(checkpoint_path, val_metrics, test_metrics)
+
+        if self.wandb_config.get("enabled", False):
             wandb.summary.update(
                 {f"final_tuning_{k}": v for k, v in val_metrics.items()}
                 | {f"final_held_out_{k}": v for k, v in test_metrics.items()}

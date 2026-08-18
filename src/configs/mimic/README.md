@@ -21,8 +21,8 @@ Model and task args can be in **any order**.
 | Kind | Values |
 |---|---|
 | **experiment** | see table below |
-| **model** | `mistral` \| `medgemma` |
-| **task** | `icu_mortality` \| `hospital_mortality` \| `hospital_readmission` (default: `icu_mortality`) |
+| **model** | `mistral` \| `medgemma` \| `qwen0.6` \| `qwen8` |
+| **task** | `icu_mortality` \| `hospital_mortality` \| `hospital_readmission` \| `icu_readmission` (default: `icu_mortality`) |
 
 ## Experiments
 
@@ -38,11 +38,13 @@ Model and task args can be in **any order**.
 | `surface_raw` | required | yes | Lexical ablation: raw codes (no CPT, like 5a) |
 | `surface_scramble_hash` | required | yes | Lexical ablation: `Concept_<hash>` titles |
 | `surface_scramble_shuffle` | required | yes | Lexical ablation: shuffled titles |
+| `explain` | required | yes | Post-hoc grounded explanations, base LM (GPU) |
 | `xgboost` | — | yes | XGBoost bag-of-words (CPU: `run_cpu.sh`) |
-| `clinicalbert` | — | yes | Bio_ClinicalBERT fine-tune (CPU: `run_cpu.sh`) |
-| `encoder` | — | yes | Custom transformer encoder |
+| `clinicalbert` | — | yes | Bio_ClinicalBERT fine-tune (`run.sh` or `run_cpu.sh`) |
+| `encoder` | — | yes | Custom transformer encoder (MLM pretrain + supervised) |
 | `encoder_frozen_head` | — | yes | Freeze MLM encoder; train head only (≈ LLM 5b) |
-| `text_embedding` | — | yes | Qwen3 embeddings → transformer |
+| `encoder_supervised` | — | yes | Encoder + head from scratch; supervised only (no MLM) |
+| `text_embedding` | — | yes | Phrase-level Qwen3 embeddings → transformer (matched to encoder_supervised) |
 
 ## Examples
 
@@ -53,9 +55,12 @@ sbatch src/submissions/mimic/run.sh surface_scramble_hash mistral hospital_morta
 sbatch src/submissions/mimic/run.sh sft medgemma hospital_readmission
 sbatch src/submissions/mimic/run.sh prompt mistral hospital_mortality
 sbatch src/submissions/mimic/run_cpu.sh xgboost hospital_readmission
+sbatch src/submissions/mimic/run.sh clinicalbert icu_mortality
 sbatch src/submissions/mimic/run_cpu.sh clinicalbert icu_mortality
 sbatch src/submissions/mimic/run.sh encoder   # defaults to icu_mortality
+sbatch src/submissions/mimic/run.sh encoder_supervised icu_readmission
 sbatch --gres=gpu:2 src/submissions/mimic/run.sh pretrain mistral
+sbatch src/submissions/isambard/run.sh pretrain qwen8
 ```
 
 ## Lexical / analysis helpers
@@ -71,6 +76,9 @@ sbatch src/submissions/isambard/run_cpu.sh subgroup_full hospital_mortality
 sbatch src/submissions/isambard/run_cpu.sh subgroup_frozen icu_mortality   # after encoder_frozen_head
 sbatch src/submissions/isambard/run_cpu.sh preview_surface icu_mortality
 sbatch src/submissions/isambard/run_cpu.sh qualitative_dump icu_mortality
+# Stratified case pick (CPU) then grounded explanations (GPU):
+sbatch src/submissions/isambard/run_cpu.sh explain_select icu_mortality
+sbatch --gpus=1 src/submissions/isambard/run.sh explain mistral icu_mortality
 ```
 
 ## Config layout
@@ -79,8 +87,8 @@ sbatch src/submissions/isambard/run_cpu.sh qualitative_dump icu_mortality
 src/configs/
   shared/                 # data paths, LoRA, classifier training defaults
   mimic/
-    models/               # mistral.yaml, medgemma.yaml
-    tasks/                # icu_mortality, hospital_mortality, hospital_readmission
+    models/               # mistral.yaml, medgemma.yaml, qwen0.6.yaml, qwen8.yaml
+    tasks/                # icu_mortality, hospital_mortality, hospital_readmission, icu_readmission
     <experiment>.yaml
 ```
 
@@ -102,7 +110,13 @@ training:
 - Change `seed` there (or override in an experiment YAML / `--seed`) for controlled runs.
 - Set `training.resume_from_last: true` to auto-continue from the newest
   `checkpoint-*` under the run's `output_dir` after a 24h walltime kill.
+- CLI overrides (no YAML edit needed):
+  - `--resume_from_last` / `--no-resume_from_last` on pipeline scripts
+  - or `RESUME_FROM_LAST=true|false sbatch ... run.sh ...`
 - Classifier / SFT write under `<output_dir>/seed_<seed>/`.
+- On Isambard (`max_runtime_hours: 22`), training stops after 22h from
+  train start so the usual final val/test eval can finish before the 24h
+  walltime kill. Override per experiment or set `null` to disable.
 - Supported for HF Trainer jobs: `pretrain`, `classifier`, `sft`, ablations,
   `clinicalbert`, frozen-LLM baselines. Custom loops (`encoder`, `xgboost`)
   use the seed but do not auto-resume yet.

@@ -18,7 +18,7 @@
 #   xgboost | clinicalbert
 #   rare_code | qualitative_dump | preview_surface
 #
-# Tasks: icu_mortality | hospital_mortality | hospital_readmission
+# Tasks: icu_mortality | hospital_mortality | hospital_readmission | icu_readmission
 #        (default: icu_mortality)
 #
 # Optional env for analysis jobs: MODEL SEED RESULTS_JSON COMPARE_RESULTS_JSON
@@ -41,11 +41,11 @@ shift || true
 if [[ -z "${EXPERIMENT}" ]]; then
     echo "Usage: sbatch $0 <experiment> [task]"
     echo "  CPU experiments: xgboost clinicalbert rare_code qualitative_dump preview_surface"
-    echo "  tasks: icu_mortality | hospital_mortality | hospital_readmission"
+    echo "  tasks: icu_mortality | hospital_mortality | hospital_readmission | icu_readmission"
     exit 1
 fi
 
-KNOWN_TASKS=("icu_mortality" "hospital_mortality" "hospital_readmission")
+KNOWN_TASKS=("icu_mortality" "hospital_mortality" "hospital_readmission" "icu_readmission")
 TASK=""
 
 is_in() {

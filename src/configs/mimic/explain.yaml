@@ -1,0 +1,6 @@
+# Post-hoc prediction explanations (base LM generation, adapters disabled).
+# Reuses classifier training/paths so checkpoints and test_results resolve.
+# Usage: sbatch --gpus=1 src/submissions/isambard/run.sh explain mistral icu_mortality
+
+extends:
+  - classifier.yaml

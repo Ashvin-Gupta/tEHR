@@ -7,6 +7,8 @@ wandb/
 unsloth_compiled_cache/
 .DS_Store
 *.log
+core
+core.*
 __pycache__/
 .ipynb_checkpoints/
 analysis_out/

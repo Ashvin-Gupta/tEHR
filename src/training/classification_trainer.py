@@ -9,6 +9,7 @@ from transformers import TrainingArguments, Trainer, EarlyStoppingCallback
 
 from src.training.eval_schedule import (
     EvalAtStepsCallback,
+    append_max_runtime_callback,
     eval_optimizer_steps_from_fractions,
     get_eval_epoch_fractions,
 )
@@ -493,6 +494,7 @@ class EHRClassificationTrainer:
                 early_stopping_threshold=self.training_config.get('early_stopping_threshold', 0.0)
             ))
             print(f"  - Early stopping enabled with patience={early_stopping_patience}")
+        append_max_runtime_callback(callbacks, self.training_config)
         
         
         self.trainer = Trainer(
@@ -636,7 +638,11 @@ class EHRClassificationTrainer:
         
         return eval_results, test_results
     
-    def restore_weights_from_checkpoint(self, checkpoint_path: str):
+    def restore_weights_from_checkpoint(
+        self,
+        checkpoint_path: str,
+        require_lora: bool = True,
+    ):
         """
         Warm-start LoRA adapter weights AND the classifier head from a
         previously saved classifier checkpoint, WITHOUT resuming the training
@@ -653,6 +659,10 @@ class EHRClassificationTrainer:
         Args:
             checkpoint_path: Directory of a Trainer checkpoint containing
                              `model.safetensors` (full LLMClassifier state).
+            require_lora: Fail if the checkpoint has no LoRA tensors. Set false
+                          for head-only runs (``train_lora: false``, e.g.
+                          ablation_frozen_pretrained), where the checkpoint
+                          legitimately contains only ``classifier.*`` weights.
         """
         print("\n" + "=" * 80)
         print("Warm-starting weights from checkpoint (LoRA adapters + classifier head)...")
@@ -703,12 +713,14 @@ class EHRClassificationTrainer:
         lora_keys = [k for k in transfer_state if any(kw in k for kw in lora_keywords)]
         head_keys = [k for k in transfer_state if k.startswith("classifier.")]
 
-        if not lora_keys:
+        if not lora_keys and require_lora:
             raise RuntimeError(
                 f"No LoRA adapter keys found in {weights_file}. "
                 f"Make sure the checkpoint was saved from an LLMClassifier with "
                 f"LoRA adapters (keys containing lora_A / lora_B)."
             )
+        if not lora_keys:
+            print("  - No LoRA keys in checkpoint (expected for a head-only run).")
         if not head_keys:
             print(
                 "  - No 'classifier.*' keys found in checkpoint; "
@@ -868,7 +880,18 @@ class EHRClassificationTrainer:
         split_name: str,
         metrics: Dict[str, Any] | None = None,
     ):
-        """Persist per-sample labels and probabilities for a split."""
+        """
+        Persist per-sample labels and probabilities for a split.
+
+        Rank 0 only. Under torchrun every rank holds the same gathered
+        predictions and used to write this file concurrently; when the ranks'
+        payloads differed in length by even one byte the shorter writer left a
+        trailing fragment behind the longer one, producing JSON that fails to
+        parse with "Extra data".
+        """
+        if self.local_rank != 0:
+            return
+
         labels, probs = self._pred_to_labels_and_probs(pred_output)
         patient_ids = self._extract_patient_ids(dataset)
         example_indices = self._extract_example_indices(dataset)
@@ -946,3 +969,121 @@ class EHRClassificationTrainer:
         eval_results, test_results = self.evaluate_and_visualize(val_dataset, test_dataset)
         
         return eval_results, test_results
+
+    def run_eval_only(self, checkpoint_path: str, run_name: str = "eval-only"):
+        """
+        Score an existing checkpoint on the held-out test set only, with no training.
+
+        Recovers the metrics for a run whose training was killed after its last
+        checkpoint but before the final evaluation — the usual outcome when a
+        job hits the wall clock. Writes the same ``results/test_results.json``
+        and ``plots_test/`` layout a completed run would.
+
+        The train and tuning splits are never loaded: they cost a full pass over
+        hundreds of thousands of examples and are not needed for a test-only score.
+
+        Returns:
+            ``(None, test_results)`` — the None stands in for the unused val slot
+            so callers that unpack ``eval, test = ...`` keep working.
+        """
+        print("\n" + "=" * 80)
+        print("Evaluation-only run (test set, no training)")
+        print(f"  - Checkpoint: {checkpoint_path}")
+        print("=" * 80)
+
+        # Guard against any code path that would clear the run directory we are
+        # reading the checkpoint from.
+        self.training_config["overwrite_output_dir"] = False
+
+        self.load_pretrained_model()
+        self.create_classifier()
+        self.restore_weights_from_checkpoint(
+            checkpoint_path,
+            require_lora=bool(self.model_config.get("train_lora", False)),
+        )
+
+        print("\n" + "=" * 80)
+        print("Loading test dataset (held_out)...")
+        print("=" * 80)
+        test_dataset = get_dataset(self.data_config["dataset"], self.data_config, "held_out")
+        if self.data_config.get("sort_by_length", False):
+            test_dataset = self._sort_with_cache(
+                test_dataset, split="held_out", shuffle_buckets=False, num_buckets=20
+            )
+        print(f"  - Test dataset: {len(test_dataset)} examples")
+        self._log_class_distribution(test_dataset, "test")
+
+        collator = self.create_collator()
+        # create_trainer reads len(train_dataset) only to place the eval-fraction
+        # checkpoints, which never fire here; the test split stands in for it.
+        self.create_trainer(test_dataset, test_dataset, collator, run_name)
+
+        print("\n" + "=" * 80)
+        print("Running evaluation on test set...")
+        print("=" * 80)
+        test_results = self.trainer.evaluate(test_dataset, metric_key_prefix="test")
+        print("\nFinal Test Results:")
+        for key, value in test_results.items():
+            print(f"  {key}: {value:.4f}" if isinstance(value, float) else f"  {key}: {value}")
+
+        print("\nGenerating ROC and PR curves for test set...")
+        test_pred_output = self.trainer.predict(test_dataset)
+        t_labels, t_probs = self._pred_to_labels_and_probs(test_pred_output)
+        plot_all_curves(
+            t_labels,
+            t_probs,
+            os.path.join(self.training_config["output_dir"], "plots_test"),
+        )
+        self._save_split_predictions(
+            test_dataset,
+            test_pred_output,
+            split_name="test",
+            metrics=test_results,
+        )
+
+        if self.local_rank == 0:
+            self._write_eval_provenance(checkpoint_path, n_test=len(test_dataset))
+
+        return None, test_results
+
+    def _write_eval_provenance(self, checkpoint_path: str, n_test: int, n_val: int | None = None):
+        """Record which checkpoint produced the results files in this directory."""
+        import json
+
+        step = None
+        base = os.path.basename(os.path.normpath(checkpoint_path))
+        if base.startswith("checkpoint-"):
+            try:
+                step = int(base.split("-")[-1])
+            except ValueError:
+                pass
+
+        global_step = None
+        trainer_state = os.path.join(checkpoint_path, "trainer_state.json")
+        if os.path.exists(trainer_state):
+            try:
+                with open(trainer_state) as f:
+                    global_step = json.load(f).get("global_step")
+            except (OSError, ValueError):
+                pass
+
+        payload = {
+            "evaluated_checkpoint": checkpoint_path,
+            "checkpoint_step": step,
+            "trainer_global_step": global_step,
+            "produced_by": "src.pipelines.evaluate_checkpoint",
+            "note": (
+                "Metrics in this directory come from the checkpoint above, not "
+                "from a training run that reached its final step. Test set only."
+            ),
+            "n_test": n_test,
+            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        }
+        if n_val is not None:
+            payload["n_validation"] = n_val
+        results_dir = os.path.join(self.training_config["output_dir"], "results")
+        os.makedirs(results_dir, exist_ok=True)
+        path = os.path.join(results_dir, "eval_provenance.json")
+        with open(path, "w") as f:
+            json.dump(payload, f, indent=2)
+        print(f"  - Provenance written to {path}")

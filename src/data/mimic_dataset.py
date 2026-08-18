@@ -29,6 +29,8 @@ class MIMICDataset(BaseDataset):
         format: str = "text",
         surface_form: str = "text",
         scramble_seed: int = 42,
+        file_fraction: Optional[float] = None,
+        file_fraction_seed: int = 42,
     ):
         self.task = task
         self.split = split
@@ -50,8 +52,15 @@ class MIMICDataset(BaseDataset):
             scramble_seed=scramble_seed,
         )
 
-        # Load patient records (full split — do not limit tuning/val shards)
-        self.patient_records = self._load_data(data_dir, split, limit=None)
+        # Load patient records.  Val/test splits stay full unless file_fraction
+        # is explicitly passed (train smoke tests set this via config).
+        self.patient_records = self._load_data(
+            data_dir,
+            split,
+            limit=None,
+            file_fraction=file_fraction,
+            seed=file_fraction_seed,
+        )
 
         # For prediction task: build ACES-keyed examples
         self.examples: List[Dict] = []

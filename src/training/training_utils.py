@@ -278,6 +278,7 @@ def prepare_run_reproducibility(
     *,
     cli_seed: Optional[int] = None,
     cli_checkpoint: Optional[str] = None,
+    cli_resume_from_last: Optional[bool] = None,
     use_seed_subdir: bool = False,
 ) -> Tuple[int, Optional[str]]:
     """
@@ -288,7 +289,8 @@ def prepare_run_reproducibility(
     - ``seed`` / ``training.seed``: fixed seed (default 42)
     - ``training.resume_from_last``: if true, resume from newest checkpoint
       under ``training.output_dir`` (or ``.../checkpoints``)
-    - CLI ``--seed`` / ``--checkpoint_path`` override config
+    - CLI ``--seed`` / ``--checkpoint_path`` / ``--resume_from_last`` /
+      ``--no-resume_from_last`` override config
 
     When ``use_seed_subdir`` is true, outputs go to ``<output_dir>/seed_<seed>/``
     (classifier / SFT convention).
@@ -302,6 +304,10 @@ def prepare_run_reproducibility(
     training["seed"] = seed
     seed_all(seed)
     logger.info(f"Using seed: {seed}")
+
+    if cli_resume_from_last is not None:
+        training["resume_from_last"] = bool(cli_resume_from_last)
+        logger.info(f"CLI override: resume_from_last={training['resume_from_last']}")
 
     if use_seed_subdir:
         base_output_dir = training.get("output_dir")

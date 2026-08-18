@@ -1,8 +1,9 @@
 """
 EHR Pretrainer class for managing continued pretraining workflow.
 """
+import math
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Dict, Any, Optional
 import torch
 import time
@@ -14,10 +15,173 @@ import wandb
 
 from src.training.training_utils import extract_and_pack
 from src.data.dataset_factory import get_dataset
+from src.training.eval_schedule import append_max_runtime_callback
 
 import logging
 logger = logging.getLogger(__name__)
-    
+
+
+class Rank0EvalSFTTrainer(SFTTrainer):
+    """
+    SFTTrainer that runs mid-training eval on rank 0 only.
+
+    Multi-GPU Unsloth eval at long ``max_length`` can desync NCCL (train skips
+    dense attention masks; eval builds them). Rank 0 evaluates the unwrapped
+    model with a plain local loop; other ranks skip the forward pass and
+    receive the metrics.
+
+    Two constraints drive this implementation:
+
+    - ``Trainer.evaluation_loop`` cannot be reused on rank 0. Accelerate's
+      gather helpers read ``PartialState``, which is a different shared-state
+      singleton from ``accelerator.state``, so overriding ``num_processes``
+      there does not stop the ``all_gather`` in ``gather_for_metrics``. Rank 0
+      then blocks in an all-gather while the other ranks block in the metrics
+      broadcast, and the NCCL watchdog aborts the job.
+    - Metrics are shared over a separate gloo group. Rank 0's eval takes far
+      longer than the 600 s NCCL watchdog timeout, and a NCCL collective left
+      pending that long is killed even when the ranks agree on it.
+    """
+
+    def __init__(
+        self,
+        *args,
+        eval_max_batches: Optional[int] = None,
+        eval_share_timeout_hours: float = 12.0,
+        **kwargs,
+    ):
+        super().__init__(*args, **kwargs)
+        self.eval_max_batches = (
+            int(eval_max_batches) if eval_max_batches else None
+        )
+        self._eval_share_timeout = timedelta(hours=float(eval_share_timeout_hours))
+        self._eval_share_group = self._build_share_group()
+
+    def _is_distributed(self) -> bool:
+        return (
+            torch.distributed.is_available()
+            and torch.distributed.is_initialized()
+            and int(getattr(self.args, "world_size", 1) or 1) > 1
+        )
+
+    def _build_share_group(self):
+        """Gloo group for metric hand-off, outside the NCCL watchdog."""
+        if not self._is_distributed():
+            return None
+        try:
+            group = torch.distributed.new_group(
+                backend="gloo", timeout=self._eval_share_timeout
+            )
+            logger.info(
+                "eval_on_main_process_only: created gloo group for metric "
+                f"broadcast (timeout {self._eval_share_timeout})"
+            )
+            return group
+        except Exception as exc:
+            logger.warning(
+                f"Could not create gloo group for metric broadcast ({exc}); "
+                "falling back to the default process group. Rank 0 eval must "
+                "then finish inside the NCCL watchdog timeout."
+            )
+            return None
+
+    @torch.no_grad()
+    def _local_eval(self, eval_dataset, metric_key_prefix: str) -> Dict[str, Any]:
+        """Single-process eval loop: no accelerate, no DDP, no collectives."""
+        from torch.utils.data import DataLoader
+
+        dataset = eval_dataset if eval_dataset is not None else self.eval_dataset
+        model = self.accelerator.unwrap_model(self.model)
+        was_training = model.training
+        model.eval()
+
+        loader = DataLoader(
+            dataset,
+            batch_size=int(self.args.per_device_eval_batch_size),
+            shuffle=False,
+            collate_fn=self.data_collator,
+            num_workers=0,
+            pin_memory=False,
+            drop_last=False,
+        )
+
+        n_batches = len(loader)
+        if self.eval_max_batches:
+            n_batches = min(n_batches, self.eval_max_batches)
+        logger.info(
+            f"eval_on_main_process_only: rank 0 evaluating {n_batches} batches "
+            f"of {len(loader)} (eval_max_batches={self.eval_max_batches})"
+        )
+
+        device = self.args.device
+        total_loss = 0.0
+        seen = 0
+        start = time.time()
+        for step, batch in enumerate(loader):
+            if step >= n_batches:
+                break
+            batch = {
+                k: (v.to(device) if torch.is_tensor(v) else v)
+                for k, v in batch.items()
+            }
+            outputs = model(**batch)
+            loss = outputs.loss if hasattr(outputs, "loss") else outputs["loss"]
+            total_loss += float(loss.detach().item())
+            seen += 1
+
+        if was_training:
+            model.train()
+
+        runtime = time.time() - start
+        mean_loss = total_loss / max(1, seen)
+        metrics = {
+            f"{metric_key_prefix}_loss": mean_loss,
+            f"{metric_key_prefix}_perplexity": float(math.exp(min(mean_loss, 20.0))),
+            f"{metric_key_prefix}_batches": seen,
+            f"{metric_key_prefix}_runtime": runtime,
+        }
+        logger.info(
+            f"eval_on_main_process_only: rank 0 eval done in {runtime:.1f}s "
+            f"(loss {mean_loss:.4f})"
+        )
+        return metrics
+
+    def _share_metrics(self, metrics: Dict[str, Any]) -> Dict[str, Any]:
+        payload = [metrics]
+        torch.distributed.broadcast_object_list(
+            payload, src=0, group=self._eval_share_group
+        )
+        torch.distributed.barrier(group=self._eval_share_group)
+        return payload[0]
+
+    def evaluate(self, eval_dataset=None, ignore_keys=None, metric_key_prefix="eval"):
+        if not self._is_distributed():
+            return super().evaluate(
+                eval_dataset=eval_dataset,
+                ignore_keys=ignore_keys,
+                metric_key_prefix=metric_key_prefix,
+            )
+
+        metrics: Dict[str, Any] = {}
+        if self.args.process_index == 0:
+            metrics = self._local_eval(eval_dataset, metric_key_prefix)
+        else:
+            logger.info(
+                f"eval_on_main_process_only: rank {self.args.process_index} "
+                "skipping eval forward; waiting for rank 0"
+            )
+
+        metrics = self._share_metrics(metrics)
+
+        # super().evaluate() would normally do these; keep logging and callbacks
+        # (wandb, best-metric tracking) behaving the same on every rank.
+        self.log(metrics)
+        self.control = self.callback_handler.on_evaluate(
+            self.args, self.state, self.control, metrics
+        )
+        return metrics
+
+
 class EHRPretrainer:
     """
     Manages the entire workflow for continued pretraining of LLMs on EHR data.
@@ -294,6 +458,9 @@ class EHRPretrainer:
             bf16=use_bf16,
             gradient_accumulation_steps=self.training_config.get('gradient_accumulation_steps', 1),
             gradient_checkpointing=self.training_config.get('gradient_checkpointing', False),
+            # Avoid an extra NCCL allgather every step in Unsloth's
+            # get_batch_samples; that gather is what hangs if ranks desync at eval.
+            average_tokens_across_devices=False,
             
             # System
             report_to=report_to,
@@ -310,6 +477,7 @@ class EHRPretrainer:
 
         
         logger.info("\nInitializing SFTTrainer...")
+        print("\nInitializing SFTTrainer...", flush=True)
 
         collator = DataCollatorForLanguageModeling(tokenizer=self.tokenizer, mlm=False)
         
@@ -321,10 +489,36 @@ class EHRPretrainer:
             "args": training_args,
             "data_collator": collator,
         }
-        
+
+        callbacks: list = []
+        append_max_runtime_callback(callbacks, self.training_config)
+        if callbacks:
+            trainer_kwargs["callbacks"] = callbacks
+
+        eval_on_main = bool(
+            self.training_config.get("eval_on_main_process_only", False)
+        )
+        # Unsloth replaces Trainer._inner_training_loop with _fast_inner_training_loop.
+        # At eval_steps, rank 0 can enter a long local eval while other ranks race
+        # ahead into get_batch_samples() → accelerator.gather → NCCL timeout (see
+        # isa-mimic-run-5978520). Mid-train eval is unsafe under that loop; keep
+        # save_steps checkpoints instead.
+        if eval_on_main and val_dataset is not None:
+            training_args.eval_strategy = "no"
+            training_args.load_best_model_at_end = False
+            training_args.metric_for_best_model = None
+            msg = (
+                "eval_on_main_process_only: disabling mid-train eval "
+                f"(eval_strategy=no) to avoid Unsloth/NCCL desync; "
+                f"checkpoints still saved every {training_args.save_steps} steps"
+            )
+            logger.info(msg)
+            print(f"  {msg}", flush=True)
+
         self.trainer = SFTTrainer(**trainer_kwargs)
         
         logger.info(f"  ✓ SFTTrainer initialized")
+        print("  ✓ SFTTrainer initialized", flush=True)
         world_size = 1
         if torch.distributed.is_available() and torch.distributed.is_initialized():
             try:

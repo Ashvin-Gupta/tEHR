@@ -1,0 +1,88 @@
+seed: 42
+training:
+  seed: 42
+  resume_from_last: true
+  epochs: 1
+  batch_size: 8
+  eval_batch_size: 1
+  weight_decay: 0.01
+  warmup_steps: 100
+  gradient_accumulation_steps: 2
+  fp16: false
+  bf16: true
+  logging_steps: 10
+  eval_epoch_fractions:
+  - 0.05
+  - 0.1
+  - 0.2
+  - 0.4
+  - 0.6
+  - 0.8
+  - 1.0
+  eval_steps: 1000
+  save_steps: 1000
+  save_total_limit: 2
+  load_in_4bit: true
+  multi_label: false
+  save_model: false
+  dataloader_num_workers: 0
+  overwrite_output_dir: true
+  output_dir: /projects/u6ps/TextCancEHR2/experiments/Results/mimic-surface-raw-mistral-icu_readmission
+  learning_rate: 1e-5
+  data_cache_dir: /projects/u6ps/TextCancEHR2/experiments/labels_cache/icu_readmission/surface_raw
+  max_runtime_hours: 22
+data:
+  data_dir: /home/u6ps/ashvingupta812.u6ps/MIMIC-IV_tokenisation
+  vocab_filepath: /home/u6ps/ashvingupta812.u6ps/MIMIC-IV_tokenisation/vocab.csv
+  lookup_dir: /home/u6ps/ashvingupta812.u6ps/MIMIC_data/hosp
+  dataset: MIMIC
+  task: prediction
+  sort_by_length: true
+  label_column: label
+  surface_form: raw
+  scramble_seed: 42
+  aces_label_dir: /home/u6ps/ashvingupta812.u6ps/MIMIC_data/labels/icu_readmission
+lora:
+  r: 16
+  target_modules:
+  - q_proj
+  - k_proj
+  - v_proj
+  - o_proj
+  - gate_proj
+  - up_proj
+  - down_proj
+  lora_alpha: 32
+  lora_dropout: 0.05
+  bias: none
+  use_rslora: true
+wandb:
+  enabled: true
+  project: MIMIC-IV-classification
+  run_name: surface-raw-mistral-icu_readmission
+name: mimic_surface_raw_mistral_icu_readmission
+model:
+  pretrained_checkpoint: null
+  num_labels: 2
+  freeze_llm: true
+  train_lora: true
+  pooling: mean
+  head_type: linear
+  head_hidden_size: 512
+  head_dropout: 0.1
+  model_name: unsloth/mistral-7b-v0.3-bnb-4bit
+  instruct_model_name: unsloth/mistral-7b-instruct-v0.3-bnb-4bit
+  hidden_size: 4096
+  use_unsloth: true
+  max_length: 12000
+_aliases:
+  model_tag: mistral
+task:
+  name: icu_readmission
+  description: be readmitted to the ICU, given that roughly 15% of patients are readmitted
+    to the ICU.
+_meta:
+  experiment: surface_raw
+  site: isambard
+  model: mistral
+  task: icu_readmission

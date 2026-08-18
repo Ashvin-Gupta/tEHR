@@ -1,0 +1,18 @@
+# Qwen0.6-7B overlay — merged on top of an experiment config by run.sh
+
+model:
+  model_name: "unsloth/Qwen3-0.6B-Base-unsloth-bnb-4bit"
+  instruct_model_name: "Qwen/Qwen3-0.6B-Instruct-unsloth-bnb-4bit"
+  pretrained_checkpoint: "/projects/u6ps/TextCancEHR2/experiments/Results/Pretrain-qwen0.6-Mimic/final_model"
+  hidden_size: 1024
+  use_unsloth: true
+  max_length: 12000
+
+# Long-context Unsloth + multi-GPU: mid-train eval desyncs NCCL (see pretrainer).
+# eval_on_main_process_only disables mid-train eval; checkpoints still save.
+training:
+  eval_on_main_process_only: true
+
+# Convenience aliases used by SFT / prompting (instruct variant)
+_aliases:
+  model_tag: "qwen0.6"

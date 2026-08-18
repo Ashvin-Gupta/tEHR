@@ -49,6 +49,8 @@ def get_dataset(
             format = data_config.get('format', 'text'),
             surface_form = data_config.get('surface_form', 'text'),
             scramble_seed = int(data_config.get('scramble_seed', 42)),
+            file_fraction = data_config.get('file_fraction'),
+            file_fraction_seed = int(data_config.get('file_fraction_seed', 42)),
         )
     elif dataset_name == 'EHRSHOT':
         return EHRSHOTDataset(

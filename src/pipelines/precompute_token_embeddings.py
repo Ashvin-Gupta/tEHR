@@ -1,49 +1,73 @@
 """
-Precompute token embeddings for the text-embedding transformer baseline.
+Precompute phrase embeddings for the text-embedding transformer baseline.
 
-For each unique token in the MIMIC vocabulary this script:
-  1. Translates the token ID → human-readable string via MIMICTokenTranslator.
-  2. Embeds the string with a frozen language model (e.g. Qwen3-Embedding-0.6B
-     or Bio_ClinicalBERT).
+For each unique natural-language *phrase* that appears in patient trajectories
+this script:
+  1. Builds phrases the same way as the LLM path (``tokens_to_phrases``),
+     fusing measurable concept + value (+ optional unit) into one string.
+  2. Embeds each phrase with a frozen language model using **last-token
+     pooling** (required for Qwen3-Embedding) + L2 normalisation.
   3. Saves a .pt file containing:
         {
-            "embeddings":       FloatTensor (N_tokens, D),
-            "token_id_to_row":  dict[int, int],   # token_id → row index
-            "dim":              int,               # embedding dimension D
-            "model_name":       str,
+            "embeddings":      FloatTensor (N_phrases, D),
+            "phrase_to_row":   dict[str, int],   # phrase → row index
+            "phrases":         list[str],        # row → phrase
+            "dim":             int,
+            "model_name":      str,
+            "pooling":         "last_token",
+            "unit":            "phrase",
         }
 
 Usage:
     python -m src.pipelines.precompute_token_embeddings \\
-        --vocab_filepath  "/home/ag619/MIMIC-IV tokensiation/vocab.csv" \\
-        --lookup_dir      "/home/ag619/MIMIC_data/hosp" \\
+        --vocab_filepath  ".../vocab.csv" \\
+        --lookup_dir      ".../hosp" \\
+        --data_dir        ".../MIMIC-IV_tokenisation" \\
         --model_name      "Qwen/Qwen3-Embedding-0.6B" \\
-        --output_path     "/home/ag619/experiments/Results/mimic-baselines/text_embedding_transformer/token_embeddings.pt" \\
+        --output_path     ".../phrase_embeddings_qwen3_0.6B.pt" \\
         [--batch_size 256] \\
-        [--max_length 64] \\
+        [--max_length 128] \\
         [--device cuda]
 """
+from __future__ import annotations
+
 import argparse
 import os
-import torch
-import numpy as np
-import pandas as pd
-from tqdm import tqdm
-from transformers import AutoTokenizer, AutoModel
+import pickle
+from typing import Dict, Iterable, List, Sequence, Set
 
+import pandas as pd
+import torch
+from tqdm import tqdm
+from transformers import AutoModel, AutoTokenizer
+
+from src.data.base_dataset import tokens_to_phrases
 from src.data.mimic_translator import MIMICTokenTranslator
 
 
 # ---------------------------------------------------------------------------
-# Embedding utilities
+# Embedding utilities (Qwen3-Embedding: last-token pool + L2 normalise)
 # ---------------------------------------------------------------------------
 
-def _mean_pool(hidden_states: torch.Tensor, attention_mask: torch.Tensor) -> torch.Tensor:
-    """Masked mean pooling over token hidden states."""
-    mask = attention_mask.unsqueeze(-1).float()
-    summed = (hidden_states * mask).sum(dim=1)
-    counts = mask.sum(dim=1).clamp(min=1e-9)
-    return summed / counts
+def last_token_pool(
+    last_hidden_states: torch.Tensor,
+    attention_mask: torch.Tensor,
+) -> torch.Tensor:
+    """
+    Pool at the last non-pad token (Qwen3-Embedding convention).
+
+    With left padding every row's last index is valid; with right padding we
+    index by ``attention_mask.sum(dim=1) - 1``.
+    """
+    left_padding = bool(torch.all(attention_mask[:, -1] == 1).item())
+    if left_padding:
+        return last_hidden_states[:, -1]
+    sequence_lengths = attention_mask.sum(dim=1).long() - 1
+    batch_size = last_hidden_states.shape[0]
+    return last_hidden_states[
+        torch.arange(batch_size, device=last_hidden_states.device),
+        sequence_lengths,
+    ]
 
 
 def embed_strings(
@@ -52,21 +76,19 @@ def embed_strings(
     tokenizer,
     device: torch.device,
     batch_size: int = 256,
-    max_length: int = 64,
+    max_length: int = 128,
 ) -> torch.Tensor:
-    """
-    Embed a list of strings and return a (N, D) float32 tensor.
-
-    Uses masked mean pooling over the last hidden state.
-    For models that expose a `sentence_embedding` output (e.g. some Qwen
-    variants), that is used directly instead.
-    """
+    """Embed strings with last-token pooling; return (N, D) float32 L2-normalised."""
     model.eval()
-    all_embeddings = []
+    # Qwen3-Embedding docs: left-pad so the last position is always the EOS/content token.
+    tokenizer.padding_side = "left"
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
 
+    all_embeddings: List[torch.Tensor] = []
     with torch.no_grad():
-        for i in tqdm(range(0, len(strings), batch_size), desc="Embedding tokens"):
-            batch = strings[i: i + batch_size]
+        for i in tqdm(range(0, len(strings), batch_size), desc="Embedding phrases"):
+            batch = strings[i : i + batch_size]
             enc = tokenizer(
                 batch,
                 padding=True,
@@ -76,14 +98,7 @@ def embed_strings(
             ).to(device)
 
             outputs = model(**enc)
-
-            # Some embedding models expose `.sentence_embedding`
-            if hasattr(outputs, "sentence_embedding"):
-                emb = outputs.sentence_embedding
-            else:
-                emb = _mean_pool(outputs.last_hidden_state, enc["attention_mask"])
-
-            # L2-normalise for cosine-friendly embeddings
+            emb = last_token_pool(outputs.last_hidden_state, enc["attention_mask"])
             emb = torch.nn.functional.normalize(emb, p=2, dim=-1)
             all_embeddings.append(emb.cpu().float())
 
@@ -91,24 +106,63 @@ def embed_strings(
 
 
 # ---------------------------------------------------------------------------
-# Token translation
+# Phrase collection
 # ---------------------------------------------------------------------------
 
-def _translate_token(token_str: str, translator: MIMICTokenTranslator) -> str:
-    """
-    Translate a raw MIMIC token string to a human-readable string for embedding.
+def _iter_patient_token_sequences(data_dir: str, splits: Sequence[str]) -> Iterable[List[int]]:
+    """Yield raw token-id sequences from pickle shards under data_dir/<split>/."""
+    for split in splits:
+        split_dir = os.path.join(data_dir, split)
+        if not os.path.isdir(split_dir):
+            print(f"  Warning: split dir missing, skipping: {split_dir}")
+            continue
+        pkl_files = sorted(
+            os.path.join(split_dir, f)
+            for f in os.listdir(split_dir)
+            if f.endswith(".pkl")
+        )
+        for path in tqdm(pkl_files, desc=f"Scanning {split}"):
+            with open(path, "rb") as f:
+                records = pickle.load(f)
+            for record in records:
+                tokens = record.get("tokens")
+                if tokens is None:
+                    continue
+                if hasattr(tokens, "tolist"):
+                    tokens = tokens.tolist()
+                yield list(tokens)
 
-    Falls back to the raw string if translation returns an empty or
-    error result.
+
+def collect_unique_phrases(
+    data_dir: str,
+    id_to_token: Dict[int, str],
+    translator: MIMICTokenTranslator,
+    splits: Sequence[str] = ("train", "tuning", "held_out"),
+) -> List[str]:
     """
-    if not isinstance(token_str, str) or not token_str.strip():
-        return "<unknown>"
-    translated = translator.translate(token_str)
-    # Strip trailing semicolons / whitespace added by the translator
-    cleaned = translated.strip().rstrip(";").strip()
-    if not cleaned or cleaned == "---ERROR_TRANSLATING---":
-        return token_str  # fall back to the raw string
-    return cleaned
+    Collect unique NL phrases from patient trajectories.
+
+    Uses the same pairing rules as the LLM narrative path, without HEADER_SPLIT
+    markers (those are not semantic events).
+    """
+    unique: Set[str] = set()
+    n_sequences = 0
+    for token_ids in _iter_patient_token_sequences(data_dir, splits):
+        n_sequences += 1
+        string_codes = [id_to_token.get(int(tid), "") for tid in token_ids]
+        for phrase in tokens_to_phrases(
+            string_codes, translator, include_header_split=False
+        ):
+            cleaned = phrase.strip()
+            if cleaned:
+                unique.add(cleaned)
+
+    phrases = sorted(unique)
+    print(
+        f"  Collected {len(phrases):,} unique phrases "
+        f"from {n_sequences:,} patient sequences"
+    )
+    return phrases
 
 
 # ---------------------------------------------------------------------------
@@ -119,19 +173,13 @@ def main(args):
     device = torch.device(args.device if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
 
-    # -----------------------------------------------------------------------
-    # 1. Load vocab
-    # -----------------------------------------------------------------------
     print(f"\nLoading vocabulary from: {args.vocab_filepath}")
     vocab_df = pd.read_csv(args.vocab_filepath, dtype={"str": str})
-    # vocab_df columns: 'token' (int ID), 'str' (raw token string)
-    token_ids: list[int] = vocab_df["token"].tolist()
-    token_strings: list[str] = vocab_df["str"].tolist()
-    print(f"  Vocabulary size: {len(token_ids):,}")
+    id_to_token: Dict[int, str] = {
+        int(tok_id): str(s) for tok_id, s in zip(vocab_df["token"], vocab_df["str"])
+    }
+    print(f"  Vocabulary size: {len(id_to_token):,}")
 
-    # -----------------------------------------------------------------------
-    # 2. Translate tokens to human-readable strings
-    # -----------------------------------------------------------------------
     print(f"\nLoading MIMIC translator from: {args.lookup_dir}")
     translator = MIMICTokenTranslator.from_csv_files(
         labitems_file=os.path.join(args.lookup_dir, "d_labitems.csv.gz"),
@@ -139,20 +187,23 @@ def main(args):
         procedures_file=os.path.join(args.lookup_dir, "d_icd_procedures.csv.gz"),
     )
 
-    print("Translating tokens to human-readable strings...")
-    readable_strings: list[str] = [
-        _translate_token(s, translator) for s in tqdm(token_strings, desc="Translating")
-    ]
+    print(f"\nCollecting unique phrases from: {args.data_dir}")
+    phrases = collect_unique_phrases(args.data_dir, id_to_token, translator)
+    if not phrases:
+        raise RuntimeError(
+            f"No phrases collected from {args.data_dir}. "
+            "Check --data_dir points at tokenised MIMIC splits."
+        )
 
-    # Brief sample
-    for tok_id, raw, readable in zip(token_ids[:5], token_strings[:5], readable_strings[:5]):
-        print(f"  [{tok_id}] '{raw}' → '{readable}'")
+    for p in phrases[:5]:
+        print(f"  sample phrase: {p!r}")
 
-    # -----------------------------------------------------------------------
-    # 3. Load embedding model
-    # -----------------------------------------------------------------------
     print(f"\nLoading embedding model: {args.model_name}")
     tokenizer = AutoTokenizer.from_pretrained(args.model_name, trust_remote_code=True)
+    tokenizer.padding_side = "left"
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
+
     model = AutoModel.from_pretrained(
         args.model_name,
         trust_remote_code=True,
@@ -160,22 +211,21 @@ def main(args):
     ).to(device)
     model.eval()
 
-    # Determine embedding dimension with a dummy forward pass
     with torch.no_grad():
-        dummy_enc = tokenizer(["test"], return_tensors="pt").to(device)
+        dummy_enc = tokenizer(
+            ["test"],
+            padding=True,
+            return_tensors="pt",
+        ).to(device)
         dummy_out = model(**dummy_enc)
-        if hasattr(dummy_out, "sentence_embedding"):
-            embed_dim = dummy_out.sentence_embedding.shape[-1]
-        else:
-            embed_dim = dummy_out.last_hidden_state.shape[-1]
-    print(f"  Embedding dimension: {embed_dim}")
+        embed_dim = int(last_token_pool(
+            dummy_out.last_hidden_state, dummy_enc["attention_mask"]
+        ).shape[-1])
+    print(f"  Embedding dimension: {embed_dim} (pooling=last_token)")
 
-    # -----------------------------------------------------------------------
-    # 4. Embed all readable strings
-    # -----------------------------------------------------------------------
-    print(f"\nEmbedding {len(readable_strings):,} token strings...")
+    print(f"\nEmbedding {len(phrases):,} unique phrases...")
     embeddings = embed_strings(
-        readable_strings,
+        phrases,
         model,
         tokenizer,
         device=device,
@@ -183,29 +233,33 @@ def main(args):
         max_length=args.max_length,
     )
     print(f"  Embeddings shape: {tuple(embeddings.shape)}")
+    norms = embeddings.norm(dim=-1)
+    print(
+        f"  L2 norms: mean={float(norms.mean()):.4f} "
+        f"min={float(norms.min()):.4f} max={float(norms.max()):.4f}"
+    )
 
-    # -----------------------------------------------------------------------
-    # 5. Build token_id → row mapping and save
-    # -----------------------------------------------------------------------
-    token_id_to_row: dict[int, int] = {
-        int(tok_id): row_idx for row_idx, tok_id in enumerate(token_ids)
-    }
-
+    phrase_to_row = {p: i for i, p in enumerate(phrases)}
     save_dict = {
-        "embeddings": embeddings,       # (N_tokens, D) float32
-        "token_id_to_row": token_id_to_row,
+        "embeddings": embeddings,
+        "phrase_to_row": phrase_to_row,
+        "phrases": phrases,
         "dim": embed_dim,
         "model_name": args.model_name,
+        "pooling": "last_token",
+        "unit": "phrase",
     }
 
     os.makedirs(os.path.dirname(os.path.abspath(args.output_path)), exist_ok=True)
     torch.save(save_dict, args.output_path)
-    print(f"\nSaved embeddings to: {args.output_path}")
+    print(f"\nSaved phrase embeddings to: {args.output_path}")
     print(f"  File size: {os.path.getsize(args.output_path) / 1e6:.1f} MB")
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Precompute MIMIC token embeddings")
+    parser = argparse.ArgumentParser(
+        description="Precompute MIMIC phrase embeddings (last-token pool)"
+    )
     parser.add_argument(
         "--vocab_filepath",
         type=str,
@@ -216,7 +270,13 @@ if __name__ == "__main__":
         "--lookup_dir",
         type=str,
         required=True,
-        help="Directory containing d_labitems.csv.gz, d_icd_diagnoses.csv.gz, d_icd_procedures.csv.gz",
+        help="Directory containing d_labitems / d_icd_diagnoses / d_icd_procedures CSVs",
+    )
+    parser.add_argument(
+        "--data_dir",
+        type=str,
+        required=True,
+        help="Tokenised MIMIC root with train/tuning/held_out pickle shards",
     )
     parser.add_argument(
         "--model_name",
@@ -230,23 +290,13 @@ if __name__ == "__main__":
         required=True,
         help="Output .pt file path",
     )
-    parser.add_argument(
-        "--batch_size",
-        type=int,
-        default=256,
-        help="Embedding batch size",
-    )
+    parser.add_argument("--batch_size", type=int, default=256)
     parser.add_argument(
         "--max_length",
         type=int,
-        default=64,
-        help="Max token length for the embedder (token strings are short)",
+        default=128,
+        help="Max tokenizer length for phrases (lab+value+unit can be longer than atoms)",
     )
-    parser.add_argument(
-        "--device",
-        type=str,
-        default="cuda",
-        help="Device: 'cuda' or 'cpu'",
-    )
+    parser.add_argument("--device", type=str, default="cuda")
     args = parser.parse_args()
     main(args)
