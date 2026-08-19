@@ -1,0 +1,42 @@
+# Prompt SFT: emit 0/1, then logit eval on test.
+# Usage: sbatch scripts/<site>/run.sh <dataset> sft mistral <task>
+
+extends:
+  - ../shared/lora.yaml
+
+name: "{dataset}_sft_{model}_{task}"
+
+model:
+  max_length: 8000
+  load_in_4bit: true
+  logit_low_threshold: -10.0
+
+prompt:
+  filepath: "src/resources/sft_classifier_prompt.txt"
+
+wandb:
+  enabled: true
+  project: "tEHR-classification"
+  run_name: "sft-{dataset}-{model}-{task}"
+
+training:
+  output_dir: "{results_root}/{dataset}-sft-{model}-{task}"
+  epochs: 1
+  batch_size: 1
+  eval_batch_size: 1
+  learning_rate: 2e-5
+  weight_decay: 0.01
+  warmup_steps: 100
+  gradient_accumulation_steps: 2
+  gradient_checkpointing: true
+  fp16: false
+  bf16: true
+  logging_steps: 10
+  eval_steps: 5000
+  save_steps: 100
+  eval_max_samples: 200
+  save_total_limit: 2
+  dataloader_num_workers: 0
+
+data:
+  sort_by_length: false

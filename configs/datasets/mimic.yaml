@@ -1,0 +1,14 @@
+data:
+  dataset: "MIMIC"
+  data_dir: "{mimic.data_dir}"
+  vocab_filepath: "{mimic.vocab_filepath}"
+  lookup_dir: "{mimic.lookup_dir}"
+  task: "prediction"
+  sort_by_length: true
+  label_column: "label"
+
+wandb:
+  project: "tEHR-classification"
+
+prompt:
+  filepath: "src/resources/probability_task_prompt.txt"

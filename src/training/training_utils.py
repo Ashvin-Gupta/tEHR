@@ -6,21 +6,11 @@ import os
 import random
 import numpy as np
 import torch
-from typing import Optional, Dict, Any, List, Tuple
+from typing import Optional, Dict, Any, List, Tuple, Sequence
 from tqdm import tqdm
 from datasets import Dataset
 import logging
 logger = logging.getLogger(__name__)
-
-def setup_wandb(config):
-    """
-    Setup WandB logging.
-    """
-    wandb.init(
-        project=config.get("project", "ehr-llm-pretraining"),
-        name=config.get("name", "ehr-llm-pretraining"),
-        config=config
-    )
 
 def extract_and_pack(dataset, tokenizer, max_length, cache_path):
     """
@@ -43,7 +33,7 @@ def extract_text(base_dataset, tokenizer) -> List[str]:
     """
     Extracts all valid text narratives from a dataset for pretraining.
     
-    This function extracts text from UnifiedEHRDataset and prepares it for SFTTrainer.
+    This function extracts text from the EHR dataset and prepares it for SFTTrainer.
     We keep both <start> and <end> tokens as they mark sequence boundaries:
     - <start> marks the beginning of a patient record
     - <end> marks the end of a patient record (the model should learn to predict this)
@@ -273,13 +263,55 @@ def find_last_checkpoint(output_dir: Optional[str]) -> Optional[str]:
     return None
 
 
+EVAL_WEIGHT_FILES = (
+    "models/best_model.pt",
+    "models/xgboost_bow_model.json",
+    "final_model/pytorch_model.bin",
+)
+
+
+def find_eval_checkpoint(output_dir: Optional[str]) -> Optional[str]:
+    """Newest HF ``checkpoint-*``, else a saved weight file under ``output_dir``."""
+    last = find_last_checkpoint(output_dir)
+    if last:
+        return last
+    if not output_dir:
+        return None
+    for rel in EVAL_WEIGHT_FILES:
+        path = os.path.join(output_dir, rel)
+        if os.path.isfile(path):
+            return path
+    final_dir = os.path.join(output_dir, "final_model")
+    if os.path.isdir(final_dir):
+        return final_dir
+    return None
+
+
+def resolve_weight_path(checkpoint_path: str) -> str:
+    """If ``checkpoint_path`` is a run directory, pick the weight file inside it."""
+    if os.path.isfile(checkpoint_path):
+        return checkpoint_path
+    if not os.path.isdir(checkpoint_path):
+        raise FileNotFoundError(f"Checkpoint not found: {checkpoint_path}")
+    for rel in EVAL_WEIGHT_FILES:
+        cand = os.path.join(checkpoint_path, rel)
+        if os.path.isfile(cand):
+            return cand
+    if os.path.basename(os.path.normpath(checkpoint_path)).startswith("checkpoint-"):
+        return checkpoint_path
+    raise FileNotFoundError(
+        f"No weight file found under {checkpoint_path}. "
+        f"Expected one of: {', '.join(EVAL_WEIGHT_FILES)}"
+    )
+
+
 def prepare_run_reproducibility(
     config: Dict[str, Any],
     *,
     cli_seed: Optional[int] = None,
     cli_checkpoint: Optional[str] = None,
     cli_resume_from_last: Optional[bool] = None,
-    use_seed_subdir: bool = False,
+    use_seed_subdir: bool = True,
 ) -> Tuple[int, Optional[str]]:
     """
     Apply seed globally and optionally resolve a resume checkpoint.
@@ -336,3 +368,103 @@ def prepare_run_reproducibility(
         raise FileNotFoundError(f"Resume checkpoint not found: {resume_path}")
 
     return seed, resume_path
+
+
+def init_wandb(
+    config: Dict[str, Any],
+    *,
+    local_rank: int = 0,
+    run_name: Optional[str] = None,
+    default_project: str = "tEHR",
+) -> Tuple[str, str]:
+    """Start wandb on rank 0 when ``wandb.enabled`` is true.
+
+    Returns ``(run_name, report_to)`` where ``report_to`` is ``wandb`` or ``none``.
+    """
+    wandb_cfg = config.get("wandb") or {}
+    name = (
+        run_name
+        or wandb_cfg.get("run_name")
+        or config.get("name")
+        or "run"
+    )
+    enabled = bool(wandb_cfg.get("enabled", False))
+    report_to = "wandb" if enabled else "none"
+    if enabled and int(local_rank) == 0:
+        import wandb
+
+        wandb.init(
+            project=wandb_cfg.get("project", default_project),
+            name=str(name),
+            config=config,
+        )
+    return str(name), report_to
+
+
+def check_clobber(
+    output_dir: str,
+    overwrite: bool,
+    filenames: Sequence[str],
+) -> None:
+    """Refuse to replace final result files unless ``overwrite`` is true."""
+    results_dir = os.path.join(output_dir, "results")
+    existing = [
+        f for f in filenames if os.path.isfile(os.path.join(results_dir, f))
+    ]
+    extra = os.path.join(output_dir, "summary.json")
+    if "summary.json" in filenames and os.path.isfile(extra):
+        existing.append("summary.json")
+    existing = sorted(set(existing))
+    if not existing or overwrite:
+        return
+    raise SystemExit(
+        f"ERROR: {results_dir} already contains {', '.join(existing)}.\n"
+        "That run already has final metrics. Re-run with --overwrite to replace them."
+    )
+
+
+def resolve_checkpoint_selection(
+    latest_ckpt: str,
+    output_dir: str,
+    selection: str,
+) -> str:
+    """Pick newest ``checkpoint-*`` or the Trainer ``best_model_checkpoint``."""
+    if selection == "latest":
+        return latest_ckpt
+
+    import json
+
+    state_path = os.path.join(latest_ckpt, "trainer_state.json")
+    if not os.path.isfile(state_path):
+        print(f"  ! No trainer_state.json in {latest_ckpt}; using the newest checkpoint.")
+        return latest_ckpt
+
+    try:
+        with open(state_path) as f:
+            state = json.load(f)
+    except (OSError, ValueError) as exc:
+        print(f"  ! Could not read {state_path} ({exc}); using the newest checkpoint.")
+        return latest_ckpt
+
+    best = state.get("best_model_checkpoint")
+    if not best:
+        print("  ! trainer_state.json records no best checkpoint; using the newest.")
+        return latest_ckpt
+
+    if not os.path.isdir(best):
+        relocated = os.path.join(output_dir, os.path.basename(best.rstrip("/")))
+        if os.path.isdir(relocated):
+            best = relocated
+        else:
+            print(
+                f"  ! Best checkpoint {best} no longer exists "
+                "(likely pruned by save_total_limit); using the newest."
+            )
+            return latest_ckpt
+
+    metric = state.get("best_metric")
+    print(
+        f"  - Best checkpoint by validation {state.get('metric_for_best_model', 'auroc')}"
+        f"={metric}: {os.path.basename(best)}"
+    )
+    return best

@@ -1,7 +1,5 @@
 """
-Unified evaluation metrics for baseline models.
-
-Computes AUROC, AUPR, and Calibration (ECE) for pancreatic cancer prediction.
+Binary classification metrics and plots (AUROC, AUPR, ECE).
 """
 import os
 import json
@@ -17,9 +15,26 @@ from sklearn.metrics import (
     precision_recall_curve,
 )
 from sklearn.calibration import calibration_curve
+import torch
 
 
-def compute_baseline_metrics(labels: np.ndarray, probs: np.ndarray) -> dict:
+def compute_classification_metrics(eval_pred):
+    """HF Trainer callback: convert logits to probabilities, then score."""
+    predictions, labels = eval_pred
+    if isinstance(predictions, tuple):
+        predictions = predictions[0]
+    elif isinstance(predictions, dict):
+        predictions = predictions["logits"]
+
+    t = torch.tensor(predictions, dtype=torch.float32)
+    if t.ndim == 2 and t.shape[1] == 1:
+        probs = torch.sigmoid(t).squeeze(1).numpy()
+    else:
+        probs = torch.softmax(t, dim=1).numpy()[:, 1]
+    return compute_binary_metrics(labels, probs)
+
+
+def compute_binary_metrics(labels: np.ndarray, probs: np.ndarray) -> dict:
     """
     Compute binary classification metrics from predicted probabilities.
 
@@ -297,4 +312,35 @@ def print_results(results_dict: dict, split_name: str = ""):
         else:
             print(f"  {key.upper()}: {value}")
     print("-" * 50)
+
+
+def write_split_artifacts(
+    output_dir: str,
+    split_name: str,
+    labels,
+    probs,
+    *,
+    plots: bool = True,
+    extra: dict | None = None,
+) -> dict:
+    """Score a split, print metrics, and write plots + ``{split}_results.json``."""
+    labels = np.asarray(labels)
+    probs = np.asarray(probs)
+    metrics = compute_binary_metrics(labels, probs)
+    print_results(metrics, split_name)
+    if plots:
+        plot_all_curves(labels, probs, os.path.join(output_dir, "plots", split_name))
+        payload = {
+            "metrics": metrics,
+            "labels": labels.tolist(),
+            "probs": probs.tolist(),
+        }
+        if extra:
+            payload.update(extra)
+        save_results(
+            payload,
+            os.path.join(output_dir, "results"),
+            f"{split_name}_results.json",
+        )
+    return metrics
 

@@ -1,0 +1,38 @@
+# Copy to configs/local.yaml (gitignored) and fill in local paths.
+# No usernames or cluster names belong in committed files.
+
+repo_root: /path/to/TextCancEHR2
+results_root: /path/to/experiments/Results
+labels_cache_root: /path/to/experiments/labels_cache
+
+mimic:
+  data_dir: /path/to/MIMIC-IV_tokenisation
+  vocab_filepath: /path/to/MIMIC-IV_tokenisation/vocab.csv
+  lookup_dir: /path/to/MIMIC_data/hosp
+  labels_root: /path/to/MIMIC_data/labels
+  checkpoints:
+    mistral: /path/to/tehr_stage1_mimic_mistral/final_model
+    qwen0.6: /path/to/tehr_stage1_mimic_qwen0.6/final_model
+    qwen8: /path/to/tehr_stage1_mimic_qwen8/final_model
+  encoder_mlm_checkpoint: /path/to/mimic-encoder/models/pretrained_encoder_stage1_mlm.pt
+  text_embedding_path: /path/to/mimic-text_embedding/phrase_embeddings.pt
+
+cprd:
+  data_dir: /path/to/cprd_tokenisation
+  vocab_filepath: /path/to/cprd_tokenisation/vocab.csv
+  labels_filepath: /path/to/subject_information.csv
+  medical_lookup_filepath: src/resources/MedicalDictTranslation2.csv
+  lab_lookup_filepath: src/resources/LabLookUP.csv
+  region_lookup_filepath: src/resources/RegionLookUp.csv
+  time_lookup_filepath: src/resources/TimeLookUp.csv
+  checkpoints:
+    mistral: /path/to/tehr_stage1_cprd_mistral/final_model
+    qwen0.6: /path/to/tehr_stage1_cprd_qwen0.6/final_model
+    qwen8: /path/to/tehr_stage1_cprd_qwen8/final_model
+  encoder_mlm_checkpoint: /path/to/cprd-encoder/models/pretrained_encoder_stage1_mlm.pt
+  text_embedding_path: /path/to/cprd-text_embedding/phrase_embeddings.pt
+
+# Optional trainer overlay (VRAM / wall-clock). Example for a 24h GPU queue:
+training:
+  eval_batch_size: 1
+  max_runtime_hours: 22

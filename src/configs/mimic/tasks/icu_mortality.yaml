@@ -1,8 +1,0 @@
-# Downstream task: ICU mortality
-
-task:
-  name: "icu_mortality"
-  description: "die in the ICU, given that roughly 7% of patients die in the ICU."
-
-data:
-  aces_label_dir: "/home/ag619/MIMIC_data/labels/icu_mortality"

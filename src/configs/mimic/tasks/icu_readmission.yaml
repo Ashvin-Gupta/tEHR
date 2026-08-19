@@ -1,8 +1,0 @@
-# Downstream task: ICU readmission
-
-task:
-  name: "icu_readmission"
-  description: "be readmitted to the ICU, given that roughly 15% of patients are readmitted to the ICU."
-
-data:
-  aces_label_dir: "/home/ag619/MIMIC_data/labels/icu_readmission"

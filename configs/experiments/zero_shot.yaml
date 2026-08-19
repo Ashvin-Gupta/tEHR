@@ -1,0 +1,33 @@
+# Zero-shot LLM prompting.
+# Usage: sbatch scripts/<site>/run.sh <dataset> zero_shot mistral <task>
+#
+# Prompt filepath comes from datasets/{mimic,cprd}.yaml.
+
+name: "{dataset}_zero_shot_{model}_{task}"
+
+prompt:
+  use_chat_template: true
+
+debug:
+  enabled: true
+  print_first_n: 5
+
+model:
+  load_in_4bit: true
+
+inference:
+  mode: generate_probability
+  batch_size: 1
+  max_new_tokens: 8
+  logit_low_threshold: -10.0
+
+output_dir: "{results_root}/{dataset}-zero_shot-{model}-{task}"
+overwrite_output_dir: true
+
+training:
+  output_dir: "{results_root}/{dataset}-zero_shot-{model}-{task}"
+  overwrite_output_dir: true
+
+data:
+  format: "text"
+  sort_by_length: false

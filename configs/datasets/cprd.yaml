@@ -1,0 +1,17 @@
+data:
+  dataset: "CPRD"
+  data_dir: "{cprd.data_dir}"
+  vocab_filepath: "{cprd.vocab_filepath}"
+  labels_filepath: "{cprd.labels_filepath}"
+  medical_lookup_filepath: "{cprd.medical_lookup_filepath}"
+  lab_lookup_filepath: "{cprd.lab_lookup_filepath}"
+  region_lookup_filepath: "{cprd.region_lookup_filepath}"
+  time_lookup_filepath: "{cprd.time_lookup_filepath}"
+  sort_by_length: true
+  format: "text"
+
+wandb:
+  project: "tEHR-classification"
+
+prompt:
+  filepath: "src/resources/probability_task_prompt.txt"

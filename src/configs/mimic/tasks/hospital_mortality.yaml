@@ -1,8 +1,0 @@
-# Downstream task: hospital mortality
-
-task:
-  name: "hospital_mortality"
-  description: "die during this hospital admission, given that roughly 2% of patients die during this hospital admission."
-
-data:
-  aces_label_dir: "/home/ag619/MIMIC_data/labels/hospital_mortality"

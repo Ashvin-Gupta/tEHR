@@ -9,10 +9,9 @@ logger = logging.getLogger(__name__)
 
 # Surface forms for lexical-grounding ablations (paper analysis).
 # - text:             normal clinical titles (default)
-# - raw:              opaque EHR token strings for clinical concepts
 # - scramble_hash:    stable nonsense IDs (Concept_<hash>)
 # - scramble_shuffle: real titles permuted across codes (same category)
-SURFACE_FORMS = ("text", "raw", "scramble_hash", "scramble_shuffle")
+SURFACE_FORMS = ("text", "scramble_hash", "scramble_shuffle")
 
 
 class MIMICTokenTranslator(BaseTokenTranslator):
@@ -24,8 +23,8 @@ class MIMICTokenTranslator(BaseTokenTranslator):
       - diagnoses_file:  d_icd_diagnoses.csv.gz → columns 'icd_version', 'icd_code', 'long_title'
       - procedures_file: d_icd_procedures.csv.gz → columns 'icd_version', 'icd_code', 'long_title'
 
-    ``surface_form`` controls whether clinical concept *names* are lexical text,
-    raw codes, or scrambled. Demographics, times, and numeric values always use
+    ``surface_form`` controls whether clinical concept *names* are lexical text
+    or scrambled. Demographics, times, and numeric values always use
     the normal text path (only lab/ICD/med/DRG concept labels are altered).
     """
 
@@ -114,15 +113,10 @@ class MIMICTokenTranslator(BaseTokenTranslator):
         *,
         map_key: str,
         text_label: str,
-        raw_token: str,
     ) -> str:
         """Apply surface_form to a clinical concept label (not values/demos)."""
         if self.surface_form == "text":
             return self._format_phrase(text_label)
-        if self.surface_form == "raw":
-            # Keep the opaque EHR token string (strip trailing junk).
-            return self._format_phrase(raw_token.strip())
-        # scramble_*
         scrambled = self._scramble_map.get(map_key)
         if scrambled is None:
             # Unseen meds / fallback keys: hash on the fly.
@@ -144,7 +138,6 @@ class MIMICTokenTranslator(BaseTokenTranslator):
                 return self._alter_clinical(
                     map_key=f"lab:{itemid}",
                     text_label=str(label),
-                    raw_token=token,
                 )
             elif token.startswith("DIAGNOSIS//ICD//"):
                 parts = token.split("//")
@@ -153,7 +146,6 @@ class MIMICTokenTranslator(BaseTokenTranslator):
                 return self._alter_clinical(
                     map_key=f"diag:{key}",
                     text_label=str(label),
-                    raw_token=token,
                 )
             elif token.startswith("PROCEDURE//ICD//"):
                 parts = token.split("//")
@@ -162,7 +154,6 @@ class MIMICTokenTranslator(BaseTokenTranslator):
                 return self._alter_clinical(
                     map_key=f"proc:{key}",
                     text_label=str(label),
-                    raw_token=token,
                 )
             elif token.startswith("TIME "):
                 return f" {token[5:]};"
@@ -175,12 +166,9 @@ class MIMICTokenTranslator(BaseTokenTranslator):
                     if is_start:
                         return f" start {drug};"
                     return f" {drug} {rest};"
-                if self.surface_form == "raw":
-                    return self._format_phrase(token)
                 altered = self._alter_clinical(
                     map_key=f"med:{str(drug).lower()}",
                     text_label=str(drug),
-                    raw_token=str(drug),
                 ).strip().rstrip(";")
                 if is_start:
                     return f" start {altered};"
@@ -211,7 +199,6 @@ class MIMICTokenTranslator(BaseTokenTranslator):
                 return self._alter_clinical(
                     map_key=f"drg:{code}",
                     text_label=f"Drug Code {code}",
-                    raw_token=token,
                 )
             else:
                 return ""

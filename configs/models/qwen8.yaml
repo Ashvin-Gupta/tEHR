@@ -1,0 +1,11 @@
+# Qwen3-8B overlay — merged on top of an experiment config.
+
+model:
+  model_name: "unsloth/Qwen3-8B-unsloth-bnb-4bit"
+  instruct_model_name: "unsloth/Qwen3-8B-unsloth-bnb-4bit"
+  hidden_size: 4096
+  use_unsloth: true
+  max_length: 12000
+
+training:
+  eval_on_main_process_only: true

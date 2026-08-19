@@ -1,0 +1,40 @@
+# tEHR stage 1: continued pretraining on EHR text (LoRA).
+# Usage: sbatch scripts/<site>/run.sh <dataset> tehr_stage1 mistral
+
+extends:
+  - ../shared/lora.yaml
+
+name: "{dataset}_tehr_stage1_{model}"
+
+wandb:
+  enabled: true
+  project: "tEHR-pretrain"
+  run_name: "tehr-stage1-{dataset}-{model}"
+
+model:
+  max_length: 32000
+
+training:
+  output_dir: "{results_root}/{dataset}-tehr_stage1-{model}"
+  overwrite_output_dir: true
+  load_in_4bit: true
+  epochs: 1
+  batch_size: 1
+  eval_batch_size: 1
+  learning_rate: 1e-5
+  weight_decay: 0.05
+  warmup_steps: 500
+  gradient_accumulation_steps: 4
+  gradient_checkpointing: true
+  fp16: false
+  bf16: true
+  logging_steps: 10
+  eval_steps: 500
+  eval_max_batches: 200
+  save_steps: 1000
+  save_total_limit: 3
+  dataloader_num_workers: 4
+
+data:
+  task: "pretrain"
+  sort_by_length: false

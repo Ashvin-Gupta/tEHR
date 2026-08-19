@@ -10,7 +10,6 @@ Features:
 import argparse
 import json
 import os
-import yaml
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -26,18 +25,7 @@ import joblib
 from src.data.dataset_factory import get_dataset
 from src.resources.my_terms import MY_TERMS
 from src.resources.lab_terms import LAB_TERMS
-
-# ---------------------------------------------------------------------------
-# Configuration & Hyperparameters (Fixed for Reproducibility)
-# ---------------------------------------------------------------------------
-CONFIG_PATH = "src/configs/classification_config.yaml"
-EMBEDDINGS_DIR = "/gpfs/scratch/qc25022/pancreas/experiments/Results/lora-1-month-logistic-refactored-new-time-mistral-7B/patient_clustering_heldout"
-OUTPUT_DIR = EMBEDDINGS_DIR + "/journal_clustering_output"
-# Path to the per-patient prediction JSON produced by evaluate_model.py.
-# Matches training.output_dir in classification_config.yaml.
-EVAL_RESULTS_DIR = "/gpfs/scratch/qc25022/pancreas/experiments/Results/lora-1-month-logistic-refactored-new-time-mistral-7B"
-PREDICTIONS_JSON = os.path.join(EVAL_RESULTS_DIR, "results", "test_results.json")
-os.makedirs(OUTPUT_DIR, exist_ok=True)
+from src.training.config_utils import load_config
 
 RANDOM_SEED = 42
 
@@ -61,8 +49,7 @@ def load_embeddings(output_dir: str):
     return embeddings, patient_ids
 
 def load_dataset(config_path: str, split: str):
-    with open(config_path) as f:
-        config = yaml.safe_load(f)
+    config = load_config(config_path)
     dataset = get_dataset(config["data"].get("dataset", "CPRD"), config["data"], split)
     
     subject_to_label = {str(k): v for k, v in dataset.subject_to_label.items()}
@@ -360,23 +347,20 @@ def plot_clinical_heatmap(heatmap_cat: pd.DataFrame, output_dir: str):
 # ---------------------------------------------------------------------------
 # Prediction-correctness helpers
 # ---------------------------------------------------------------------------
-def load_predictions(results_json_path: str) -> pd.DataFrame | None:
+def load_predictions(results_json_path: str | None) -> pd.DataFrame | None:
     """
-    Load per-patient predictions saved by evaluate_model.py.
-
-    Returns a DataFrame with columns:
-        patient_id, true_label, pred_label, prob, predicted_correctly
-    Returns None (with a warning) if the file is missing or has no patient_ids.
+    Load per-patient predictions saved by a classifier run (test_results.json).
     """
-    if not os.path.exists(results_json_path):
-        print(f"  [pred plot] Results JSON not found: {results_json_path}. Skipping.")
+    if not results_json_path or not os.path.exists(results_json_path):
+        if results_json_path:
+            print(f"  [pred plot] Results JSON not found: {results_json_path}. Skipping.")
         return None
 
     with open(results_json_path) as f:
         data = json.load(f)
 
     if "patient_ids" not in data:
-        print("  [pred plot] No patient_ids in results JSON — re-run evaluate_model.py first.")
+        print("  [pred plot] No patient_ids in results JSON — re-run evaluation first.")
         return None
 
     df = pd.DataFrame({
@@ -871,7 +855,12 @@ def plot_cluster_and_probability_umap(
 # ---------------------------------------------------------------------------
 # Main Execution
 # ---------------------------------------------------------------------------
-def generate_plots_from_saved_outputs(output_dir: str, clusters_csv: str = None, summary_csv: str = None):
+def generate_plots_from_saved_outputs(
+    output_dir: str,
+    clusters_csv: str = None,
+    summary_csv: str = None,
+    predictions_json: str = None,
+):
     """Generate plots from precomputed CSV outputs (no clustering run)."""
     clusters_csv = clusters_csv or os.path.join(output_dir, "patient_clusters.csv")
     summary_csv = summary_csv or os.path.join(output_dir, "full_differential_analysis.csv")
@@ -885,10 +874,6 @@ def generate_plots_from_saved_outputs(output_dir: str, clusters_csv: str = None,
     df_clusters = pd.read_csv(clusters_csv)
     print(f"Loading differential summary from: {summary_csv}")
     df_summary = pd.read_csv(summary_csv)
-
-    # INSERT_YOUR_CODE
-    # Make the output directory output_dir + "/testing"
-    output_dir = os.path.join(output_dir, "testing")
     os.makedirs(output_dir, exist_ok=True)
 
     print("Generating journal tables from loaded summary...")
@@ -900,7 +885,7 @@ def generate_plots_from_saved_outputs(output_dir: str, clusters_csv: str = None,
     plot_clinical_heatmap(heatmap_cat, output_dir)
     plot_lab_zscore_heatmap(heatmap_lab, output_dir)
 
-    df_preds = load_predictions(PREDICTIONS_JSON)
+    df_preds = load_predictions(predictions_json) if predictions_json else None
     if df_preds is not None:
         plot_prediction_correctness_umap(df_clusters, df_preds, output_dir)
         plot_predicted_probability_umap_case_control_markers(df_clusters, df_preds, output_dir)
@@ -913,14 +898,26 @@ def generate_plots_from_saved_outputs(output_dir: str, clusters_csv: str = None,
 def main():
     parser = argparse.ArgumentParser(description="HDBSCAN pipeline + plotting utilities.")
     parser.add_argument(
-        "--plot-only",
-        action="store_true",
-        help="Skip clustering/analysis and only generate figures from saved CSV files.",
+        "--config-path",
+        required=False,
+        default=None,
+        help="Resolved experiment YAML (required unless --plot-only).",
+    )
+    parser.add_argument(
+        "--embeddings-dir",
+        required=False,
+        default=None,
+        help="Directory containing embeddings.npy and patient_ids.npy.",
     )
     parser.add_argument(
         "--output-dir",
-        default=OUTPUT_DIR,
-        help="Output directory for generated artifacts (default: pipeline OUTPUT_DIR).",
+        required=True,
+        help="Output directory for generated artifacts.",
+    )
+    parser.add_argument(
+        "--predictions-json",
+        default=None,
+        help="Optional test_results.json with per-patient scores.",
     )
     parser.add_argument(
         "--clusters-csv",
@@ -942,12 +939,18 @@ def main():
             output_dir=output_dir,
             clusters_csv=args.clusters_csv,
             summary_csv=args.summary_csv,
+            predictions_json=args.predictions_json,
         )
         return
 
+    if not args.config_path or not args.embeddings_dir:
+        parser.error("--config-path and --embeddings-dir are required unless --plot-only")
+
     print("1. Loading dataset and embeddings...")
-    dataset, subject_to_label, label_to_name, subject_to_record_idx = load_dataset(CONFIG_PATH, "held_out")
-    embeddings, patient_ids = load_embeddings(EMBEDDINGS_DIR)
+    dataset, subject_to_label, label_to_name, subject_to_record_idx = load_dataset(
+        args.config_path, "held_out"
+    )
+    embeddings, patient_ids = load_embeddings(args.embeddings_dir)
 
     print("2. Running Fixed HDBSCAN Clustering...")
     cluster_labels, z_2d, reducer_10d, reducer_2d = run_fixed_clustering(embeddings)
@@ -974,7 +977,7 @@ def main():
     plot_lab_zscore_heatmap(heatmap_lab, output_dir)
 
     print("6. Generating prediction figures (if evaluation results exist)...")
-    df_preds = load_predictions(PREDICTIONS_JSON)
+    df_preds = load_predictions(args.predictions_json) if args.predictions_json else None
     if df_preds is not None:
         plot_prediction_correctness_umap(df_clusters, df_preds, output_dir)
         plot_predicted_probability_umap_case_control_markers(df_clusters, df_preds, output_dir)

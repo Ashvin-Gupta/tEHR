@@ -15,9 +15,8 @@ import os
 import matplotlib.pyplot as plt
 import pandas as pd
 import seaborn as sns
-import yaml
-
 from src.data.dataset_factory import get_dataset
+from src.training.config_utils import load_config
 from src.resources.lab_reference_ranges import LAB_REFERENCE_RANGES
 
 
@@ -70,8 +69,7 @@ LAB_UNITS = {
 
 
 def load_dataset(config_path: str, split: str):
-    with open(config_path, "r") as f:
-        config = yaml.safe_load(f)
+    config = load_config(config_path)
     dataset = get_dataset(config["data"].get("dataset", "CPRD"), config["data"], split)
     subject_to_record_idx = {
         str(r.get("subject_id")): idx
@@ -263,8 +261,8 @@ def parse_args():
     )
     parser.add_argument(
         "--config-path",
-        default="src/configs/classification_config.yaml",
-        help="Path to classification config yaml",
+        required=True,
+        help="Path to a resolved experiment YAML",
     )
     parser.add_argument(
         "--split",

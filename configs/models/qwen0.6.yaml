@@ -1,0 +1,11 @@
+# Qwen3-0.6B overlay — merged on top of an experiment config.
+
+model:
+  model_name: "unsloth/Qwen3-0.6B-Base-unsloth-bnb-4bit"
+  instruct_model_name: "Qwen/Qwen3-0.6B-Instruct-unsloth-bnb-4bit"
+  hidden_size: 1024
+  use_unsloth: true
+  max_length: 12000
+
+training:
+  eval_on_main_process_only: true

@@ -1,0 +1,20 @@
+# Ablation: CPT then frozen backbone; train head only. MIMIC only.
+# Usage: sbatch scripts/<site>/run.sh mimic ablation_cpt_frozen mistral <task>
+
+extends:
+  - ../shared/training_classifier.yaml
+
+name: "mimic_ablation_cpt_frozen_{model}_{task}"
+
+wandb:
+  run_name: "ablation-cpt-frozen-{model}-{task}"
+
+model:
+  num_labels: 2
+  freeze_llm: true
+  train_lora: false
+  pooling: "last_token"
+
+training:
+  output_dir: "{results_root}/mimic-ablation_cpt_frozen-{model}-{task}"
+  learning_rate: 1e-4

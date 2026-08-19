@@ -14,3 +14,13 @@ __pycache__/
 analysis_out/
 Miniconda3-latest-Linux-x86_64.sh
 
+# Machine-specific paths and secrets
+configs/local.yaml
+configs/_resolved/
+scripts/site_a/local.env
+scripts/site_b/local.env
+
+# Local-only tests (not part of the anonymous tree)
+tests/
+src/resources/subject_information.csv
+src/resources/new_pancan_formatted.csv

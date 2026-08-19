@@ -24,7 +24,7 @@ Usage:
         --lookup_dir      ".../hosp" \\
         --data_dir        ".../MIMIC-IV_tokenisation" \\
         --model_name      "Qwen/Qwen3-Embedding-0.6B" \\
-        --output_path     ".../phrase_embeddings_qwen3_0.6B.pt" \\
+        --output_path     ".../phrase_embeddings.pt" \\
         [--batch_size 256] \\
         [--max_length 128] \\
         [--device cuda]
@@ -42,6 +42,8 @@ from tqdm import tqdm
 from transformers import AutoModel, AutoTokenizer
 
 from src.data.base_dataset import tokens_to_phrases
+from src.data.base_token_translator import BaseTokenTranslator
+from src.data.cprd_translator import CPRDTokenTranslator
 from src.data.mimic_translator import MIMICTokenTranslator
 
 
@@ -136,7 +138,7 @@ def _iter_patient_token_sequences(data_dir: str, splits: Sequence[str]) -> Itera
 def collect_unique_phrases(
     data_dir: str,
     id_to_token: Dict[int, str],
-    translator: MIMICTokenTranslator,
+    translator: BaseTokenTranslator,
     splits: Sequence[str] = ("train", "tuning", "held_out"),
 ) -> List[str]:
     """
@@ -180,19 +182,47 @@ def main(args):
     }
     print(f"  Vocabulary size: {len(id_to_token):,}")
 
-    print(f"\nLoading MIMIC translator from: {args.lookup_dir}")
-    translator = MIMICTokenTranslator.from_csv_files(
-        labitems_file=os.path.join(args.lookup_dir, "d_labitems.csv.gz"),
-        diagnoses_file=os.path.join(args.lookup_dir, "d_icd_diagnoses.csv.gz"),
-        procedures_file=os.path.join(args.lookup_dir, "d_icd_procedures.csv.gz"),
-    )
+    dataset = args.dataset.lower()
+    if dataset == "mimic":
+        if not args.lookup_dir:
+            raise SystemExit("--lookup_dir is required for dataset=mimic")
+        print(f"\nLoading MIMIC translator from: {args.lookup_dir}")
+        translator = MIMICTokenTranslator.from_csv_files(
+            labitems_file=os.path.join(args.lookup_dir, "d_labitems.csv.gz"),
+            diagnoses_file=os.path.join(args.lookup_dir, "d_icd_diagnoses.csv.gz"),
+            procedures_file=os.path.join(args.lookup_dir, "d_icd_procedures.csv.gz"),
+        )
+    elif dataset == "cprd":
+        missing = [
+            name for name in (
+                "medical_lookup_filepath",
+                "lab_lookup_filepath",
+                "region_lookup_filepath",
+                "time_lookup_filepath",
+            )
+            if not getattr(args, name)
+        ]
+        if missing:
+            raise SystemExit(
+                "CPRD phrase embeddings require: "
+                + ", ".join("--" + m for m in missing)
+            )
+        print("\nLoading CPRD translator from lookup CSVs")
+        translator = CPRDTokenTranslator.from_csv_files(
+            medical_lookup_file=args.medical_lookup_filepath,
+            lab_lookup_file=args.lab_lookup_filepath,
+            region_lookup_file=args.region_lookup_filepath,
+            time_lookup_file=args.time_lookup_filepath,
+        )
+    else:
+        raise SystemExit(f"Unknown dataset '{args.dataset}'. Use mimic or cprd.")
 
     print(f"\nCollecting unique phrases from: {args.data_dir}")
     phrases = collect_unique_phrases(args.data_dir, id_to_token, translator)
     if not phrases:
         raise RuntimeError(
             f"No phrases collected from {args.data_dir}. "
-            "Check --data_dir points at tokenised MIMIC splits."
+            "Check --data_dir points at tokenised splits."
         )
 
     for p in phrases[:5]:
@@ -258,7 +288,14 @@ def main(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        description="Precompute MIMIC phrase embeddings (last-token pool)"
+        description="Precompute phrase embeddings (last-token pool) for MIMIC or CPRD"
+    )
+    parser.add_argument(
+        "--dataset",
+        type=str,
+        default="mimic",
+        choices=("mimic", "cprd"),
+        help="Which token translator to use",
     )
     parser.add_argument(
         "--vocab_filepath",
@@ -269,14 +306,18 @@ if __name__ == "__main__":
     parser.add_argument(
         "--lookup_dir",
         type=str,
-        required=True,
-        help="Directory containing d_labitems / d_icd_diagnoses / d_icd_procedures CSVs",
+        default=None,
+        help="MIMIC lookup dir (d_labitems / d_icd_diagnoses / d_icd_procedures)",
     )
+    parser.add_argument("--medical_lookup_filepath", type=str, default=None)
+    parser.add_argument("--lab_lookup_filepath", type=str, default=None)
+    parser.add_argument("--region_lookup_filepath", type=str, default=None)
+    parser.add_argument("--time_lookup_filepath", type=str, default=None)
     parser.add_argument(
         "--data_dir",
         type=str,
         required=True,
-        help="Tokenised MIMIC root with train/tuning/held_out pickle shards",
+        help="Tokenised data root with train/tuning/held_out pickle shards",
     )
     parser.add_argument(
         "--model_name",

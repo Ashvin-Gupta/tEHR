@@ -1,0 +1,7 @@
+# Shared seed / resume defaults. Experiment YAMLs can override.
+
+seed: 42
+
+training:
+  seed: 42
+  resume_from_last: true

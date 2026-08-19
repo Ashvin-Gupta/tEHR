@@ -1,0 +1,39 @@
+# Bio_ClinicalBERT fine-tune.
+# Usage: sbatch scripts/<site>/run.sh <dataset> clinicalbert <task>
+
+name: "{dataset}_clinicalbert_{task}"
+
+model:
+  model_name: "emilyalsentzer/Bio_ClinicalBERT"
+  num_labels: 2
+  max_length: 512
+
+wandb:
+  enabled: true
+  project: "tEHR-baselines"
+  run_name: "clinicalbert-{dataset}-{task}"
+
+training:
+  output_dir: "{results_root}/{dataset}-clinicalbert-{task}"
+  overwrite_output_dir: true
+  device: "auto"
+  require_cuda: false
+  epochs: 1
+  batch_size: 32
+  eval_batch_size: 32
+  learning_rate: 2e-5
+  weight_decay: 0.01
+  warmup_steps: 100
+  gradient_accumulation_steps: 1
+  fp16: false
+  bf16: false
+  logging_steps: 50
+  eval_steps: 250
+  save_steps: 500
+  save_total_limit: 2
+  dataloader_num_workers: 4
+
+data:
+  max_length: 512
+  sort_by_length: false
+  format: "text"

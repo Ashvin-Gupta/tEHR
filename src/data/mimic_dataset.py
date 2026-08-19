@@ -29,6 +29,8 @@ class MIMICDataset(BaseDataset):
         format: str = "text",
         surface_form: str = "text",
         scramble_seed: int = 42,
+        drop_time: bool = False,
+        drop_values: bool = False,
         file_fraction: Optional[float] = None,
         file_fraction_seed: int = 42,
     ):
@@ -38,6 +40,8 @@ class MIMICDataset(BaseDataset):
         self.format = format
         self.surface_form = surface_form
         self.scramble_seed = scramble_seed
+        self.drop_time = bool(drop_time)
+        self.drop_values = bool(drop_values)
         
         # Vocabulary: token_id -> token_string
         vocab_df = pd.read_csv(vocab_file, dtype={'str': str})
@@ -75,8 +79,8 @@ class MIMICDataset(BaseDataset):
             self._build_prediction_examples(aces_label_dir)
         
         logger.info(
-            "MIMICDataset split='%s' task='%s' surface_form='%s': %d examples",
-            split, task, surface_form, len(self),
+            "MIMICDataset split='%s' task='%s' surface_form='%s' drop_time=%s drop_values=%s: %d examples",
+            split, task, surface_form, self.drop_time, self.drop_values, len(self),
         )
     
     def _build_prediction_examples(self, aces_label_dir: str):

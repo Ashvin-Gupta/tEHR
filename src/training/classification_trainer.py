@@ -1,5 +1,8 @@
 """
-EHR Classification Trainer - orchestrates classification fine-tuning workflow.
+Linear-head LLM classifier (LoRA).
+
+Used by: tehr_stage2, ablation_supervised_only, ablation_cpt_frozen,
+ablation_hash, ablation_scrambled, ablation_no_time, ablation_no_value.
 """
 import os
 import time
@@ -13,11 +16,10 @@ from src.training.eval_schedule import (
     eval_optimizer_steps_from_fractions,
     get_eval_epoch_fractions,
 )
-import wandb
 from torch.utils.data import ConcatDataset
 
 from src.data.classification_collator import ClassificationCollator
-from src.training.training_utils import compute_and_sort_by_length
+from src.training.training_utils import compute_and_sort_by_length, init_wandb
 from src.models.llm_classifier import LLMClassifier
 from src.training.model_loader import (
     load_pretrained_lora_model,
@@ -25,14 +27,17 @@ from src.training.model_loader import (
     load_hf_model,
     apply_lora_peft,
 )
-from src.training.metrics import compute_classification_metrics
-from src.evaluations.evaluations import plot_all_curves, save_results
+from src.evaluations.evaluations import (
+    compute_classification_metrics,
+    plot_all_curves,
+    save_results,
+)
 
 from src.data.dataset_factory import get_dataset
 import logging
 logger = logging.getLogger(__name__)
 
-class EHRClassificationTrainer:
+class TehrClassifierTrainer:
     """
     Manages the complete workflow for EHR classification fine-tuning.
     
@@ -64,27 +69,14 @@ class EHRClassificationTrainer:
         self.local_rank = int(os.environ.get("LOCAL_RANK", 0))
     
     def setup_wandb(self) -> str:
-        """
-        Setup WandB logging.
-        
-        Returns:
-            Run name for the experiment.
-        """
-        if self.wandb_config.get('enabled', False):
-            run_name = self.wandb_config.get("run_name")
-            if run_name is None:
-                run_name = f"classifier_{self.config.get('name', 'default')}"
-            
-            if self.local_rank == 0:
-                wandb.init(
-                    project=self.wandb_config.get("project", "llm-classification"),
-                    name=run_name,
-                    config=self.config
-                )
-                print(f"\nWandB enabled - Project: {self.wandb_config['project']}, Run: {run_name}")
-            
-            return run_name
-        return "classification-run"
+        run_name, _ = init_wandb(
+            self.config,
+            local_rank=self.local_rank,
+            run_name=self.wandb_config.get("run_name")
+            or f"classifier_{self.config.get('name', 'default')}",
+            default_project="llm-classification",
+        )
+        return run_name
     
     def load_pretrained_model(self):
         """
@@ -94,12 +86,11 @@ class EHRClassificationTrainer:
           1. ``pretrained_checkpoint`` set, ``use_unsloth: true``  (default):
              Load Unsloth checkpoint with LoRA — original behaviour.
           2. ``pretrained_checkpoint`` set, ``use_unsloth: false``:
-             Load HF/PEFT checkpoint (e.g. saved MedGemma pretrain).
+             Load HF/PEFT checkpoint.
           3. ``pretrained_checkpoint: null``, ``use_unsloth: true``:
              Load fresh Unsloth base model; apply LoRA if ``train_lora: true``.
-             Used for ablation 5a (no pretrain + LoRA) and 5c (no pretrain, frozen).
           4. ``pretrained_checkpoint: null``, ``use_unsloth: false``:
-             Load fresh HF base model (e.g. MedGemma ablations).
+             Load fresh HF base model.
         """
         print("\n" + "=" * 80)
         print("Loading model...")
@@ -182,7 +173,6 @@ class EHRClassificationTrainer:
         # Determine training mode
         train_lora = self.model_config.get('train_lora', False)
         freeze_llm = self.model_config.get('freeze_llm', True)
-        multi_label = self.training_config.get('multi_label', False)
         
         # If training LoRA, unfreeze LoRA parameters
         trainable_keywords = ["lora_"] if train_lora else None
@@ -198,11 +188,6 @@ class EHRClassificationTrainer:
             num_labels=self.model_config.get('num_labels', 2),
             freeze_base=freeze_llm,
             trainable_param_keywords=trainable_keywords,
-            multi_label=multi_label,
-            tokenizer=self.tokenizer,
-            head_type=self.model_config.get('head_type', 'linear'),
-            head_hidden_size=self.model_config.get('head_hidden_size', 512),
-            head_dropout=self.model_config.get('head_dropout', 0.1),
             pooling=self.model_config.get('pooling', 'last_token'),
         )
 
@@ -214,12 +199,12 @@ class EHRClassificationTrainer:
 
             {data_cache_dir}/MIMIC_{split}_sorted.pt
 
-        ``data_cache_dir`` is normally set by ``build_mimic_config`` to
-        ``/home/ag619/experiments/labels_cache/{task}/{model}``.
+        ``data_cache_dir`` is set by ``build_config`` to
+        ``{labels_cache_root}/{dataset}/{task}``.
 
-        The cache is **tokenizer-specific**: Mistral and MedGemma must not share
-        a directory, because token lengths (and thus sort order) differ.
-        Filenames no longer embed checkpoint basenames like ``checkpoint-14000``.
+        The cache is **tokenizer-specific** across model families because token
+        lengths (and thus sort order) differ. Filenames no longer embed
+        checkpoint basenames.
         """
         print("Sorting dataset with cache...")
         if not self.data_config.get('sort_by_length', False):
@@ -390,13 +375,10 @@ class EHRClassificationTrainer:
         print("Creating data collator...")
         print("=" * 80)
         
-        multi_label = self.training_config.get('multi_label', False)
-        binary_classification = not multi_label
-        
         collator = ClassificationCollator(
             tokenizer=self.tokenizer,
             max_length=self.model_config.get('max_length'),
-            binary_classification=binary_classification,
+            binary_classification=True,
             truncation=False,
         )
         
@@ -509,7 +491,7 @@ class EHRClassificationTrainer:
         )
     
     def train(self, resume_from_checkpoint: str | None = None):
-        """Run the training loop and report FLOPs on completion."""
+        """Run the training loop."""
         print("\n" + "=" * 80)
         print("Starting classification training...")
         print("=" * 80)
@@ -529,19 +511,6 @@ class EHRClassificationTrainer:
         else:
             self.trainer.train()
 
-        # ── FLOPs reporting ─────────────────────────────────────────────────
-        try:
-            from src.training.flops_counter import report_flops_from_trainer
-            report_flops_from_trainer(
-                trainer=self.trainer,
-                model=self.classifier_model,
-                seq_length=int(self.model_config.get("max_length", 8192)),
-                output_dir=self.training_config.get("output_dir"),
-                local_rank=self.local_rank,
-            )
-        except Exception as _flops_err:
-            logger.warning(f"FLOPs reporting failed (non-fatal): {_flops_err}")
-    
     def save_model(self):
         """Save the final trained model."""
         print("\n" + "=" * 80)
@@ -648,9 +617,9 @@ class EHRClassificationTrainer:
         previously saved classifier checkpoint, WITHOUT resuming the training
         step counter, optimizer, or scheduler.
 
-        Use this when the task is the same (e.g. pancreatic cancer prediction)
-        but the dataset has changed: you want the same trained weights as a
-        starting point, but a clean training run from step 0.
+        Use this when the task is the same (binary prediction) but the dataset
+        has changed: you want the same trained weights as a starting point,
+        but a clean training run from step 0.
 
         The quantised base-model weights are intentionally skipped — they are
         already loaded correctly from `pretrained_checkpoint` and bitsandbytes
@@ -915,11 +884,6 @@ class EHRClassificationTrainer:
         if isinstance(logits, tuple):
             logits = logits[0]
         
-        multi_label = self.training_config.get('multi_label', False)
-        if multi_label:
-            print("  - Skipping ROC/PR plots for multi-label (not yet supported)")
-            return
-        
         probs = self._logits_to_pos_probs(logits)
         labels = pred_output.label_ids
         
@@ -928,6 +892,9 @@ class EHRClassificationTrainer:
         plot_all_curves(labels, probs, plot_output_dir)
         print(f"  - Plots saved to: {plot_output_dir}")
     
+    def run(self, resume_from_checkpoint: str | None = None):
+        return self.run_full_pipeline(resume_from_checkpoint=resume_from_checkpoint)
+
     def run_full_pipeline(self, resume_from_checkpoint: str | None = None):
         """
         Run the complete classification training pipeline.
@@ -1071,7 +1038,7 @@ class EHRClassificationTrainer:
             "evaluated_checkpoint": checkpoint_path,
             "checkpoint_step": step,
             "trainer_global_step": global_step,
-            "produced_by": "src.pipelines.evaluate_checkpoint",
+            "produced_by": "src.pipelines.run --eval_only",
             "note": (
                 "Metrics in this directory come from the checkpoint above, not "
                 "from a training run that reached its final step. Test set only."

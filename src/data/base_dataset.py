@@ -16,6 +16,8 @@ def tokens_to_phrases(
     translator: BaseTokenTranslator,
     *,
     include_header_split: bool = True,
+    drop_time: bool = False,
+    drop_values: bool = False,
 ) -> List[str]:
     """
     Convert raw EHR token strings into natural-language phrases.
@@ -24,6 +26,10 @@ def tokens_to_phrases(
       1. Optional HEADER_SPLIT marker before the first clinical event
       2. Measurable concept + numeric value (+ optional unit) fused into one phrase
       3. Everything else as a single-token translation
+
+    ``drop_time`` skips timestamp / time-interval tokens.
+    ``drop_values`` keeps concept names but drops numbers, units, and lab
+    categories (the same pairing as the full text path, minus the value).
 
     Empty translator outputs are skipped (same as the LLM narrative path).
     """
@@ -34,22 +40,37 @@ def tokens_to_phrases(
     while i < len(string_codes):
         code = str(string_codes[i])
 
+        if drop_time and translator.is_time_token(code):
+            i += 1
+            continue
+        if drop_values and translator.is_value_or_unit_token(code):
+            i += 1
+            continue
+
         if include_header_split and not split_inserted and not translator.is_header_concept(code):
             phrases.append(HEADER_SPLIT_MARKER)
             split_inserted = True
 
         if translator.is_measurable_concept(code) and i + 1 < len(string_codes):
             next_code = str(string_codes[i + 1])
-            if translator.is_numeric_value(next_code):
+            # Values can contain digits; event codes (incl. TIME) can too.
+            # Pair only a following numeric payload, never the next event.
+            if translator.is_numeric_value(next_code) and not translator.is_new_event_code(next_code):
                 concept = translator.translate(code)
-                value = translator.translate(next_code)
-                unit = ""
                 increment = 2
+                unit_code = None
                 if i + 2 < len(string_codes):
                     potential_unit = str(string_codes[i + 2])
                     if not translator.is_new_event_code(potential_unit):
-                        unit = translator.translate(potential_unit)
+                        unit_code = potential_unit
                         increment = 3
+                if drop_values:
+                    if concept:
+                        phrases.append(concept if concept.endswith(("; ", ";")) else f"{concept.rstrip()}; ")
+                    i += increment
+                    continue
+                value = translator.translate(next_code)
+                unit = translator.translate(unit_code) if unit_code else ""
                 if concept and value:
                     if unit:
                         phrases.append(
@@ -143,6 +164,8 @@ class BaseDataset(ABC, Dataset):
             string_codes,
             self.translator,
             include_header_split=include_header_split,
+            drop_time=bool(getattr(self, "drop_time", False)),
+            drop_values=bool(getattr(self, "drop_values", False)),
         )
 
     @abstractmethod

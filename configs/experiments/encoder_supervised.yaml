@@ -1,0 +1,30 @@
+# Encoder + classification head from scratch (no MLM).
+# Usage: sbatch scripts/<site>/run.sh <dataset> encoder_supervised <task>
+
+name: "{dataset}_encoder_supervised_{task}"
+
+model:
+  vocab_size: null
+  hidden_dim: 512
+  num_layers: 6
+  num_heads: 8
+  ff_dim: 2048
+  dropout: 0.1
+  max_seq_length: 2048
+  num_labels: 2
+  head_type: "linear"
+  head_hidden_size: 256
+  pooling: "mean"
+
+training:
+  output_dir: "{results_root}/{dataset}-encoder_supervised-{task}"
+  overwrite_output_dir: true
+  epochs: 1
+  batch_size: 128
+  learning_rate: 1e-4
+  weight_decay: 0.01
+  dataloader_num_workers: 2
+  eval_epoch_fractions: [0.05, 0.10, 0.20, 0.40, 0.60, 0.80, 1.00]
+
+pretrain:
+  enabled: false

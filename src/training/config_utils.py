@@ -1,26 +1,42 @@
 """
-Config loading with ``extends`` support and deep-merge.
+Config loading with ``extends`` support, deep-merge, and a dataset/experiment builder.
 
 Usage in YAML
 -------------
 ::
 
     extends:
-      - ../shared/mimic_data.yaml
       - ../shared/lora.yaml
 
     model:
       train_lora: true   # overrides anything from parents
 
 Paths in ``extends`` are resolved relative to the child config file.
+
+Machine-specific roots live in ``configs/local.yaml`` (gitignored).
+Committed experiment YAMLs use placeholders such as ``{results_root}``.
 """
 from __future__ import annotations
 
 import copy
 import os
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional
 
 import yaml
+
+from src.experiment_map import (
+    CPRD_TASKS,
+    DATASETS,
+    DEFAULT_TASK,
+    MIMIC_TASKS,
+    MODELS,
+    get_spec,
+)
+
+REPO_ROOT = os.path.dirname(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+)
+CONFIGS_ROOT = os.path.join(REPO_ROOT, "configs")
 
 
 def deep_merge(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any]:
@@ -39,19 +55,13 @@ def deep_merge(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any]
 
 
 def _resolve_extends_path(parent_path: str, rel: str) -> str:
-    """Resolve an extends path relative to the parent config directory."""
     if os.path.isabs(rel):
         return rel
     return os.path.normpath(os.path.join(os.path.dirname(parent_path), rel))
 
 
 def load_config(config_path: str) -> Dict[str, Any]:
-    """
-    Load a YAML config, recursively resolving ``extends`` lists.
-
-    ``extends`` entries are merged first (in order), then the child keys
-    override.  The ``extends`` key itself is removed from the result.
-    """
+    """Load a YAML config, recursively resolving ``extends`` lists."""
     config_path = os.path.abspath(config_path)
     if not os.path.exists(config_path):
         raise FileNotFoundError(f"Config file not found: {config_path}")
@@ -75,170 +85,153 @@ def load_config(config_path: str) -> Dict[str, Any]:
     return deep_merge(merged, raw)
 
 
-# Default (ag619 / ix) length-sort cache root. Sites may override via
-# ``shared/sites/<site>.yaml`` → ``_site.labels_cache_root``.
-DEFAULT_LABELS_CACHE_ROOT = "/home/ag619/experiments/labels_cache"
-
-
-def _load_site_meta(site: Optional[str], configs_root: str) -> Dict[str, Any]:
-    """Load ``shared/sites/<site>.yaml`` metadata (empty for default / ag619)."""
-    if not site or site in {"default", "ag619", "ix"}:
-        return {
-            "name": "default",
-            "labels_cache_root": DEFAULT_LABELS_CACHE_ROOT,
-            "path_rewrite": [],
-            "overlay": {},
-        }
-    site_path = os.path.join(configs_root, "shared", "sites", f"{site}.yaml")
-    if not os.path.exists(site_path):
-        sites_dir = os.path.join(configs_root, "shared", "sites")
-        available = []
-        if os.path.isdir(sites_dir):
-            available = sorted(
-                f[:-5] for f in os.listdir(sites_dir) if f.endswith(".yaml")
-            )
-        raise FileNotFoundError(
-            f"Unknown site '{site}'. Expected: {site_path}\n"
-            f"Available: {available or ['(none)']}"
-        )
-    raw = load_config(site_path)
-    meta = raw.pop("_site", None) or {}
-    if not isinstance(meta, dict):
-        raise ValueError(f"Site file must contain a `_site` mapping: {site_path}")
-    meta.setdefault("name", site)
-    meta.setdefault("labels_cache_root", DEFAULT_LABELS_CACHE_ROOT)
-    meta.setdefault("path_rewrite", [])
-    # Remaining top-level keys (e.g. training.eval_batch_size) override the
-    # resolved experiment config for this site.
-    meta["overlay"] = raw
-    return meta
-
-
-def _rewrite_paths(obj: Any, rewrites: List[Dict[str, str]]) -> Any:
-    """Apply longest-prefix path rewrites to all string leaves in a config tree."""
-    if not rewrites:
-        return obj
-    ordered = sorted(
-        rewrites,
-        key=lambda r: len(str(r.get("from", ""))),
-        reverse=True,
-    )
-
-    def _one(s: str) -> str:
-        for rule in ordered:
-            src = rule.get("from")
-            dst = rule.get("to")
-            if not src or dst is None:
-                continue
-            if s == src or s.startswith(src.rstrip("/") + "/"):
-                return dst + s[len(src) :]
-        return s
-
+def _flatten(obj: Any, prefix: str = "") -> Dict[str, str]:
+    """Flatten nested dicts to dotted keys for ``{mimic.data_dir}`` substitution."""
+    out: Dict[str, str] = {}
     if isinstance(obj, dict):
-        return {k: _rewrite_paths(v, rewrites) for k, v in obj.items()}
+        for key, value in obj.items():
+            dotted = f"{prefix}.{key}" if prefix else str(key)
+            if isinstance(value, dict):
+                out.update(_flatten(value, dotted))
+            elif value is not None and not isinstance(value, (list, tuple)):
+                out[dotted] = str(value)
+                if not prefix:
+                    out[str(key)] = str(value)
+    elif obj is not None and not isinstance(obj, (list, tuple)):
+        if prefix:
+            out[prefix] = str(obj)
+    return out
+
+
+def load_local_config(configs_root: Optional[str] = None) -> Dict[str, Any]:
+    configs_root = configs_root or CONFIGS_ROOT
+    path = os.path.join(configs_root, "local.yaml")
+    if not os.path.exists(path):
+        example = os.path.join(configs_root, "local.yaml.example")
+        raise FileNotFoundError(
+            f"Missing {path}. Copy {example} to configs/local.yaml "
+            "and fill in machine-specific paths."
+        )
+    with open(path, "r") as f:
+        raw = yaml.safe_load(f) or {}
+    if not isinstance(raw, dict):
+        raise ValueError(f"local.yaml root must be a mapping: {path}")
+    return raw
+
+
+def _substitute_placeholders(obj: Any, mapping: Dict[str, str]) -> Any:
+    """Replace ``{key}`` in string leaves. Longer keys first so prefixes do not clash."""
+    if isinstance(obj, dict):
+        return {k: _substitute_placeholders(v, mapping) for k, v in obj.items()}
     if isinstance(obj, list):
-        return [_rewrite_paths(v, rewrites) for v in obj]
+        return [_substitute_placeholders(v, mapping) for v in obj]
     if isinstance(obj, str):
-        return _one(obj)
+        ordered = sorted(mapping.items(), key=lambda kv: len(kv[0]), reverse=True)
+        for key, value in ordered:
+            obj = obj.replace("{" + key + "}", value)
+        return obj
     return obj
 
 
-def build_mimic_config(
+def _list_yaml_stems(directory: str) -> List[str]:
+    if not os.path.isdir(directory):
+        return []
+    return sorted(
+        f[:-5]
+        for f in os.listdir(directory)
+        if f.endswith(".yaml") and not f.startswith(".")
+    )
+
+
+def build_config(
+    dataset: str,
     experiment: str,
     model: Optional[str] = None,
     task: Optional[str] = None,
     configs_root: Optional[str] = None,
-    site: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
-    Build a MIMIC experiment config by merging:
-
-      1. ``mimic/<experiment>.yaml``  (may itself extend shared files)
-      2. ``mimic/models/<model>.yaml`` (optional model overlay)
-      3. ``mimic/tasks/<task>.yaml``   (optional task overlay; default icu_mortality
-         for prediction experiments)
-      4. Optional ``shared/sites/<site>.yaml`` path remaps (e.g. ``isambard``)
-
-    For instruct-style experiments (``sft``, ``prompt``), ``model.model_name`` is
-    rewritten to ``model.instruct_model_name`` and ``pretrained_checkpoint`` is
-    cleared unless the experiment config explicitly sets one after the overlay
-    via ``model.keep_pretrained_checkpoint: true``.
+    Merge shared + dataset + experiment + model + task, then fill paths from
+    ``configs/local.yaml``.
     """
-    if configs_root is None:
-        # src/training/config_utils.py → src/configs
-        configs_root = os.path.join(
-            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-            "configs",
+    configs_root = configs_root or CONFIGS_ROOT
+    dataset = dataset.lower()
+    if dataset not in DATASETS:
+        raise ValueError(f"Unknown dataset '{dataset}'. Expected: {DATASETS}")
+
+    try:
+        spec = get_spec(experiment)
+    except KeyError as exc:
+        raise ValueError(str(exc)) from None
+
+    if spec.mimic_only and dataset != "mimic":
+        raise ValueError(
+            f"Experiment '{experiment}' is MIMIC-only (lexical / tEHR ablations)."
         )
 
-    site_meta = _load_site_meta(site, configs_root)
+    if spec.needs_model and not model:
+        raise ValueError(
+            f"Experiment '{experiment}' requires a model ({', '.join(MODELS)})."
+        )
 
-    # Pretrain has no downstream labels; skip task overlay unless explicitly given.
-    TASK_OPTIONAL_EXPERIMENTS = {"pretrain"}
-    if task is None and experiment not in TASK_OPTIONAL_EXPERIMENTS:
-        task = "icu_mortality"
+    if task is None and not spec.task_optional:
+        task = DEFAULT_TASK[dataset]
 
-    exp_path = os.path.join(configs_root, "mimic", f"{experiment}.yaml")
+    if dataset == "mimic" and task is not None and task not in MIMIC_TASKS:
+        raise ValueError(f"Unknown MIMIC task '{task}'. Expected: {MIMIC_TASKS}")
+    if dataset == "cprd" and task is not None and task not in CPRD_TASKS:
+        raise ValueError(f"Unknown CPRD task '{task}'. Expected: {CPRD_TASKS}")
+
+    local = load_local_config(configs_root)
+    local.setdefault("repo_root", REPO_ROOT)
+
+    exp_path = os.path.join(configs_root, "experiments", f"{experiment}.yaml")
     if not os.path.exists(exp_path):
-        available = sorted(
-            f[:-5]
-            for f in os.listdir(os.path.join(configs_root, "mimic"))
-            if f.endswith(".yaml") and not f.startswith(".")
-        )
+        available = _list_yaml_stems(os.path.join(configs_root, "experiments"))
         raise FileNotFoundError(
-            f"Unknown experiment '{experiment}'. "
-            f"Expected file: {exp_path}\nAvailable: {available}"
+            f"Unknown experiment '{experiment}'. Expected: {exp_path}\n"
+            f"Available: {available}"
         )
 
-    # Snapshot leaf experiment ``model:`` / ``training:`` keys (ignore extends) so
-    # they win over the model overlay — e.g. pretrain.yaml ``batch_size: 1``
-    # must beat medgemma.yaml ``batch_size: 4``.
     with open(exp_path, "r") as f:
         exp_leaf = yaml.safe_load(f) or {}
     exp_model_leaf = dict(exp_leaf.get("model") or {}) if isinstance(exp_leaf, dict) else {}
-    exp_training_leaf = dict(exp_leaf.get("training") or {}) if isinstance(exp_leaf, dict) else {}
+    exp_training_leaf = (
+        dict(exp_leaf.get("training") or {}) if isinstance(exp_leaf, dict) else {}
+    )
 
-    # Shared seed / resume defaults, then experiment overrides.
     cfg: Dict[str, Any] = {}
     repro_path = os.path.join(configs_root, "shared", "reproducibility.yaml")
     if os.path.exists(repro_path):
         cfg = load_config(repro_path)
+
+    dataset_path = os.path.join(configs_root, "datasets", f"{dataset}.yaml")
+    cfg = deep_merge(cfg, load_config(dataset_path))
     cfg = deep_merge(cfg, load_config(exp_path))
 
     if model:
-        model_path = os.path.join(configs_root, "mimic", "models", f"{model}.yaml")
+        model_path = os.path.join(configs_root, "models", f"{model}.yaml")
         if not os.path.exists(model_path):
-            models_dir = os.path.join(configs_root, "mimic", "models")
-            available = sorted(
-                f[:-5] for f in os.listdir(models_dir) if f.endswith(".yaml")
-            )
+            available = _list_yaml_stems(os.path.join(configs_root, "models"))
             raise FileNotFoundError(
-                f"Unknown model '{model}'. "
-                f"Expected file: {model_path}\nAvailable: {available}"
+                f"Unknown model '{model}'. Expected: {model_path}\nAvailable: {available}"
             )
         cfg = deep_merge(cfg, load_config(model_path))
-        # Re-apply experiment-leaf model keys so they override the model overlay.
         if exp_model_leaf:
             cfg.setdefault("model", {}).update(copy.deepcopy(exp_model_leaf))
         if exp_training_leaf:
             cfg.setdefault("training", {}).update(copy.deepcopy(exp_training_leaf))
 
     if task:
-        task_path = os.path.join(configs_root, "mimic", "tasks", f"{task}.yaml")
+        task_path = os.path.join(configs_root, "tasks", dataset, f"{task}.yaml")
         if not os.path.exists(task_path):
-            tasks_dir = os.path.join(configs_root, "mimic", "tasks")
-            available = sorted(
-                f[:-5] for f in os.listdir(tasks_dir) if f.endswith(".yaml")
-            )
+            available = _list_yaml_stems(os.path.join(configs_root, "tasks", dataset))
             raise FileNotFoundError(
-                f"Unknown task '{task}'. "
-                f"Expected file: {task_path}\nAvailable: {available}"
+                f"Unknown task '{task}'. Expected: {task_path}\nAvailable: {available}"
             )
         cfg = deep_merge(cfg, load_config(task_path))
 
-    # Instruct experiments use the chat/instruct checkpoint, not the base LM.
-    INSTRUCT_EXPERIMENTS = {"sft", "prompt"}
-    if experiment in INSTRUCT_EXPERIMENTS:
+    if spec.instruct:
         model_cfg = cfg.setdefault("model", {})
         instruct = model_cfg.get("instruct_model_name")
         if instruct:
@@ -246,107 +239,102 @@ def build_mimic_config(
         if not model_cfg.get("keep_pretrained_checkpoint", False):
             model_cfg["pretrained_checkpoint"] = None
 
-    # Clear domain-pretrain checkpoint for experiments that start from a fresh base.
-    # (Model overlays always carry a pretrained_checkpoint path for Exp 1 / 5b.)
-    if experiment in {
-        "pretrain",
-        "ablation_no_pretrain_lora",
-        "ablation_frozen_nopretrain",
-        # Lexical surface-form ablations: fair comparison without text CPT mismatch.
-        "surface_raw",
-        "surface_scramble_hash",
-        "surface_scramble_shuffle",
-    }:
+    if spec.clear_pretrained:
         cfg.setdefault("model", {})["pretrained_checkpoint"] = None
 
-    # Stamp identity for output naming / wandb
+    ds_local = local.get(dataset) or {}
+    results_root = str(local.get("results_root", "results"))
+    labels_cache_root = str(local.get("labels_cache_root", os.path.join(results_root, "labels_cache")))
+    seed = int(cfg.get("seed") or (cfg.get("training") or {}).get("seed") or 42)
+    seed_dir = f"seed_{seed}"
+
+    if spec.uses_stage1_ckpt and model:
+        ckpt = (ds_local.get("checkpoints") or {}).get(model)
+        if not ckpt:
+            ckpt = os.path.join(
+                results_root, f"{dataset}-tehr_stage1-{model}", seed_dir, "final_model"
+            )
+        cfg.setdefault("model", {})["pretrained_checkpoint"] = ckpt
+
+    encoder_ckpt = ds_local.get("encoder_mlm_checkpoint") or os.path.join(
+        results_root, f"{dataset}-encoder", "models", "pretrained_encoder_stage1_mlm.pt"
+    )
+    text_emb_path = ds_local.get("text_embedding_path") or os.path.join(
+        results_root, f"{dataset}-text_embedding", "phrase_embeddings.pt"
+    )
+
     cfg.setdefault("_meta", {})
+    cfg["_meta"]["dataset"] = dataset
     cfg["_meta"]["experiment"] = experiment
-    cfg["_meta"]["site"] = site_meta.get("name", "default")
     if model:
         cfg["_meta"]["model"] = model
     if task:
         cfg["_meta"]["task"] = task
 
-    # Shared length-sorted index cache: labels_cache/{task}/
-    # Approximate length order is shared across models (good enough for packing);
-    # exact token lengths differ slightly by tokenizer but indices stay valid.
-    # Surface-form ablations change string lengths substantially → separate cache.
-    labels_cache_root = site_meta["labels_cache_root"]
+    mapping = _flatten(local)
+    mapping["results_root"] = results_root
+    mapping["labels_cache_root"] = labels_cache_root
+    mapping["repo_root"] = str(local.get("repo_root", REPO_ROOT))
+    mapping["dataset"] = dataset
+    mapping["experiment"] = experiment
+    mapping["model"] = model or "na"
+    mapping["task"] = task or "na"
+    mapping["encoder_mlm_checkpoint"] = str(encoder_ckpt)
+    mapping["text_embedding_path"] = str(text_emb_path)
+
+    cfg = _substitute_placeholders(cfg, mapping)
+
+    training = cfg.setdefault("training", {})
     task_name = (cfg.get("task") or {}).get("name") or task
     if task_name:
-        training = cfg.setdefault("training", {})
         surface = (cfg.get("data") or {}).get("surface_form", "text")
+        cache_parts = [str(task_name)]
         if surface and surface != "text":
-            cache_subdir = os.path.join(str(task_name), f"surface_{surface}")
-        else:
-            cache_subdir = str(task_name)
+            cache_parts.append(f"surface_{surface}")
+        if (cfg.get("data") or {}).get("drop_time"):
+            cache_parts.append("no_time")
+        if (cfg.get("data") or {}).get("drop_values"):
+            cache_parts.append("no_value")
+        cache_subdir = os.path.join(*cache_parts)
         training.setdefault(
             "data_cache_dir",
-            os.path.join(labels_cache_root, cache_subdir),
+            os.path.join(labels_cache_root, dataset, cache_subdir),
         )
 
-    # Resolve {experiment} / {model} / {task} placeholders in string fields.
-    tag = {
-        "experiment": experiment,
-        "model": model or "na",
-        "task": task or "na",
-    }
-    cfg = _format_placeholders(cfg, tag)
+    overlay = local.get("training")
+    if isinstance(overlay, dict) and overlay:
+        cfg["training"] = deep_merge(cfg.get("training") or {}, overlay)
 
-    # Site-specific filesystem remaps (ag619 paths → Isambard, etc.).
-    cfg = _rewrite_paths(cfg, site_meta.get("path_rewrite") or [])
-
-    # Optional site overrides (VRAM / hyperparams), applied after remaps.
-    overlay = site_meta.get("overlay") or {}
-    if overlay:
-        cfg = deep_merge(cfg, overlay)
+    data = cfg.get("data") or {}
+    for key, value in list(data.items()):
+        if isinstance(value, str) and value and not os.path.isabs(value) and (
+            key.endswith("_filepath") or key.endswith("_dir") or key.endswith("_root")
+            or key in {"data_dir", "lookup_dir", "aces_label_dir", "labels_filepath"}
+        ):
+            data[key] = os.path.normpath(os.path.join(REPO_ROOT, value))
 
     return cfg
 
 
-def _format_placeholders(obj: Any, tag: Dict[str, str]) -> Any:
-    """Replace ``{experiment}`` / ``{model}`` / ``{task}`` in string leaves."""
-    if isinstance(obj, dict):
-        return {k: _format_placeholders(v, tag) for k, v in obj.items()}
-    if isinstance(obj, list):
-        return [_format_placeholders(v, tag) for v in obj]
-    if isinstance(obj, str):
-        try:
-            return obj.format(**tag)
-        except (KeyError, IndexError, ValueError):
-            return obj
-    return obj
-
-
 def save_config(config: Dict[str, Any], path: str) -> str:
-    """Write a resolved config to disk (used by the SLURM dispatcher)."""
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
     with open(path, "w") as f:
         yaml.safe_dump(config, f, default_flow_style=False, sort_keys=False)
     return path
 
 
-# ---------------------------------------------------------------------------
-# CLI: python -m src.training.config_utils build --experiment X [--model Y] [--task Z]
-# ---------------------------------------------------------------------------
-
 def _cli():
     import argparse
     import pprint
 
-    parser = argparse.ArgumentParser(description="MIMIC config builder")
+    parser = argparse.ArgumentParser(description="Experiment config builder")
     sub = parser.add_subparsers(dest="cmd", required=True)
 
     build = sub.add_parser("build", help="Build and optionally write a resolved config")
+    build.add_argument("--dataset", required=True, choices=DATASETS)
     build.add_argument("--experiment", required=True)
     build.add_argument("--model", default=None)
-    build.add_argument("--task", default=None, help="Downstream task (default: icu_mortality)")
-    build.add_argument(
-        "--site",
-        default=None,
-        help="Cluster site remaps (e.g. isambard). Default = ag619 paths.",
-    )
+    build.add_argument("--task", default=None)
     build.add_argument("--out", default=None, help="Write resolved YAML here")
     build.add_argument("--print", action="store_true", dest="do_print")
 
@@ -357,11 +345,11 @@ def _cli():
     args = parser.parse_args()
 
     if args.cmd == "build":
-        cfg = build_mimic_config(
-            args.experiment,
+        cfg = build_config(
+            dataset=args.dataset,
+            experiment=args.experiment,
             model=args.model,
             task=args.task,
-            site=args.site,
         )
         if args.out:
             save_config(cfg, args.out)
@@ -369,11 +357,7 @@ def _cli():
         if args.do_print or not args.out:
             pprint.pprint(cfg)
     elif args.cmd == "load":
-        cfg = load_config(args.path)
-        if args.do_print:
-            pprint.pprint(cfg)
-        else:
-            pprint.pprint(cfg)
+        pprint.pprint(load_config(args.path))
 
 
 if __name__ == "__main__":

@@ -1,5 +1,5 @@
 """
-EHR Pretrainer class for managing continued pretraining workflow.
+Continued pretraining (causal LM + LoRA). Experiment: tehr_stage1.
 """
 import math
 import os
@@ -11,9 +11,8 @@ from datasets import Dataset
 from transformers import DataCollatorForLanguageModeling
 from unsloth import FastLanguageModel
 from trl import SFTTrainer, SFTConfig
-import wandb
 
-from src.training.training_utils import extract_and_pack
+from src.training.training_utils import extract_and_pack, init_wandb
 from src.data.dataset_factory import get_dataset
 from src.training.eval_schedule import append_max_runtime_callback
 
@@ -182,7 +181,7 @@ class Rank0EvalSFTTrainer(SFTTrainer):
         return metrics
 
 
-class EHRPretrainer:
+class TehrStage1Trainer:
     """
     Manages the entire workflow for continued pretraining of LLMs on EHR data.
     
@@ -214,16 +213,7 @@ class EHRPretrainer:
         self.local_rank = int(os.environ.get("LOCAL_RANK", 0))
     
     def setup_wandb(self) -> tuple[str, str]:
-        """
-        Setup WandB logging.
-        
-        Returns:
-            Tuple of (run_name, report_to)
-        """
-        # Build default run name from hyperparameters
-        model_name = self.model_config['model_name'].split('/')[-1]
         default_run_name = (
-            # f"{model_name}-pretrain-{self.data_config['cutoff_months']}month-cutoff"
             f"_r{self.lora_config['r']}"
             f"_alpha{self.lora_config['lora_alpha']}"
             f"_dropout{self.lora_config['lora_dropout']}"
@@ -234,31 +224,19 @@ class EHRPretrainer:
             f"_length{self.model_config['max_length']}"
             f"_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
         )
-        
-        if self.wandb_config.get('enabled', False):
-            run_name = self.wandb_config.get("run_name", default_run_name)
-            report_to = "wandb"
-
-            if self.local_rank == 0:
-                os.environ["WANDB_PROJECT"] = self.wandb_config.get("project", "ehr-llm-pretraining")
-                
-                wandb.init(
-                    project=self.wandb_config.get("project", "ehr-llm-pretraining"), 
-                    config=self.config, 
-                    name=run_name
-                )
-                wandb.config.update(self.config, allow_val_change=True)
-        else:
-            run_name = default_run_name
-            report_to = "none"
-        
-        return run_name, report_to
+        run_name = self.wandb_config.get("run_name") or default_run_name
+        return init_wandb(
+            self.config,
+            local_rank=self.local_rank,
+            run_name=run_name,
+            default_project="ehr-llm-pretraining",
+        )
     
     def load_model(self):
         """
         Load model and tokenizer.
-        Uses Unsloth by default; set ``model.use_unsloth: false`` in config to
-        fall back to HuggingFace + BitsAndBytes (required for MedGemma).
+        Uses Unsloth by default; set ``model.use_unsloth: false`` for
+        HuggingFace + BitsAndBytes.
         """
         logger.info("\n" + "=" * 80)
         logger.info(f"Loading model: {self.model_config['model_name']}")
@@ -404,7 +382,7 @@ class EHRPretrainer:
         
         # Align AMP flags with the loaded model dtype.
         # Unsloth patches SFTTrainer globally and raises if the model is float16
-        # while bf16=True (common for HF+BitsAndBytes MedGemma loads).
+        # while bf16=True (common for HF + BitsAndBytes loads).
         use_fp16 = bool(self.training_config.get("fp16", False))
         use_bf16 = bool(self.training_config.get("bf16", True))
         try:
@@ -532,7 +510,7 @@ class EHRPretrainer:
 
     
     def train(self, resume_from_checkpoint: str | None = None):
-        """Run the training loop and report FLOPs on completion."""
+        """Run the training loop."""
         logger.info("\n" + "=" * 80)
         logger.info("Starting training...")
         logger.info("=" * 80 + "\n")
@@ -543,19 +521,6 @@ class EHRPretrainer:
         else:
             self.trainer.train()
 
-        # ── FLOPs reporting ─────────────────────────────────────────────────
-        try:
-            from src.training.flops_counter import report_flops_from_trainer
-            report_flops_from_trainer(
-                trainer=self.trainer,
-                model=self.model,
-                seq_length=int(self.model_config.get("max_length", 8192)),
-                output_dir=self.training_config.get("output_dir"),
-                local_rank=self.local_rank,
-            )
-        except Exception as _flops_err:
-            logger.warning(f"FLOPs reporting failed (non-fatal): {_flops_err}")
-    
     def save_model(self):
         """Save the final trained model."""
         logger.info("\n" + "=" * 80)
@@ -570,6 +535,10 @@ class EHRPretrainer:
         
         logger.info(f"  - Model + tokenizer saved to: {final_model_path}")
     
+    def run(self, resume_from_checkpoint: str | None = None):
+        self.run_full_pipeline(resume_from_checkpoint=resume_from_checkpoint)
+        return None, None
+
     def run_full_pipeline(self, resume_from_checkpoint: str | None = None):
         """
         Run the complete pretraining pipeline.

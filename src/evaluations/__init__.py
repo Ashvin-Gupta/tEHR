@@ -1,3 +1,1 @@
-"""
-Evaluation and visualization utilities.
-"""
+"""AUROC / AUPR / ECE helpers and plots. Job scoring is ``run.py --eval_only``."""

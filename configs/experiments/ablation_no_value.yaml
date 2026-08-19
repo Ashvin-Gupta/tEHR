@@ -1,0 +1,24 @@
+# Stage-2 ablation: same CPT + linear head, numeric values and units stripped.
+# Usage: sbatch scripts/<site>/run.sh <dataset> ablation_no_value mistral <task>
+
+extends:
+  - ../shared/lora.yaml
+  - ../shared/training_classifier.yaml
+
+name: "{dataset}_ablation_no_value_{model}_{task}"
+
+wandb:
+  run_name: "ablation-no-value-{dataset}-{model}-{task}"
+
+data:
+  drop_values: true
+
+model:
+  num_labels: 2
+  freeze_llm: true
+  train_lora: true
+  pooling: "last_token"
+
+training:
+  output_dir: "{results_root}/{dataset}-ablation_no_value-{model}-{task}"
+  learning_rate: 1e-6

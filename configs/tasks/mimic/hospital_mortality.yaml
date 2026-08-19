@@ -1,0 +1,6 @@
+task:
+  name: "hospital_mortality"
+  description: "die during this hospital admission, given that roughly 2% of patients die during this hospital admission."
+
+data:
+  aces_label_dir: "{mimic.labels_root}/hospital_mortality"

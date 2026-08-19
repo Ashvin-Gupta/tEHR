@@ -1,7 +1,7 @@
 '''
 CPRD Dataset
 '''
-import logging 
+import logging
 from typing import Optional, Dict, Any, List
 import pandas as pd
 from tqdm import tqdm
@@ -9,7 +9,7 @@ import torch
 
 from src.data.base_dataset import BaseDataset
 from src.data.cprd_translator import CPRDTokenTranslator
-import logging
+
 logger = logging.getLogger(__name__)
 
 class CPRDDataset(BaseDataset):
@@ -39,10 +39,14 @@ class CPRDDataset(BaseDataset):
         cutoff_months: Optional[int] = None,
         format: str = 'text',
         split: str = 'train',
+        drop_time: bool = False,
+        drop_values: bool = False,
     ):
         self.split = split
         self.cutoff_months = cutoff_months
         self.format = format
+        self.drop_time = bool(drop_time)
+        self.drop_values = bool(drop_values)
 
         # Vocabulary: token_id -> token_string
         vocab_df = pd.read_csv(vocab_file, dtype={'str': str})

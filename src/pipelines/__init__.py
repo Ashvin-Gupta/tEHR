@@ -1,1 +1,1 @@
-"""Training and evaluation pipelines."""
+"""Job entry points. Start with ``python -m src.pipelines.run``."""

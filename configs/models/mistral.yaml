@@ -1,0 +1,8 @@
+# Mistral-7B overlay — merged on top of an experiment config.
+
+model:
+  model_name: "unsloth/mistral-7b-v0.3-bnb-4bit"
+  instruct_model_name: "unsloth/mistral-7b-instruct-v0.3-bnb-4bit"
+  hidden_size: 4096
+  use_unsloth: true
+  max_length: 12000

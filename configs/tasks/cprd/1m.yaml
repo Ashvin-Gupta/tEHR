@@ -1,0 +1,6 @@
+task:
+  name: "1m"
+  description: "have a high risk of pancreatic cancer in the next 1 month"
+
+data:
+  cutoff_months: 1

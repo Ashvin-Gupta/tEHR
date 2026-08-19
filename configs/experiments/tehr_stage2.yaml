@@ -1,0 +1,21 @@
+# tEHR stage 2: pretrained LLM → LoRA + linear head.
+# Usage: sbatch scripts/<site>/run.sh <dataset> tehr_stage2 mistral <task>
+
+extends:
+  - ../shared/lora.yaml
+  - ../shared/training_classifier.yaml
+
+name: "{dataset}_tehr_stage2_{model}_{task}"
+
+wandb:
+  run_name: "tehr-stage2-{dataset}-{model}-{task}"
+
+model:
+  num_labels: 2
+  freeze_llm: true
+  train_lora: true
+  pooling: "last_token"
+
+training:
+  output_dir: "{results_root}/{dataset}-tehr_stage2-{model}-{task}"
+  learning_rate: 1e-6

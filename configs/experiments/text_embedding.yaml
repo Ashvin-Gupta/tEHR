@@ -1,0 +1,38 @@
+# Frozen phrase embeddings → transformer encoder.
+# Usage: sbatch scripts/<site>/run.sh <dataset> text_embedding <task>
+#
+# Dispatcher precomputes {text_embedding_path} if missing.
+
+name: "{dataset}_text_embedding_{task}"
+
+embedder:
+  model_name: "Qwen/Qwen3-Embedding-0.6B"
+  precomputed_embeddings_path: "{text_embedding_path}"
+
+model:
+  hidden_dim: 512
+  num_layers: 6
+  num_heads: 8
+  ff_dim: 2048
+  dropout: 0.1
+  max_seq_length: 512
+  num_labels: 2
+  head_type: "linear"
+  pooling: "mean"
+  head_hidden_size: 256
+  pos_init_std: 0.02
+
+wandb:
+  enabled: false
+  project: "tEHR-baselines"
+  run_name: "text-embedding-{dataset}-{task}"
+
+training:
+  output_dir: "{results_root}/{dataset}-text_embedding-{task}"
+  overwrite_output_dir: true
+  epochs: 1
+  batch_size: 128
+  learning_rate: 1e-4
+  weight_decay: 0.01
+  dataloader_num_workers: 2
+  eval_epoch_fractions: [0.05, 0.10, 0.20, 0.40, 0.60, 0.80, 1.00]

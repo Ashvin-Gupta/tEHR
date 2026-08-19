@@ -1,0 +1,26 @@
+# Lexical ablation: permute real titles across codes. MIMIC only.
+# Usage: sbatch scripts/<site>/run.sh mimic ablation_scrambled mistral <task>
+
+extends:
+  - ../shared/lora.yaml
+  - ../shared/training_classifier.yaml
+
+name: "mimic_ablation_scrambled_{model}_{task}"
+
+wandb:
+  run_name: "ablation-scrambled-{model}-{task}"
+
+data:
+  surface_form: scramble_shuffle
+  scramble_seed: 42
+
+model:
+  pretrained_checkpoint: null
+  num_labels: 2
+  freeze_llm: true
+  train_lora: true
+  pooling: "mean"
+
+training:
+  output_dir: "{results_root}/mimic-ablation_scrambled-{model}-{task}"
+  learning_rate: 1e-5
