@@ -32,7 +32,6 @@ cprd:
   encoder_mlm_checkpoint: /path/to/cprd-encoder/models/pretrained_encoder_stage1_mlm.pt
   text_embedding_path: /path/to/cprd-text_embedding/phrase_embeddings.pt
 
-# Optional trainer overlay (VRAM / wall-clock). Example for a 24h GPU queue:
+# Optional trainer overlay (VRAM). Example:
 training:
   eval_batch_size: 1
-  max_runtime_hours: 22

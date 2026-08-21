@@ -8,18 +8,45 @@
 # Site B GPU dispatcher. Default allocation: 4 GPUs.
 # Override at submit time: sbatch --gpus=1 scripts/site_b/run.sh ...
 #
-# Usage (submit from the repository root):
+# Usage (from the repository root):
 #   sbatch scripts/site_b/run.sh <dataset> <experiment> [model] [task]
+# Interactive (srun pty shell on a compute node; salloc is not used here):
+#   srun --gpus=1 --reservation=interactive --pty --time=04:00:00 bash -i
+#   cd ~/TextCancEHR2
+#   bash scripts/site_b/run.sh <dataset> <experiment> [model] [task]
 
 set -euo pipefail
 
 if [[ -z "${SLURM_JOB_ID:-}" ]]; then
-    echo "ERROR: submit this script with sbatch, e.g.:"
+    echo "ERROR: submit this script with sbatch, or run it inside an srun pty shell, e.g.:"
     echo "  sbatch scripts/site_b/run.sh mimic tehr_stage2 mistral icu_mortality"
+    echo "  srun --gpus=1 --reservation=interactive --pty --time=04:00:00 bash -i"
+    echo "  cd ~/TextCancEHR2 && bash scripts/site_b/run.sh mimic tehr_stage2 mistral icu_mortality"
     exit 1
 fi
 
-REPO_ROOT="${REPO_ROOT:-${SLURM_SUBMIT_DIR:-$PWD}}"
+# sbatch copies this file to /var/spool, so BASH_SOURCE is not the repo.
+# srun --pty keeps SLURM_SUBMIT_DIR as the directory you launched from (often $HOME).
+_FROM_SCRIPT=""
+if _dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." 2>/dev/null && pwd)"; then
+    _FROM_SCRIPT="${_dir}"
+fi
+_GIVEN_REPO="${REPO_ROOT:-}"
+REPO_ROOT=""
+for _cand in "${_GIVEN_REPO}" "${_FROM_SCRIPT}" "${SLURM_SUBMIT_DIR:-}" "${PWD}" "${HOME}/TextCancEHR2"; do
+    [[ -n "${_cand}" && -f "${_cand}/scripts/lib/dispatch.sh" ]] || continue
+    REPO_ROOT="$(cd "${_cand}" && pwd)"
+    break
+done
+if [[ -z "${REPO_ROOT}" ]]; then
+    echo "ERROR: could not find TextCancEHR2 (missing scripts/lib/dispatch.sh)."
+    echo "  BASH_SOURCE=${BASH_SOURCE[0]}"
+    echo "  SLURM_SUBMIT_DIR=${SLURM_SUBMIT_DIR:-<unset>}"
+    echo "  PWD=${PWD}"
+    echo "Set REPO_ROOT to the repo directory and retry."
+    exit 1
+fi
+export REPO_ROOT
 SITE_DIR="${REPO_ROOT}/scripts/site_b"
 DEFAULT_NPROC=4
 
