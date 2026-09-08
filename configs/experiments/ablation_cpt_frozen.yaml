@@ -1,13 +1,14 @@
-# Ablation: CPT then frozen backbone; train head only. MIMIC only.
-# Usage: sbatch scripts/<site>/run.sh mimic ablation_cpt_frozen mistral <task>
+# Ablation: CPT then frozen backbone; train head only.
+# Usage: sbatch scripts/<site>/run.sh <dataset> ablation_cpt_frozen mistral <task>
+# Allowed datasets: mimic, ehrshot.
 
 extends:
   - ../shared/training_classifier.yaml
 
-name: "mimic_ablation_cpt_frozen_{model}_{task}"
+name: "{dataset}_ablation_cpt_frozen_{model}_{task}"
 
 wandb:
-  run_name: "ablation-cpt-frozen-{model}-{task}"
+  run_name: "ablation-cpt-frozen-{dataset}-{model}-{task}"
 
 model:
   num_labels: 2
@@ -16,5 +17,5 @@ model:
   pooling: "last_token"
 
 training:
-  output_dir: "{results_root}/mimic-ablation_cpt_frozen-{model}-{task}"
+  output_dir: "{results_root}/{dataset}-ablation_cpt_frozen-{model}-{task}"
   learning_rate: 1e-4

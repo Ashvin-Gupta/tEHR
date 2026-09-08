@@ -23,6 +23,11 @@ from transformers import TrainerCallback
 from src.data.dataset_factory import get_dataset
 from src.training.eval_schedule import append_max_runtime_callback
 from src.evaluations.evaluations import compute_binary_metrics, print_results, write_split_artifacts
+from src.evaluations.eval_resume import (
+    load_eval_partial,
+    maybe_flush_partial,
+    partial_pred_path,
+)
 from src.training.training_utils import init_wandb, resolve_binary_label_token_ids
 
 import logging
@@ -568,16 +573,14 @@ class SFTBaseline:
         return splits
 
     def prepare_eval_splits(self) -> Dict[str, "_SFTDataset"]:
-        """Load tuning + held_out only (skips train) for eval-only runs."""
+        """Load held_out only. Eval-only skips train and the 24h-killing val pass."""
         print("=" * 80, flush=True)
-        print("Preparing SFT eval datasets (tuning + held_out)...", flush=True)
+        print("Preparing SFT eval dataset (held_out only)...", flush=True)
         print("=" * 80, flush=True)
-        splits = {}
-        for split in ("tuning", "held_out"):
-            print(f"  - Loading {split} shards + building prediction examples...", flush=True)
-            splits[split] = self._load_split(split)
-            print(f"    {len(splits[split].samples):,} samples ready", flush=True)
-        return splits
+        print("  - Loading held_out shards + building prediction examples...", flush=True)
+        held_out = self._load_split("held_out")
+        print(f"    {len(held_out.samples):,} samples ready", flush=True)
+        return {"held_out": held_out}
 
     def _mid_train_eval_dataset(self, full_tuning: "_SFTDataset") -> "_SFTDataset":
         """
@@ -738,12 +741,20 @@ class SFTBaseline:
 
         was_training = self.model.training
         self.model.eval()
-        probs = []
+        n_expected = len(prompts)
+        flush_path = partial_pred_path(self.output_dir, split_name)
+        probs = load_eval_partial(flush_path, n_expected)
+        start = len(probs)
         low_logit_fallbacks = 0
         max_length = int(self.model_config.get("max_length", 8192))
 
         with torch.no_grad():
-            for i in tqdm(range(0, len(prompts), batch_size), desc=f"Eval [{split_name}]"):
+            for i in tqdm(
+                range(start, len(prompts), batch_size),
+                desc=f"Eval [{split_name}]",
+                initial=start,
+                total=n_expected,
+            ):
                 batch_prompts = prompts[i: i + batch_size]
 
                 inputs = self.tokenizer(
@@ -770,6 +781,9 @@ class SFTBaseline:
                     if p == 0.5 and max(logit_0[j].item(), logit_1[j].item()) < self.logit_low_threshold:
                         low_logit_fallbacks += 1
                     probs.append(p)
+                maybe_flush_partial(flush_path, probs, n_expected)
+
+        maybe_flush_partial(flush_path, probs, n_expected, force=True)
 
         if was_training:
             self.model.train()
@@ -825,6 +839,9 @@ class SFTBaseline:
             sft_dataset, batch_size=batch_size, split_name=split_name
         )
         metrics = write_split_artifacts(self.output_dir, split_name, labels_arr, probs_arr)
+        partial = partial_pred_path(self.output_dir, split_name)
+        if os.path.isfile(partial):
+            os.remove(partial)
         if self.wandb_config.get("enabled", False) and self.local_rank == 0:
             wandb.log({f"{split_name}_{k}": float(v) for k, v in metrics.items()})
         return metrics
@@ -900,11 +917,11 @@ class SFTBaseline:
             "checkpoint_step": step,
             "produced_by": "src.pipelines.run --eval_only",
             "note": (
-                "Metrics come from the checkpoint above (tuning + held_out), "
-                "not from a training run that reached its final step."
+                "Metrics come from the checkpoint above (held_out only for "
+                "eval-only). Not from a training run that reached its final step."
             ),
-            "validation_auroc": val_metrics.get("auroc"),
-            "test_auroc": test_metrics.get("auroc"),
+            "validation_auroc": (val_metrics or {}).get("auroc"),
+            "test_auroc": (test_metrics or {}).get("auroc"),
             "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
         }
         results_dir = os.path.join(self.output_dir, "results")
@@ -914,13 +931,25 @@ class SFTBaseline:
             json.dump(payload, f, indent=2)
         print(f"  - Provenance written to {path}", flush=True)
 
+    def _existing_split_metrics(self, split_name: str) -> Dict[str, float] | None:
+        path = os.path.join(self.output_dir, "results", f"{split_name}_results.json")
+        if not os.path.isfile(path):
+            return None
+        try:
+            payload = json.loads(open(path).read())
+        except (OSError, json.JSONDecodeError):
+            return None
+        metrics = payload.get("metrics")
+        return metrics if isinstance(metrics, dict) else None
+
     def run_eval_only(self, checkpoint_path: str):
         """
-        Score an existing SFT checkpoint on tuning (validation) and held_out
-        (test), with no training.
+        Score an existing SFT checkpoint on held_out (test) only.
 
-        Recovers metrics for runs killed after their last checkpoint but before
-        the final evaluation. The train split is never loaded.
+        Skips the tuning/val pass so hospital-scale evals fit a 24h wall.
+        Predictions flush to ``held_out_partial.json`` and resume if the job
+        is killed. Existing ``tuning_results.json`` metrics are copied into
+        the summary when present.
         """
         if self.local_rank != 0:
             return None, None
@@ -928,7 +957,7 @@ class SFTBaseline:
         os.makedirs(self.output_dir, exist_ok=True)
 
         print("\n" + "=" * 80, flush=True)
-        print("SFT evaluation-only run (tuning + held_out, no training)", flush=True)
+        print("SFT evaluation-only run (held_out only, no training)", flush=True)
         print(f"  - Checkpoint: {checkpoint_path}", flush=True)
         print("=" * 80, flush=True)
 
@@ -939,35 +968,43 @@ class SFTBaseline:
         splits = self.prepare_eval_splits()
 
         eval_batch_size = int(self.training_config.get("eval_batch_size", 4))
-        val_metrics = self.evaluate_split(
-            splits["tuning"], "tuning", batch_size=eval_batch_size
-        )
+        val_metrics = self._existing_split_metrics("tuning")
         test_metrics = self.evaluate_split(
             splits["held_out"], "held_out", batch_size=eval_batch_size
         )
 
-        print(
-            f"\nFinal metrics — "
-            f"val AUROC={val_metrics['auroc']:.4f}, "
-            f"val AUPR={val_metrics['aupr']:.4f}, "
-            f"test AUROC={test_metrics['auroc']:.4f}, "
-            f"test AUPR={test_metrics['aupr']:.4f}",
-            flush=True,
-        )
+        if val_metrics:
+            print(
+                f"\nFinal metrics — "
+                f"val AUROC={val_metrics['auroc']:.4f}, "
+                f"val AUPR={val_metrics['aupr']:.4f}, "
+                f"test AUROC={test_metrics['auroc']:.4f}, "
+                f"test AUPR={test_metrics['aupr']:.4f}",
+                flush=True,
+            )
+        else:
+            print(
+                f"\nFinal metrics — "
+                f"test AUROC={test_metrics['auroc']:.4f}, "
+                f"test AUPR={test_metrics['aupr']:.4f}",
+                flush=True,
+            )
 
-        summary = {"validation": val_metrics, "test": test_metrics}
+        summary = {"test": test_metrics}
+        if val_metrics:
+            summary["validation"] = val_metrics
         summary_path = os.path.join(self.output_dir, "summary.json")
         with open(summary_path, "w") as f:
             json.dump(summary, f, indent=2)
         print(f"\nSummary saved to: {summary_path}", flush=True)
 
-        self._write_eval_provenance(checkpoint_path, val_metrics, test_metrics)
+        self._write_eval_provenance(checkpoint_path, val_metrics or {}, test_metrics)
 
         if self.wandb_config.get("enabled", False):
-            wandb.summary.update(
-                {f"final_tuning_{k}": v for k, v in val_metrics.items()}
-                | {f"final_held_out_{k}": v for k, v in test_metrics.items()}
-            )
+            update = {f"final_held_out_{k}": v for k, v in test_metrics.items()}
+            if val_metrics:
+                update.update({f"final_tuning_{k}": v for k, v in val_metrics.items()})
+            wandb.summary.update(update)
             wandb.finish()
 
         return val_metrics, test_metrics

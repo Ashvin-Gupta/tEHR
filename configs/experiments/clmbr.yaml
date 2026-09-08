@@ -1,0 +1,36 @@
+# Frozen CLMBR-T-base embeddings + logistic regression.
+# This is the EHRSHOT / ICASSP "CLMBR" full-data probe (all train labels),
+# not the k=16 "CLMBR (few-shot)" row. Other TextCancEHR2 baselines also
+# use the full train set.
+# First compile maps (once):
+#   python -m src.clmbr.build_maps --download-model --report
+# Coverage only (no recompile):
+#   python -m src.clmbr.build_maps --report-only
+# Optional Athena ICD→SNOMED TSVs in data/clmbr_maps/raw/{icd9,icd10}cm_to_snomed.tsv
+# Then (GPU node; login node has no CUDA):
+#   sbatch --gpus=1 scripts/<site>/run.sh mimic clmbr icu_mortality
+# Supervised fine-tune of the transformer (separate experiment):
+#   sbatch --gpus=1 scripts/<site>/run.sh mimic clmbr_ft icu_mortality
+# After changing maps, delete {output_dir}/embeddings/*.npz and rerun.
+
+name: "{dataset}_clmbr_{task}"
+
+clmbr:
+  model_dir: "{clmbr.model_dir}"
+  maps_dir: "{clmbr.maps_dir}"
+  max_seq_len: 496
+  C_grid: [0.001, 0.01, 0.1, 1.0, 10.0]
+  overwrite_embeddings: false
+
+wandb:
+  enabled: true
+  project: "tEHR-baselines"
+  run_name: "clmbr-{dataset}-{task}"
+
+training:
+  output_dir: "{results_root}/{dataset}-clmbr-{task}"
+  overwrite_output_dir: true
+
+data:
+  meds_dir: "{mimic.meds_dir}"
+  sort_by_length: false

@@ -12,14 +12,14 @@ wandb:
   run_name: "tehr-stage1-{dataset}-{model}"
 
 model:
-  max_length: 32000
+  max_length: 16000
 
 training:
   output_dir: "{results_root}/{dataset}-tehr_stage1-{model}"
   overwrite_output_dir: true
   load_in_4bit: true
   epochs: 1
-  batch_size: 1
+  batch_size: 4
   eval_batch_size: 1
   learning_rate: 1e-5
   weight_decay: 0.05

@@ -1,0 +1,8 @@
+# EHRSHOT guo_readmission (Guo et al. 2020 / Wornow et al. 2023).
+# Prediction time = hospital discharge. Label = another admission within 30 days.
+task:
+  name: "readmission_30d"
+  description: "be readmitted to the hospital within 30 days of discharge"
+
+data:
+  aces_label_dir: "{ehrshot.labels_root}/readmission_30d"

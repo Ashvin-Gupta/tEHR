@@ -1,0 +1,38 @@
+# Fine-tune CLMBR-T-base on the labeled train set.
+# Checkpoint is selected by tuning AUROC (early stop).
+#   sbatch --gpus=1 scripts/<site>/run.sh mimic clmbr_ft icu_mortality
+# Sequence caches live in {output_dir}/sequences/*.npz (reuse across reruns
+# unless clmbr.overwrite_sequences is true).
+
+name: "{dataset}_clmbr_ft_{task}"
+
+clmbr:
+  model_dir: "{clmbr.model_dir}"
+  maps_dir: "{clmbr.maps_dir}"
+  max_seq_len: 496
+  overwrite_sequences: false
+  # 0 = score tuning AUROC only at epoch end (hospital tasks are large).
+  eval_every_steps: 0
+  eval_batch_size: 16
+  patience: 4
+  warmup_steps: 100
+
+wandb:
+  enabled: true
+  project: "tEHR-baselines"
+  run_name: "clmbr-ft-{dataset}-{task}"
+
+training:
+  output_dir: "{results_root}/{dataset}-clmbr_ft-{task}"
+  overwrite_output_dir: true
+  epochs: 3
+  max_steps: 0
+  batch_size: 8
+  eval_batch_size: 16
+  learning_rate: 1.0e-5
+  weight_decay: 0.01
+  max_grad_norm: 1.0
+
+data:
+  meds_dir: "{mimic.meds_dir}"
+  sort_by_length: false

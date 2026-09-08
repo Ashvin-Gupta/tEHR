@@ -20,7 +20,7 @@ training:
   output_dir: "{results_root}/{dataset}-encoder-{task}"
   overwrite_output_dir: true
   epochs: 1
-  batch_size: 128
+  batch_size: 16
   learning_rate: 1e-4
   weight_decay: 0.01
   dataloader_num_workers: 2
@@ -30,9 +30,9 @@ pretrain:
   enabled: true
   pretrained_checkpoint: "{encoder_mlm_checkpoint}"
   force_pretrain: false
-  use_all_splits_for_mimic: true
+  use_all_splits_for_mimic: true  # MIMIC only. EHRSHOT stage-1 is unlabeled train.
   epochs: 30
-  batch_size: 128
+  batch_size: 16
   learning_rate: 1e-4
   weight_decay: 0.01
   mlm_probability: 0.15

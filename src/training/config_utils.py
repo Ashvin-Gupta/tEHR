@@ -28,8 +28,10 @@ from src.experiment_map import (
     CPRD_TASKS,
     DATASETS,
     DEFAULT_TASK,
+    EHRSHOT_TASKS,
     MIMIC_TASKS,
     MODELS,
+    dataset_allowed,
     get_spec,
 )
 
@@ -164,9 +166,12 @@ def build_config(
     except KeyError as exc:
         raise ValueError(str(exc)) from None
 
-    if spec.mimic_only and dataset != "mimic":
+    if not dataset_allowed(experiment, dataset):
+        spec = get_spec(experiment)
+        allowed = spec.allowed_datasets or (("mimic",) if spec.mimic_only else DATASETS)
         raise ValueError(
-            f"Experiment '{experiment}' is MIMIC-only (lexical / tEHR ablations)."
+            f"Experiment '{experiment}' cannot run on dataset '{dataset}'. "
+            f"Allowed: {', '.join(allowed)}"
         )
 
     if spec.needs_model and not model:
@@ -181,6 +186,10 @@ def build_config(
         raise ValueError(f"Unknown MIMIC task '{task}'. Expected: {MIMIC_TASKS}")
     if dataset == "cprd" and task is not None and task not in CPRD_TASKS:
         raise ValueError(f"Unknown CPRD task '{task}'. Expected: {CPRD_TASKS}")
+    if dataset == "ehrshot" and task is not None and task not in EHRSHOT_TASKS:
+        raise ValueError(
+            f"Unknown EHRSHOT task '{task}'. Expected: {EHRSHOT_TASKS}"
+        )
 
     local = load_local_config(configs_root)
     local.setdefault("repo_root", REPO_ROOT)
@@ -206,7 +215,8 @@ def build_config(
         cfg = load_config(repro_path)
 
     dataset_path = os.path.join(configs_root, "datasets", f"{dataset}.yaml")
-    cfg = deep_merge(cfg, load_config(dataset_path))
+    dataset_cfg = load_config(dataset_path)
+    cfg = deep_merge(cfg, dataset_cfg)
     cfg = deep_merge(cfg, load_config(exp_path))
 
     if model:
@@ -259,6 +269,9 @@ def build_config(
     encoder_ckpt = ds_local.get("encoder_mlm_checkpoint") or os.path.join(
         results_root, f"{dataset}-encoder", "models", "pretrained_encoder_stage1_mlm.pt"
     )
+    decoder_ckpt = ds_local.get("decoder_ntp_checkpoint") or os.path.join(
+        results_root, f"{dataset}-decoder", "models", "pretrained_decoder_stage1_ntp.pt"
+    )
     text_emb_path = ds_local.get("text_embedding_path") or os.path.join(
         results_root, f"{dataset}-text_embedding", "phrase_embeddings.pt"
     )
@@ -280,6 +293,7 @@ def build_config(
     mapping["model"] = model or "na"
     mapping["task"] = task or "na"
     mapping["encoder_mlm_checkpoint"] = str(encoder_ckpt)
+    mapping["decoder_ntp_checkpoint"] = str(decoder_ckpt)
     mapping["text_embedding_path"] = str(text_emb_path)
 
     cfg = _substitute_placeholders(cfg, mapping)
@@ -304,6 +318,13 @@ def build_config(
     overlay = local.get("training")
     if isinstance(overlay, dict) and overlay:
         cfg["training"] = deep_merge(cfg.get("training") or {}, overlay)
+
+    # EHRSHOT dataset training wins last (sparse evals). Experiment YAMLs and
+    # local.yaml eval_batch_size would otherwise restore the 7-point schedule.
+    if dataset == "ehrshot":
+        ds_training = dataset_cfg.get("training")
+        if isinstance(ds_training, dict) and ds_training:
+            cfg["training"] = deep_merge(cfg.get("training") or {}, ds_training)
 
     data = cfg.get("data") or {}
     for key, value in list(data.items()):

@@ -5,8 +5,8 @@
 #SBATCH --output=logs/%x-%j.log
 #SBATCH --job-name=tehr-run
 #
-# Site B GPU dispatcher. Default allocation: 4 GPUs.
-# Override at submit time: sbatch --gpus=1 scripts/site_b/run.sh ...
+# Site B GPU dispatcher. Default allocation: 4 GPUs (training).
+# Evaluate / zero-shot only need one: sbatch --gpus=1 scripts/site_b/run.sh ...
 #
 # Usage (from the repository root):
 #   sbatch scripts/site_b/run.sh <dataset> <experiment> [model] [task]
@@ -64,11 +64,16 @@ fi
 
 echo "============================================================"
 echo " tEHR run (site_b)"
+echo "   slurm job  : ${SLURM_JOB_ID}"
+echo "   command    : sbatch scripts/site_b/run.sh ${DATASET} ${EXPERIMENT}${MODEL:+ ${MODEL}}${TASK:+ ${TASK}}${EVAL_ONLY:+ evaluate}"
 echo "   dataset    : ${DATASET}"
 echo "   experiment : ${EXPERIMENT}"
 echo "   model      : ${MODEL:-<none>}"
 echo "   task       : ${TASK:-<none>}"
 echo "   host       : $(hostname)"
+if [[ -n "${EVAL_SHARD:-}" ]]; then
+    echo "   eval shard : ${EVAL_SHARD}"
+fi
 echo "============================================================"
 
 dispatch_experiment

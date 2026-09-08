@@ -16,115 +16,9 @@ from collections import Counter
 from scipy import sparse
 
 from src.baselines.base import BaseBaseline
+from src.data.dataset_factory import is_aces_dataset
+from src.data.token_filter import should_include_token
 from src.evaluations.evaluations import compute_binary_metrics, save_results, write_split_artifacts
-
-
-def should_include_token(token_str: str) -> bool:
-    """
-    Check if a token should be included in the bag-of-words features.
-    
-    Includes:
-    - Medical events (MEDICAL//...)
-    - Lab test names (LAB//...) - but not their values
-    - Measurement codes (MEASUREMENT//...)
-    - Demographics (AGE, GENDER//..., ETHNICITY//..., REGION//...)
-    - Lifestyle (LIFESTYLE//...)
-    - Special tokens (<start>, <end>, <unknown>, MEDS_BIRTH)
-    
-    Excludes:
-    - Time intervals (<time_interval_...>)
-    - Numeric values (pure numbers)
-    - Units (short strings that don't match code patterns)
-    - Lab value categories (low, normal, high, very low, very high)
-    - Quantile values (Q1, Q2, Q3, Q4)
-    
-    Args:
-        token_str: Token string to check
-    
-    Returns:
-        True if token should be included, False otherwise
-    """
-    if not isinstance(token_str, str) or not token_str:
-        return False
-    
-    token_upper = token_str.upper()
-    token_lower = token_str.lower()
-    
-    # Exclude time intervals
-    if token_str.startswith('<time_interval_'):
-        return False
-    
-    if token_str.startswith('TIME '):
-        return False
-    
-    # Exclude numeric values (pure numbers, including negative and decimal)
-    if token_str.replace('.', '', 1).replace('-', '', 1).isdigit():
-        return False
-    
-    # Exclude quantile values (Q1, Q2, Q3, Q4)
-    if token_str.startswith('Q') and len(token_str) <= 4 and token_str[1:].isdigit():
-        return False
-    
-    # Exclude tokens containing "6866.00"
-    if "6866.00" in token_str:
-        return False
-    
-    if "22J..00" in token_str:
-        return False
-    
-    if "BB5B.00" in token_str:
-        return False
-    
-    if "8CMG.00" in token_str:
-        return False
-    
-    # Exclude lab value categories
-    if token_lower in ['low', 'normal', 'high', 'very low', 'very high']:
-        return False
-    
-    # Include lab test names (but not their values - values are numeric and already excluded above)
-    if token_upper.startswith('LAB//'):
-        return True
-    
-    # Include measurement codes
-    if token_upper.startswith('MEASUREMENT//'):
-        return True
-    
-    # Include demographics
-    if token_upper.startswith(('AGE:', 'AGE', 'GENDER//', 'ETHNICITY//', 'REGION//')):
-        return True
-    
-    # Include lifestyle
-    if token_upper.startswith('LIFESTYLE//'):
-        return True
-    
-    # Include special tokens
-    if token_str in ['<start>', '<end>', '<unknown>', 'MEDS_BIRTH']:
-        return False
-    
-    # Include medical codes
-    if token_upper.startswith('MEDICAL//'):
-        return True
-    
-    # Exclude units - tokens that are short strings with unit-like characters
-    # but don't match any known code pattern
-    # Common units: "mmol/L", "mg/dL", "kg", "cm", "%", etc.
-    if len(token_str) <= 20:
-        # Check if it contains unit-like characters but isn't a code
-        has_unit_chars = any(char in token_str for char in ['/', '%', '°', 'µ', 'μ'])
-        # Or if it's a very short string (1-5 chars) that's all lowercase/uppercase letters
-        is_short_alpha = len(token_str) <= 5 and token_str.replace(' ', '').isalpha()
-        
-        # If it doesn't match any code pattern and looks like a unit, exclude it
-        if (has_unit_chars or is_short_alpha) and not token_upper.startswith((
-            '<', 'MEDICAL', 'LAB', 'MEASUREMENT', 'AGE', 'GENDER', 
-            'ETHNICITY', 'REGION', 'LIFESTYLE'
-        )):
-            return False
-    
-    # By default, exclude unknown tokens to be conservative
-    # Only include tokens that explicitly match known patterns
-    return True
 
 
 def extract_bow_features(patient_record: Dict, token_to_idx: Dict[str, int]) -> np.ndarray:
@@ -215,9 +109,8 @@ class XGBoostBOWBaseline(BaseBaseline):
 
     def _load_binary_labels(self) -> Dict[int, int]:
         dataset_name = str(self.data_config.get("dataset", "CPRD")).upper()
-        if dataset_name == "MIMIC":
-            # MIMIC prediction labels are stored in ACES parquet files and are handled
-            # directly inside the dataset examples, so no labels CSV is needed.
+        if is_aces_dataset(dataset_name):
+            # ACES parquet labels are on the dataset examples.
             return {}
 
         labels_df = pd.read_csv(self.data_config["labels_filepath"])
@@ -303,7 +196,7 @@ class XGBoostBOWBaseline(BaseBaseline):
         
         dataset_name = str(self.data_config.get("dataset", "CPRD")).upper()
 
-        if dataset_name == "MIMIC":
+        if is_aces_dataset(dataset_name):
             examples = getattr(dataset, "examples", [])
             subject_to_records = getattr(dataset, "subject_to_records", {})
             label_column = getattr(dataset, "label_column", "label")
@@ -311,7 +204,9 @@ class XGBoostBOWBaseline(BaseBaseline):
             if getattr(dataset, "task", None) == "prediction" and examples:
                 for example in tqdm(examples, desc="Processing samples"):
                     subject_id = example.get("subject_id")
-                    records = subject_to_records.get(subject_id)
+                    if subject_id is None:
+                        continue
+                    records = subject_to_records.get(int(subject_id))
                     if not records:
                         continue
 

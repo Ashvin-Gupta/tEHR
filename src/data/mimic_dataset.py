@@ -31,6 +31,7 @@ class MIMICDataset(BaseDataset):
         scramble_seed: int = 42,
         drop_time: bool = False,
         drop_values: bool = False,
+        max_events: Optional[int] = None,
         file_fraction: Optional[float] = None,
         file_fraction_seed: int = 42,
     ):
@@ -42,10 +43,12 @@ class MIMICDataset(BaseDataset):
         self.scramble_seed = scramble_seed
         self.drop_time = bool(drop_time)
         self.drop_values = bool(drop_values)
+        self.max_events = int(max_events) if max_events else None
         
         # Vocabulary: token_id -> token_string
         vocab_df = pd.read_csv(vocab_file, dtype={'str': str})
         self.id_to_token = pd.Series(vocab_df['str'].values, index=vocab_df['token']).to_dict()
+        self.id_to_token_map = self.id_to_token
 
         # Translator (MIMIC specific). surface_form controls lexical ablations.
         self.translator = MIMICTokenTranslator.from_csv_files(
@@ -79,8 +82,10 @@ class MIMICDataset(BaseDataset):
             self._build_prediction_examples(aces_label_dir)
         
         logger.info(
-            "MIMICDataset split='%s' task='%s' surface_form='%s' drop_time=%s drop_values=%s: %d examples",
-            split, task, surface_form, self.drop_time, self.drop_values, len(self),
+            "MIMICDataset split='%s' task='%s' surface_form='%s' drop_time=%s "
+            "drop_values=%s max_events=%s: %d examples",
+            split, task, surface_form, self.drop_time, self.drop_values,
+            self.max_events, len(self),
         )
     
     def _build_prediction_examples(self, aces_label_dir: str):
@@ -195,6 +200,7 @@ class MIMICDataset(BaseDataset):
             label_value = 0
 
         if self.format == "tokens":
+            tokens = self._apply_max_events_to_ids(tokens)
             return {
                 "tokens": tokens,
                 "label": torch.tensor(label_value, dtype=torch.long),
@@ -202,6 +208,7 @@ class MIMICDataset(BaseDataset):
             }
 
         string_codes = [self.id_to_token.get(tid, "") for tid in tokens]
+        string_codes = self._apply_max_events_to_codes(string_codes)
         narrative = "".join(self._tokens_to_phrases(string_codes))
         return {
             "text": narrative,

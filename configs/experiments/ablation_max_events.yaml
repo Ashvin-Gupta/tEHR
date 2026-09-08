@@ -1,0 +1,27 @@
+# Stage-2 ablation: same CPT + linear head, but only the most recent 2048
+# encoder-style events (same filter as the transformer encoder / XGBoost).
+# Time and numeric values are kept on that window so the only change vs
+# full tEHR is the event budget, not the per-event text.
+# Usage: sbatch scripts/<site>/run.sh <dataset> ablation_max_events mistral <task>
+
+extends:
+  - ../shared/lora.yaml
+  - ../shared/training_classifier.yaml
+
+name: "{dataset}_ablation_max_events_{model}_{task}"
+
+wandb:
+  run_name: "ablation-max-events-{dataset}-{model}-{task}"
+
+data:
+  max_events: 2048
+
+model:
+  num_labels: 2
+  freeze_llm: true
+  train_lora: true
+  pooling: "last_token"
+
+training:
+  output_dir: "{results_root}/{dataset}-ablation_max_events-{model}-{task}"
+  learning_rate: 1e-6

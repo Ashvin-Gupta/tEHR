@@ -6,17 +6,20 @@ Transformer encoder on filtered EHR tokens (same token filter as xgboost_bow).
 import os
 import copy
 import torch
+import torch.distributed as dist
 import torch.nn as nn
 import numpy as np
 from typing import Dict, Any, List, Sequence
+from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data import Dataset, DataLoader, ConcatDataset
+from torch.utils.data.distributed import DistributedSampler
 from tqdm import tqdm
 from collections import Counter
 
 from src.baselines.base import setup_output_dir
 from src.evaluations.evaluations import compute_binary_metrics, save_results, write_split_artifacts
-from src.baselines.xgboost_bow import should_include_token
-from src.data.dataset_factory import get_dataset
+from src.data.token_filter import should_include_token
+from src.data.dataset_factory import get_dataset, is_aces_dataset
 
 
 def filter_tokens(token_list: List[str]) -> List[str]:
@@ -58,7 +61,9 @@ class FilteredTokenDataset(Dataset):
         
         # --- 1. PRE-CALCULATE BLACKLIST ---
         # Get the mapping from the underlying dataset
-        id_to_token = getattr(base_dataset, 'id_to_token_map', {})
+        id_to_token = getattr(base_dataset, "id_to_token_map", None) or getattr(
+            base_dataset, "id_to_token", {}
+        )
         exclude_ids = set()
         
         print("Identifying tokens to exclude using XGBoost BOW filtering logic...")
@@ -403,6 +408,131 @@ class EncoderBaseline:
         self.max_seq_length = None
         self._label_conversion_warned = False  # Track if we've warned about label conversion
         self.pretrain_config = config.get('pretrain', {})  # Optional stage-1 config
+        self._rank = 0
+        self._local_rank = 0
+        self._world_size = 1
+
+    def _setup_distributed(self) -> torch.device:
+        """Init DDP when launched via torchrun; otherwise use a single device."""
+        self._world_size = max(1, int(os.environ.get("WORLD_SIZE", "1")))
+        self._local_rank = int(os.environ.get("LOCAL_RANK", 0))
+        self._rank = int(os.environ.get("RANK", self._local_rank))
+        if self._world_size <= 1 or not torch.cuda.is_available():
+            self._world_size = 1
+            self._rank = 0
+            self._local_rank = 0
+            device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+            print(f"\nUsing device: {device}")
+            return device
+        if not dist.is_initialized():
+            dist.init_process_group(backend="nccl")
+        torch.cuda.set_device(self._local_rank)
+        device = torch.device("cuda", self._local_rank)
+        if self._is_rank0():
+            print(f"\nUsing {self._world_size} GPUs (DDP), this rank device: {device}")
+        return device
+
+    def _is_rank0(self) -> bool:
+        return self._rank == 0
+
+    def _barrier(self) -> None:
+        if self._world_size > 1 and dist.is_initialized():
+            dist.barrier()
+
+    @staticmethod
+    def _unwrap_model(model: nn.Module) -> nn.Module:
+        return model.module if isinstance(model, DDP) else model
+
+    def _wrap_ddp(
+        self,
+        model: nn.Module,
+        device: torch.device,
+        *,
+        find_unused_parameters: bool = False,
+    ) -> nn.Module:
+        model = model.to(device)
+        if self._world_size <= 1:
+            return model
+        return DDP(
+            model,
+            device_ids=[self._local_rank],
+            output_device=self._local_rank,
+            find_unused_parameters=find_unused_parameters,
+        )
+
+    def _make_loader(
+        self,
+        dataset,
+        batch_size: int,
+        *,
+        shuffle: bool,
+        collate_fn,
+        num_workers: int,
+        drop_last: bool = False,
+    ) -> DataLoader:
+        sampler = None
+        if self._world_size > 1:
+            sampler = DistributedSampler(
+                dataset,
+                num_replicas=self._world_size,
+                rank=self._rank,
+                shuffle=shuffle,
+                drop_last=drop_last,
+            )
+            shuffle = False
+        return DataLoader(
+            dataset,
+            batch_size=batch_size,
+            shuffle=shuffle,
+            sampler=sampler,
+            collate_fn=collate_fn,
+            num_workers=num_workers,
+            drop_last=drop_last,
+            pin_memory=torch.cuda.is_available(),
+        )
+
+    def _set_sampler_epoch(self, loader: DataLoader, epoch: int) -> None:
+        sampler = getattr(loader, "sampler", None)
+        if isinstance(sampler, DistributedSampler):
+            sampler.set_epoch(epoch)
+
+    def _gather_list(self, values: list) -> list:
+        if self._world_size <= 1:
+            return values
+        gathered: list = [None] * self._world_size
+        dist.all_gather_object(gathered, values)
+        out: list = []
+        for part in gathered:
+            out.extend(part)
+        return out
+
+    def _reduce_mean(self, total: float, count: int, device: torch.device) -> float:
+        if self._world_size <= 1:
+            return total / max(count, 1)
+        t = torch.tensor([total, float(count)], device=device, dtype=torch.float64)
+        dist.all_reduce(t, op=dist.ReduceOp.SUM)
+        return float(t[0] / t[1].clamp(min=1.0))
+
+    def _save_classifier_state(self, path: str) -> None:
+        if not self._is_rank0():
+            return
+        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+        torch.save(self._unwrap_model(self.model).state_dict(), path)
+
+    def _backbone_label(self) -> str:
+        return "encoder"
+
+    def _pretrain_label(self) -> str:
+        return "MLM"
+
+    def _experiment_label(self) -> str:
+        return "encoder"
+
+    def _stage1_ckpt_basename(self) -> str:
+        return "pretrained_encoder_stage1_mlm.pt"
+
+    def _stage1_weight_key(self) -> str:
+        return "encoder_state_dict"
 
     def _load_datasets(self, splits: List[str], task_override: str = None) -> Dict[str, Dataset]:
         """Load datasets through the factory, optionally overriding MIMIC task."""
@@ -421,17 +551,21 @@ class EncoderBaseline:
           - stage-1 MLM bundle: ``{encoder_state_dict, vocab, ...}``
           - raw ``state_dict`` (e.g. ``best_model.pt`` / ``pytorch_model.bin``)
         """
-        print(f"\nLoading pretrained encoder checkpoint: {checkpoint_path}")
+        print(f"\nLoading pretrained {self._backbone_label()} checkpoint: {checkpoint_path}")
         checkpoint = torch.load(checkpoint_path, map_location=device)
 
         if isinstance(checkpoint, dict) and (
             "encoder_state_dict" in checkpoint
+            or "decoder_state_dict" in checkpoint
             or "model_state_dict" in checkpoint
             or "vocab" in checkpoint
         ):
             ckpt_vocab = checkpoint.get("vocab")
-            state_dict = checkpoint.get(
-                "encoder_state_dict", checkpoint.get("model_state_dict")
+            state_dict = (
+                checkpoint.get(self._stage1_weight_key())
+                or checkpoint.get("encoder_state_dict")
+                or checkpoint.get("decoder_state_dict")
+                or checkpoint.get("model_state_dict")
             )
         else:
             ckpt_vocab = None
@@ -455,14 +589,15 @@ class EncoderBaseline:
         if state_dict is None:
             raise ValueError(
                 "Checkpoint missing weights "
-                "(`encoder_state_dict` / `model_state_dict` / raw state_dict)."
+                "(`encoder_state_dict` / `decoder_state_dict` / "
+                "`model_state_dict` / raw state_dict)."
             )
         incompatible = self.model.load_state_dict(state_dict, strict=False)
         if incompatible.missing_keys:
             print(f"  - Missing keys (ok if reiniting head): {incompatible.missing_keys[:8]}")
         if incompatible.unexpected_keys:
             print(f"  - Unexpected keys ignored: {incompatible.unexpected_keys[:8]}")
-        print("  - Loaded encoder weights successfully")
+        print(f"  - Loaded {self._backbone_label()} weights successfully")
 
     def _freeze_encoder_train_head_only(self, reinit_classifier: bool = True):
         """
@@ -477,15 +612,15 @@ class EncoderBaseline:
             head_type = self.model_config.get("head_type", "linear")
             head_hidden_size = int(self.model_config.get("head_hidden_size", 256))
             dropout = float(self.model_config.get("dropout", 0.1))
-            device = next(self.model.parameters()).device
-            self.model.classifier = build_head(
+            device = next(self._unwrap_model(self.model).parameters()).device
+            self._unwrap_model(self.model).classifier = build_head(
                 head_type, hidden_dim, num_labels, head_hidden_size, dropout
             ).to(device)
             print("  - Re-initialized classification head")
 
         n_frozen = 0
         n_train = 0
-        for name, param in self.model.named_parameters():
+        for name, param in self._unwrap_model(self.model).named_parameters():
             train = "classifier" in name
             param.requires_grad = train
             if train:
@@ -494,8 +629,8 @@ class EncoderBaseline:
                 n_frozen += param.numel()
 
         print(
-            f"  - Freeze encoder: trainable={n_train:,} params (head only), "
-            f"frozen={n_frozen:,}"
+            f"  - Freeze {self._backbone_label()}: trainable={n_train:,} params "
+            f"(head only), frozen={n_frozen:,}"
         )    
     def build_vocabulary(self, datasets: Dict[str, Dataset]):
         """
@@ -751,7 +886,11 @@ class EncoderBaseline:
         total_loss = 0.0
         num_batches = 0
         
-        for batch in tqdm(train_loader, desc="MLM Training"):
+        for batch in tqdm(
+            train_loader,
+            desc=f"{self._pretrain_label()} Training",
+            disable=not self._is_rank0(),
+        ):
             token_ids = batch['token_ids'].to(device)
             attention_mask = batch['attention_mask'].to(device)
             labels = batch['labels'].to(device)
@@ -764,25 +903,30 @@ class EncoderBaseline:
             total_loss += loss.item()
             num_batches += 1
         
-        return total_loss / max(num_batches, 1)
+        return self._reduce_mean(total_loss, num_batches, device)
     
     def evaluate_mlm(self, data_loader, device):
         """Compute average MLM loss on validation set."""
-        self.mlm_model.eval()
+        model = self._unwrap_model(self.mlm_model)
+        model.eval()
         total_loss = 0.0
         num_batches = 0
         
         with torch.no_grad():
-            for batch in tqdm(data_loader, desc="MLM Eval"):
+            for batch in tqdm(
+                data_loader,
+                desc=f"{self._pretrain_label()} Eval",
+                disable=not self._is_rank0(),
+            ):
                 token_ids = batch['token_ids'].to(device)
                 attention_mask = batch['attention_mask'].to(device)
                 labels = batch['labels'].to(device)
                 
-                loss, _ = self.mlm_model(token_ids, attention_mask, labels)
+                loss, _ = model(token_ids, attention_mask, labels)
                 total_loss += loss.item()
                 num_batches += 1
         
-        return total_loss / max(num_batches, 1)
+        return self._reduce_mean(total_loss, num_batches, device)
     
     def _get_criterion(self):
         """Return the appropriate loss function for the configured head type."""
@@ -805,7 +949,7 @@ class EncoderBaseline:
         num_batches = 0
         head_type = getattr(self, 'head_type', 'linear')
         
-        for batch in tqdm(train_loader, desc="Training"):
+        for batch in tqdm(train_loader, desc="Training", disable=not self._is_rank0()):
             token_ids = batch['token_ids'].to(device)
             attention_mask = batch['attention_mask'].to(device)
             labels = batch['labels'].to(device)
@@ -824,7 +968,7 @@ class EncoderBaseline:
             total_loss += loss.item()
             num_batches += 1
         
-        return total_loss / num_batches
+        return self._reduce_mean(total_loss, num_batches, device)
 
     def train_epoch_with_fraction_evals(
         self,
@@ -854,7 +998,7 @@ class EncoderBaseline:
         head_type = getattr(self, "head_type", "linear")
         pending = next_fraction_targets(fractions)
 
-        for batch in tqdm(train_loader, desc="Training"):
+        for batch in tqdm(train_loader, desc="Training", disable=not self._is_rank0()):
             token_ids = batch["token_ids"].to(device)
             attention_mask = batch["attention_mask"].to(device)
             labels = batch["labels"].to(device)
@@ -873,18 +1017,54 @@ class EncoderBaseline:
             total_loss += loss.item()
             num_batches += 1
             optimizer_steps += 1
-            examples_seen += int(labels.shape[0])
+            examples_seen += int(labels.shape[0]) * self._world_size
             progress = min(1.0, examples_seen / max(1, n_train))
 
             while pending and progress + 1e-12 >= pending[0]:
                 frac = pending.pop(0)
+                if self._is_rank0():
+                    print(
+                        f"\n  [Matched eval] epoch_fraction={frac:.2f} "
+                        f"(examples_seen={examples_seen}/{n_train}, step={optimizer_steps})"
+                    )
+                val_metrics = self.evaluate(
+                    val_loader, device, "validation", save_artifacts=False
+                )
+                if self._is_rank0():
+                    save_convergence_point(
+                        convergence_path,
+                        source=source,
+                        epoch_fraction=frac,
+                        examples_seen=examples_seen,
+                        n_train=n_train,
+                        step=optimizer_steps,
+                        metrics=val_metrics,
+                    )
+                    print(
+                        f"  - Val AUROC={val_metrics['auroc']:.4f} "
+                        f"AUPR={val_metrics['aupr']:.4f}"
+                    )
+                if val_metrics["auroc"] > best_val_auroc:
+                    best_val_auroc = val_metrics["auroc"]
+                    self._save_classifier_state(
+                        os.path.join(self.output_dir, "models", "best_model.pt"),
+                    )
+                    if self._is_rank0():
+                        print(f"  - Saved best model (val AUROC {best_val_auroc:.4f})")
+                self.model.train()
+
+        # Ensure fraction 1.0 fired even if rounding left it pending.
+        if pending:
+            frac = pending[-1]
+            if self._is_rank0():
                 print(
                     f"\n  [Matched eval] epoch_fraction={frac:.2f} "
                     f"(examples_seen={examples_seen}/{n_train}, step={optimizer_steps})"
                 )
-                val_metrics = self.evaluate(
-                    val_loader, device, "validation", save_artifacts=False
-                )
+            val_metrics = self.evaluate(
+                val_loader, device, "validation", save_artifacts=False
+            )
+            if self._is_rank0():
                 save_convergence_point(
                     convergence_path,
                     source=source,
@@ -894,49 +1074,15 @@ class EncoderBaseline:
                     step=optimizer_steps,
                     metrics=val_metrics,
                 )
-                print(
-                    f"  - Val AUROC={val_metrics['auroc']:.4f} "
-                    f"AUPR={val_metrics['aupr']:.4f}"
-                )
-                if val_metrics["auroc"] > best_val_auroc:
-                    best_val_auroc = val_metrics["auroc"]
-                    os.makedirs(os.path.join(self.output_dir, "models"), exist_ok=True)
-                    torch.save(
-                        self.model.state_dict(),
-                        os.path.join(self.output_dir, "models", "best_model.pt"),
-                    )
-                    print(f"  - Saved best model (val AUROC {best_val_auroc:.4f})")
-                self.model.train()
-
-        # Ensure fraction 1.0 fired even if rounding left it pending.
-        if pending:
-            frac = pending[-1]
-            print(
-                f"\n  [Matched eval] epoch_fraction={frac:.2f} "
-                f"(examples_seen={examples_seen}/{n_train}, step={optimizer_steps})"
-            )
-            val_metrics = self.evaluate(
-                val_loader, device, "validation", save_artifacts=False
-            )
-            save_convergence_point(
-                convergence_path,
-                source=source,
-                epoch_fraction=frac,
-                examples_seen=examples_seen,
-                n_train=n_train,
-                step=optimizer_steps,
-                metrics=val_metrics,
-            )
             if val_metrics["auroc"] > best_val_auroc:
                 best_val_auroc = val_metrics["auroc"]
-                os.makedirs(os.path.join(self.output_dir, "models"), exist_ok=True)
-                torch.save(
-                    self.model.state_dict(),
+                self._save_classifier_state(
                     os.path.join(self.output_dir, "models", "best_model.pt"),
                 )
-                print(f"  - Saved best model (val AUROC {best_val_auroc:.4f})")
+                if self._is_rank0():
+                    print(f"  - Saved best model (val AUROC {best_val_auroc:.4f})")
 
-        avg_loss = total_loss / max(num_batches, 1)
+        avg_loss = self._reduce_mean(total_loss, num_batches, device)
         return avg_loss, best_val_auroc
     
     def evaluate(
@@ -959,39 +1105,45 @@ class EncoderBaseline:
             Dictionary of metrics
         """
         self.model.eval()
+        eval_model = self._unwrap_model(self.model)
+        eval_model.eval()
         all_labels = []
         all_probs = []
         
         with torch.no_grad():
-            for batch in tqdm(data_loader, desc=f"Evaluating {split_name}"):
+            for batch in tqdm(
+                data_loader,
+                desc=f"Evaluating {split_name}",
+                disable=not self._is_rank0(),
+            ):
                 token_ids = batch['token_ids'].to(device)
                 attention_mask = batch['attention_mask'].to(device)
                 labels = batch['labels'].to(device)
                 
-                logits = self.model(token_ids, attention_mask)
+                logits = eval_model(token_ids, attention_mask)
                 probs = self._logits_to_probs(logits).cpu().numpy()
                 labels_np = labels.cpu().numpy()
                 
-                all_labels.extend(labels_np)
-                all_probs.extend(probs)
+                all_labels.extend(labels_np.tolist())
+                all_probs.extend(np.asarray(probs).reshape(-1).tolist())
         
-        all_labels = np.array(all_labels)
-        all_probs = np.array(all_probs)
+        all_labels = np.array(self._gather_list(all_labels))
+        all_probs = np.array(self._gather_list(all_probs))
         if save_artifacts:
-            return write_split_artifacts(self.output_dir, split_name, all_labels, all_probs)
+            if self._is_rank0():
+                return write_split_artifacts(self.output_dir, split_name, all_labels, all_probs)
+            return compute_binary_metrics(all_labels, all_probs)
         return compute_binary_metrics(all_labels, all_probs)
     
     def run(self, resume_from_checkpoint: str | None = None):
         """Run the complete baseline training and evaluation pipeline."""
         # Setup
         setup_output_dir(self.output_dir, overwrite=self.training_config.get('overwrite_output_dir', False))
-        
-        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        print(f"\nUsing device: {device}")
+        device = self._setup_distributed()
         
         # Load datasets (for MIMIC stage-2 we force prediction/cohort mode)
         dataset_name = self.data_config.get("dataset", "CPRD")
-        stage2_task = "prediction" if dataset_name == "MIMIC" else None
+        stage2_task = "prediction" if is_aces_dataset(dataset_name) else None
         datasets = self._load_datasets(['train', 'tuning', 'held_out'], task_override=stage2_task)
         
         # Filter tokens
@@ -1005,64 +1157,97 @@ class EncoderBaseline:
         if checkpoint_path and not os.path.exists(checkpoint_path):
             print(
                 f"  - pretrain.pretrained_checkpoint not found: {checkpoint_path}\n"
-                "  - Will run stage-1 MLM pretraining and save a new checkpoint."
+                "  - Will run stage-1 pretraining and save a new checkpoint."
             )
             checkpoint_path = None
 
         if checkpoint_path:
-            # Reuse a previously pretrained stage-1 encoder and skip MLM by default.
+            # Reuse a previously pretrained stage-1 backbone and skip pretrain by default.
             self._load_pretrained_checkpoint(checkpoint_path, device)
             if self.pretrain_config.get("enabled", False) and not force_pretrain:
-                print("  - pretrain.enabled=True but pretrained_checkpoint provided; skipping stage-1 MLM.")
+                print(
+                    f"  - pretrain.enabled=True but pretrained_checkpoint provided; "
+                    f"skipping stage-1 {self._pretrain_label()}."
+                )
         else:
             # Build vocabulary and create model from scratch when no checkpoint is provided.
             self.build_vocabulary(filtered_datasets)
             self.create_model()
             self.model = self.model.to(device)
         
-        # Optional Stage 1: MLM pretraining on encoder
+        # Optional Stage 1: token-level pretraining on the backbone
         if self.pretrain_config.get('enabled', False) and (not checkpoint_path or force_pretrain):
             print("\n" + "=" * 80)
-            print("Stage 1: MLM pretraining for encoder transformer")
+            print(
+                f"Stage 1: {self._pretrain_label()} pretraining for "
+                f"{self._backbone_label()} transformer"
+            )
             print("=" * 80)
             
-            # Freeze classification head during MLM
+            # Freeze classification head during token-level pretraining
             for p in self.model.classifier.parameters():
                 p.requires_grad = False
             
             self.create_mlm_model()
-            self.mlm_model = self.mlm_model.to(device)
+            self.mlm_model = self._wrap_ddp(
+                self.mlm_model, device, find_unused_parameters=True
+            )
             
             mlm_batch_size = int(self.pretrain_config.get('batch_size', self.training_config.get('batch_size', 32)))
+            mlm_workers = int(self.pretrain_config.get(
+                'dataloader_num_workers',
+                self.training_config.get('dataloader_num_workers', 4),
+            ))
+            train_drop = self._world_size > 1
 
-            # For MIMIC, pretrain on full trajectory data (all splits) by default.
-            # This enforces: stage-1 on all data; stage-2 on label cohorts.
+            # Stage-1 must be unlabeled full timelines, not the labeled task cohort.
+            # EHRSHOT: train patients only (tuning for MLM val). MIMIC keeps the
+            # existing full-corpus option via use_all_splits_for_mimic.
             stage1_train_ds = filtered_datasets['train']
             stage1_val_ds = filtered_datasets['tuning']
-            if dataset_name == "MIMIC" and self.pretrain_config.get("use_all_splits_for_mimic", True):
-                stage1_raw = self._load_datasets(
-                    ['train', 'tuning', 'held_out'],
-                    task_override="pretrain",
-                )
-                stage1_filtered = [FilteredTokenDataset(stage1_raw[s]) for s in ['train', 'tuning', 'held_out']]
-                stage1_train_ds = ConcatDataset(stage1_filtered)
-                # No natural val cohort when pretraining on the full corpus; reuse train for loss tracking.
-                stage1_val_ds = stage1_train_ds
-                print("  - MIMIC stage-1 uses train+tuning+held_out in pretrain mode")
+            if is_aces_dataset(dataset_name):
+                if str(dataset_name).upper() == "EHRSHOT":
+                    stage1_raw = self._load_datasets(
+                        ['train', 'tuning'],
+                        task_override="pretrain",
+                    )
+                    stage1_train_ds = FilteredTokenDataset(stage1_raw['train'])
+                    stage1_val_ds = FilteredTokenDataset(stage1_raw['tuning'])
+                    print(
+                        "  - EHRSHOT stage-1: unlabeled full timelines on "
+                        "train patients; tuning for MLM val (no labels, no cutoff)"
+                    )
+                elif self.pretrain_config.get("use_all_splits_for_mimic", True):
+                    stage1_raw = self._load_datasets(
+                        ['train', 'tuning', 'held_out'],
+                        task_override="pretrain",
+                    )
+                    stage1_filtered = [
+                        FilteredTokenDataset(stage1_raw[s])
+                        for s in ['train', 'tuning', 'held_out']
+                    ]
+                    stage1_train_ds = ConcatDataset(stage1_filtered)
+                    stage1_val_ds = stage1_train_ds
+                    print(
+                        f"  - {dataset_name} stage-1 uses train+tuning+held_out "
+                        "in pretrain mode"
+                    )
 
-            mlm_train_loader = DataLoader(
+            mlm_train_loader = self._make_loader(
                 stage1_train_ds,
-                batch_size=mlm_batch_size,
+                mlm_batch_size,
                 shuffle=True,
                 collate_fn=self.mlm_collate_fn,
-                num_workers=int(self.pretrain_config.get('dataloader_num_workers', self.training_config.get('dataloader_num_workers', 4)))
+                num_workers=mlm_workers,
+                drop_last=train_drop,
             )
-            mlm_val_loader = DataLoader(
+            mlm_val_loader = self._make_loader(
                 stage1_val_ds,
-                batch_size=mlm_batch_size,
+                mlm_batch_size,
                 shuffle=False,
                 collate_fn=self.mlm_collate_fn,
-                num_workers=int(self.pretrain_config.get('dataloader_num_workers', self.training_config.get('dataloader_num_workers', 4)))
+                num_workers=mlm_workers,
+                drop_last=False,
             )
             
             mlm_optimizer = torch.optim.AdamW(
@@ -1073,18 +1258,35 @@ class EncoderBaseline:
             mlm_epochs = int(self.pretrain_config.get('epochs', 1))
             
             best_mlm_loss = float('inf')
+            ehrshot_mlm = str(dataset_name).upper() == "EHRSHOT"
             for epoch in range(mlm_epochs):
-                print(f"\n[MLM] Epoch {epoch + 1}/{mlm_epochs}")
+                self._set_sampler_epoch(mlm_train_loader, epoch)
+                if self._is_rank0():
+                    print(f"\n[{self._pretrain_label()}] Epoch {epoch + 1}/{mlm_epochs}")
                 train_mlm_loss = self.train_mlm_epoch(mlm_train_loader, mlm_optimizer, device)
-                val_mlm_loss = self.evaluate_mlm(mlm_val_loader, device)
-                print(f"  - MLM train loss: {train_mlm_loss:.4f}")
-                print(f"  - MLM val loss:   {val_mlm_loss:.4f}")
-                best_mlm_loss = min(best_mlm_loss, val_mlm_loss)
+                # EHRSHOT: skip most MLM vals (full-seq, ~vocab 50k). Keep last + every 10th.
+                run_mlm_val = (not ehrshot_mlm) or (epoch + 1) == mlm_epochs or (epoch + 1) % 10 == 0
+                if run_mlm_val:
+                    val_mlm_loss = self.evaluate_mlm(mlm_val_loader, device)
+                    if self._is_rank0():
+                        print(f"  - {self._pretrain_label()} train loss: {train_mlm_loss:.4f}")
+                        print(f"  - {self._pretrain_label()} val loss:   {val_mlm_loss:.4f}")
+                    best_mlm_loss = min(best_mlm_loss, val_mlm_loss)
+                elif self._is_rank0():
+                    print(
+                        f"  - {self._pretrain_label()} train loss: {train_mlm_loss:.4f} "
+                        "(skipped MLM val)"
+                    )
             
-            print(f"\nFinished MLM pretraining. Best val loss: {best_mlm_loss:.4f}")
+            if self._is_rank0():
+                print(
+                    f"\nFinished {self._pretrain_label()} pretraining. "
+                    f"Best val loss: {best_mlm_loss:.4f}"
+                )
 
-            # Persist stage-1 encoder so it can be reused independently of stage-2.
-            if self.pretrain_config.get("save_model", True):
+            # Persist stage-1 backbone so it can be reused independently of stage-2.
+            self.mlm_model = self._unwrap_model(self.mlm_model)
+            if self.pretrain_config.get("save_model", True) and self._is_rank0():
                 configured_ckpt = self.pretrain_config.get("pretrained_checkpoint")
                 if configured_ckpt:
                     pretrain_model_path = configured_ckpt
@@ -1092,23 +1294,27 @@ class EncoderBaseline:
                 else:
                     pretrain_model_dir = os.path.join(self.output_dir, "models")
                     pretrain_model_path = os.path.join(
-                        pretrain_model_dir, "pretrained_encoder_stage1_mlm.pt"
+                        pretrain_model_dir, self._stage1_ckpt_basename()
                     )
                 os.makedirs(pretrain_model_dir, exist_ok=True)
                 torch.save(
                     {
-                        "encoder_state_dict": self.model.state_dict(),
+                        self._stage1_weight_key(): self._unwrap_model(self.model).state_dict(),
                         "vocab": self.vocab,
                         "model_config": self.model_config,
                         "pretrain_config": self.pretrain_config,
-                        "best_mlm_val_loss": best_mlm_loss,
+                        "best_pretrain_val_loss": best_mlm_loss,
                     },
                     pretrain_model_path,
                 )
-                print(f"  - Saved stage-1 pretrained encoder to: {pretrain_model_path}")
+                print(
+                    f"  - Saved stage-1 pretrained {self._backbone_label()} to: "
+                    f"{pretrain_model_path}"
+                )
+            self._barrier()
             
             # Re-enable classification head for supervised fine-tuning
-            for p in self.model.classifier.parameters():
+            for p in self._unwrap_model(self.model).classifier.parameters():
                 p.requires_grad = True
         
         # Optional: freeze encoder backbone, train head only (LLM-5b analogue).
@@ -1118,10 +1324,10 @@ class EncoderBaseline:
                 raise RuntimeError(
                     "training.freeze_encoder=True requires "
                     "pretrain.pretrained_checkpoint to load a frozen backbone "
-                    "(use the stage-1 MLM checkpoint)."
+                    "(use the stage-1 pretrained checkpoint)."
                 )
             print("\n" + "=" * 80)
-            print("Freezing encoder; training classification head only")
+            print(f"Freezing {self._backbone_label()}; training classification head only")
             print("=" * 80)
             self._freeze_encoder_train_head_only(
                 reinit_classifier=bool(
@@ -1129,28 +1335,35 @@ class EncoderBaseline:
                 )
             )
 
+        self.model = self._wrap_ddp(self.model, device, find_unused_parameters=False)
+
         # Create data loaders for supervised training
         batch_size = int(self.training_config.get('batch_size', 32))
-        train_loader = DataLoader(
+        workers = int(self.training_config.get('dataloader_num_workers', 4))
+        train_drop = self._world_size > 1
+        train_loader = self._make_loader(
             filtered_datasets['train'],
-            batch_size=batch_size,
+            batch_size,
             shuffle=True,
             collate_fn=self.collate_fn,
-            num_workers=int(self.training_config.get('dataloader_num_workers', 4))
+            num_workers=workers,
+            drop_last=train_drop,
         )
-        val_loader = DataLoader(
+        val_loader = self._make_loader(
             filtered_datasets['tuning'],
-            batch_size=batch_size,
+            batch_size,
             shuffle=False,
             collate_fn=self.collate_fn,
-            num_workers=int(self.training_config.get('dataloader_num_workers', 4))
+            num_workers=workers,
+            drop_last=False,
         )
-        test_loader = DataLoader(
+        test_loader = self._make_loader(
             filtered_datasets['held_out'],
-            batch_size=batch_size,
+            batch_size,
             shuffle=False,
             collate_fn=self.collate_fn,
-            num_workers=int(self.training_config.get('dataloader_num_workers', 4))
+            num_workers=workers,
+            drop_last=False,
         )
         
         # Training setup for supervised classification
@@ -1172,26 +1385,31 @@ class EncoderBaseline:
         fractions = get_eval_epoch_fractions(self.training_config) if use_fraction_schedule else []
         n_train = len(filtered_datasets["train"])
         convergence_path = os.path.join(self.output_dir, "results", "convergence.jsonl")
-        if use_fraction_schedule and os.path.exists(convergence_path):
+        if use_fraction_schedule and self._is_rank0() and os.path.exists(convergence_path):
             os.remove(convergence_path)
 
-        print(f"\n" + "=" * 80)
-        stage_label = (
-            "Stage 2: Head-only training (encoder frozen)"
-            if freeze_encoder
-            else f"Stage 2: Supervised training for {num_epochs} epoch(s)"
-        )
-        print(f"{stage_label}...")
-        if use_fraction_schedule:
-            print(f"  Matched eval fractions: {fractions}")
-            print(f"  Convergence log → {convergence_path}")
-        print("=" * 80)
+        if self._is_rank0():
+            print(f"\n" + "=" * 80)
+            stage_label = (
+                f"Stage 2: Head-only training ({self._backbone_label()} frozen)"
+                if freeze_encoder
+                else f"Stage 2: Supervised training for {num_epochs} epoch(s)"
+            )
+            print(f"{stage_label}...")
+            if use_fraction_schedule:
+                print(f"  Matched eval fractions: {fractions}")
+                print(f"  Convergence log → {convergence_path}")
+            print("=" * 80)
         
         best_val_auroc = 0.0
-        source = "encoder_frozen" if freeze_encoder else "encoder"
+        source = (
+            f"{self._experiment_label()}_frozen" if freeze_encoder else self._experiment_label()
+        )
         
         for epoch in range(num_epochs):
-            print(f"\n[Classification] Epoch {epoch + 1}/{num_epochs}")
+            self._set_sampler_epoch(train_loader, epoch)
+            if self._is_rank0():
+                print(f"\n[Classification] Epoch {epoch + 1}/{num_epochs}")
             if use_fraction_schedule:
                 train_loss, best_val_auroc = self.train_epoch_with_fraction_evals(
                     train_loader,
@@ -1205,52 +1423,65 @@ class EncoderBaseline:
                     convergence_path=convergence_path,
                     source=source,
                 )
-                print(f"  - Train loss: {train_loss:.4f}")
+                if self._is_rank0():
+                    print(f"  - Train loss: {train_loss:.4f}")
             else:
                 train_loss = self.train_epoch(train_loader, optimizer, criterion, device)
-                print(f"  - Train loss: {train_loss:.4f}")
+                if self._is_rank0():
+                    print(f"  - Train loss: {train_loss:.4f}")
                 
                 # Validate (legacy epoch-end only)
                 val_metrics = self.evaluate(val_loader, device, 'validation')
                 if val_metrics['auroc'] > best_val_auroc:
                     best_val_auroc = val_metrics['auroc']
-                    os.makedirs(os.path.join(self.output_dir, 'models'), exist_ok=True)
-                    torch.save(self.model.state_dict(), os.path.join(self.output_dir, 'models', 'best_model.pt'))
-                    print(f"  - Saved best model (val AUROC {best_val_auroc:.4f})")
+                    self._save_classifier_state(
+                        os.path.join(self.output_dir, 'models', 'best_model.pt')
+                    )
+                    if self._is_rank0():
+                        print(f"  - Saved best model (val AUROC {best_val_auroc:.4f})")
         
         # Load best model (by validation AUROC) for final evaluation and saving
         best_path = os.path.join(self.output_dir, 'models', 'best_model.pt')
-        if not os.path.exists(best_path):
+        if self._is_rank0() and not os.path.exists(best_path):
             # No improvement recorded (e.g. empty schedule) — save current weights.
-            os.makedirs(os.path.join(self.output_dir, 'models'), exist_ok=True)
-            torch.save(self.model.state_dict(), best_path)
+            self._save_classifier_state(best_path)
             print("  - No best checkpoint yet; saved final weights as best_model.pt")
-        self.model.load_state_dict(torch.load(best_path, map_location=device))
-        print(f"\nLoaded best model (best val AUROC) for final evaluation.")
+        self._barrier()
+        self._unwrap_model(self.model).load_state_dict(
+            torch.load(best_path, map_location=device)
+        )
+        if self._is_rank0():
+            print(f"\nLoaded best model (best val AUROC) for final evaluation.")
         
         # Save best model to final_model for consistency with other baselines
-        final_model_dir = os.path.join(self.output_dir, 'final_model')
-        os.makedirs(final_model_dir, exist_ok=True)
-        torch.save(self.model.state_dict(), os.path.join(final_model_dir, 'pytorch_model.bin'))
-        print(f"  - Best model saved to: {final_model_dir}")
+        if self._is_rank0():
+            final_model_dir = os.path.join(self.output_dir, 'final_model')
+            os.makedirs(final_model_dir, exist_ok=True)
+            torch.save(
+                self._unwrap_model(self.model).state_dict(),
+                os.path.join(final_model_dir, 'pytorch_model.bin'),
+            )
+            print(f"  - Best model saved to: {final_model_dir}")
+        self._barrier()
         
         # Final evaluation (on best model)
         val_metrics = self.evaluate(val_loader, device, 'validation')
         test_metrics = self.evaluate(test_loader, device, 'test')
         
         # Save summary
-        summary = {
-            'validation': val_metrics,
-            'test': test_metrics,
-            'best_val_auroc': best_val_auroc,
-            'eval_epoch_fractions': fractions if use_fraction_schedule else None,
-            'supervised_epochs': num_epochs,
-        }
-        save_results(summary, self.output_dir, 'summary.json')
-        
-        print("\n" + "=" * 80)
-        print("Encoder Transformer Baseline Complete!")
-        print("=" * 80)
+        if self._is_rank0():
+            summary = {
+                'validation': val_metrics,
+                'test': test_metrics,
+                'best_val_auroc': best_val_auroc,
+                'eval_epoch_fractions': fractions if use_fraction_schedule else None,
+                'supervised_epochs': num_epochs,
+            }
+            save_results(summary, self.output_dir, 'summary.json')
+            
+            print("\n" + "=" * 80)
+            print(f"{self._backbone_label().title()} Transformer Baseline Complete!")
+            print("=" * 80)
         
         return val_metrics, test_metrics
 
@@ -1259,9 +1490,9 @@ class EncoderBaseline:
         from src.training.training_utils import resolve_weight_path
 
         setup_output_dir(self.output_dir, overwrite=False)
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        device = self._setup_distributed()
         dataset_name = self.data_config.get("dataset", "CPRD")
-        stage2_task = "prediction" if dataset_name == "MIMIC" else None
+        stage2_task = "prediction" if is_aces_dataset(dataset_name) else None
         datasets = self._load_datasets(
             ["train", "tuning", "held_out"], task_override=stage2_task
         )
@@ -1272,7 +1503,9 @@ class EncoderBaseline:
         self.model = self.model.to(device)
         state = torch.load(weight, map_location=device)
         if isinstance(state, dict) and (
-            "encoder_state_dict" in state or "vocab" in state
+            "encoder_state_dict" in state
+            or "decoder_state_dict" in state
+            or "vocab" in state
         ):
             self._load_pretrained_checkpoint(weight, device)
         else:
@@ -1280,16 +1513,16 @@ class EncoderBaseline:
 
         batch_size = int(self.training_config.get("batch_size", 32))
         workers = int(self.training_config.get("dataloader_num_workers", 4))
-        val_loader = DataLoader(
+        val_loader = self._make_loader(
             filtered["tuning"],
-            batch_size=batch_size,
+            batch_size,
             shuffle=False,
             collate_fn=self.collate_fn,
             num_workers=workers,
         )
-        test_loader = DataLoader(
+        test_loader = self._make_loader(
             filtered["held_out"],
-            batch_size=batch_size,
+            batch_size,
             shuffle=False,
             collate_fn=self.collate_fn,
             num_workers=workers,

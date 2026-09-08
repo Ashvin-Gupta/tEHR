@@ -106,6 +106,9 @@ dispatch_experiment() {
             if [[ "${DATASET}" == "mimic" ]]; then
                 LOOKUP="$(python -c "import yaml,os; c=yaml.safe_load(open(os.environ['RESOLVED_CFG'])); print(c['data']['lookup_dir'])")"
                 PRE_ARGS+=(--lookup_dir "${LOOKUP}")
+            elif [[ "${DATASET}" == "ehrshot" ]]; then
+                CONCEPT="$(python -c "import yaml,os; c=yaml.safe_load(open(os.environ['RESOLVED_CFG'])); print(c['data']['concept_csv'])")"
+                PRE_ARGS+=(--concept_csv "${CONCEPT}")
             else
                 for key in medical_lookup_filepath lab_lookup_filepath region_lookup_filepath time_lookup_filepath; do
                     val="$(python -c "import yaml,os; c=yaml.safe_load(open(os.environ['RESOLVED_CFG'])); print(c['data']['${key}'])")"
@@ -116,6 +119,18 @@ dispatch_experiment() {
         else
             echo "Phrase embeddings already exist at ${EMBEDDINGS_PATH}"
         fi
+    fi
+
+    # Evaluate is inference-only. SFT eval runs on rank 0; 4-bit Unsloth
+    # scoring does not need DDP. Pin one GPU even if the job was allocated 4.
+    if [[ -n "${EVAL_ONLY}" ]]; then
+        if [[ "${NPROC}" -gt 1 ]]; then
+            echo "evaluate: allocated nproc=${NPROC}; pinning to 1 GPU (submit with --gpus=1)"
+        fi
+        NPROC=1
+        pin_one_gpu
+        run_python "${extra[@]}"
+        return
     fi
 
     if is_in "${EXPERIMENT}" "${LLM_DDP_EXPERIMENTS[@]}"; then

@@ -1,15 +1,18 @@
 # CPU dispatcher body. Sourced by scripts/site_*/run_cpu.sh after common.sh.
 
-CPU_ANALYSIS=(plot_ablation hdbscan plot_labs plot_rr)
+CPU_ANALYSIS=(plot_ablation plot_ablation_deltas bootstrap_ci seed_ci paired_compare)
 CPU_TRAIN=(xgboost_bow)
 
 ARG1="${1:-}"
 ARG2="${2:-}"
-shift 2 || true
+# `shift 2` is a no-op (and fails) when only one arg is passed, e.g.
+# `sbatch ... run_cpu.sh bootstrap_ci`. Shift one at a time.
+[[ $# -ge 1 ]] && shift
+[[ $# -ge 1 ]] && shift
 
 if [[ -z "${ARG1}" ]]; then
     echo "Usage: sbatch $0 <dataset> xgboost_bow [task] [evaluate]"
-    echo "   or: sbatch $0 plot_ablation|hdbscan|plot_labs|plot_rr [args via env]"
+    echo "   or: sbatch $0 plot_ablation|plot_ablation_deltas|bootstrap_ci|seed_ci|paired_compare [args via env]"
     exit 1
 fi
 
@@ -27,10 +30,11 @@ fi
 
 TASK=""
 EVAL_ONLY=""
+KNOWN_TASKS=("${MIMIC_TASKS[@]}")
 if [[ "${DATASET}" == "cprd" ]]; then
     KNOWN_TASKS=("${CPRD_TASKS[@]}")
-else
-    KNOWN_TASKS=("${MIMIC_TASKS[@]}")
+elif [[ "${DATASET}" == "ehrshot" ]]; then
+    KNOWN_TASKS=("${EHRSHOT_TASKS[@]}")
 fi
 for arg in "$@"; do
     if is_in "$arg" "${KNOWN_TASKS[@]}"; then
@@ -52,17 +56,24 @@ case "${EXPERIMENT}" in
             echo "ERROR: xgboost_bow requires a dataset"
             exit 1
         fi
-        [[ -z "${TASK}" && "${DATASET}" == "cprd" ]] && TASK="6m"
-        [[ -z "${TASK}" ]] && TASK="icu_mortality"
+        if [[ -z "${TASK}" ]]; then
+            if [[ "${DATASET}" == "cprd" ]]; then
+                TASK="6m"
+            elif [[ "${DATASET}" == "ehrshot" ]]; then
+                TASK="icu_admission"
+            else
+                TASK="icu_mortality"
+            fi
+        fi
         TAG="${DATASET}-xgboost_bow-${TASK}"
         RESOLVED_CFG="${REPO_ROOT}/configs/_resolved/${TAG}.yaml"
         python -m src.training.config_utils build \
             --dataset "${DATASET}" --experiment xgboost_bow --task "${TASK}" \
             --out "${RESOLVED_CFG}"
         extra=()
+        [[ -n "${SEED:-}" ]] && extra+=(--seed "${SEED}")
         if [[ -n "${EVAL_ONLY}" ]]; then
             extra+=(--eval_only)
-            [[ -n "${SEED:-}" ]] && extra+=(--seed "${SEED}")
             [[ -n "${CHECKPOINT:-}" ]] && extra+=(--checkpoint_path "${CHECKPOINT}")
             case "${OVERWRITE:-}" in
                 1|true|yes|on) extra+=(--overwrite) ;;
@@ -77,29 +88,32 @@ case "${EXPERIMENT}" in
         python -m src.analysis.plot_ablation_auroc \
             --csv "${CSV}" --out-dir "${ABLATION_OUT}" --style "${STYLE:-dot_1x4}"
         ;;
-    hdbscan)
-        : "${EMBEDDINGS_DIR:?set EMBEDDINGS_DIR to the directory with embeddings.npy}"
-        : "${CONFIG_PATH:?set CONFIG_PATH to a resolved experiment YAML}"
-        HDBSCAN_OUT="${HDBSCAN_OUT:-${OUT_DIR}/hdbscan}"
-        python -m src.analysis.hdbscan \
-            --config-path "${CONFIG_PATH}" \
-            --embeddings-dir "${EMBEDDINGS_DIR}" \
-            --output-dir "${HDBSCAN_OUT}" \
-            ${PREDICTIONS_JSON:+--predictions-json "${PREDICTIONS_JSON}"}
+    plot_ablation_deltas)
+        python -m src.analysis.plot_ablation_deltas \
+            --csv "${CSV:-${REPO_ROOT}/analysis_out/bootstrap/bootstrap_ci.csv}" \
+            --out-dir "${ABLATION_OUT:-${REPO_ROOT}/analysis_out/ablations}"
         ;;
-    plot_labs)
-        : "${CLUSTERS_CSV:?set CLUSTERS_CSV}"
-        : "${CONFIG_PATH:?set CONFIG_PATH to a resolved experiment YAML}"
-        python -m src.analysis.plot_lab_violins \
-            --clusters-csv "${CLUSTERS_CSV}" \
-            --config-path "${CONFIG_PATH}" \
-            --output-path "${LAB_OUT:-${OUT_DIR}/lab_violins.png}"
+    bootstrap_ci)
+        BOOT_OUT="${BOOT_OUT:-${OUT_DIR}/bootstrap}"
+        BOOT_ARGS=(--out-dir "${BOOT_OUT}" --n-boot "${N_BOOT:-1000}")
+        [[ -n "${RESULTS_ROOT:-}" ]] && BOOT_ARGS+=(--results-root "${RESULTS_ROOT}")
+        case "${CLUSTERED:-}" in
+            1|true|yes|on) BOOT_ARGS+=(--clustered) ;;
+        esac
+        python -m src.analysis.bootstrap_ci "${BOOT_ARGS[@]}"
         ;;
-    plot_rr)
-        : "${SUMMARY_CSV:?set SUMMARY_CSV to full_differential_analysis.csv}"
-        python -m src.analysis.clinical_heatmap_terms \
-            --summary-csv "${SUMMARY_CSV}" \
-            --output-dir "${RR_OUT:-${OUT_DIR}/rr}"
+    seed_ci)
+        SEED_OUT="${SEED_OUT:-${OUT_DIR}/bootstrap}"
+        SEED_ARGS=(--out-dir "${SEED_OUT}" --ci "${SEED_CI:-0.95}")
+        [[ -n "${RESULTS_ROOT:-}" ]] && SEED_ARGS+=(--results-root "${RESULTS_ROOT}")
+        python -m src.analysis.seed_ci "${SEED_ARGS[@]}"
+        ;;
+    paired_compare)
+        PAIR_OUT="${PAIR_OUT:-${OUT_DIR}/paired_compare}"
+        PAIR_ARGS=(--out-dir "${PAIR_OUT}")
+        [[ -n "${BASELINE_EXPERIMENT:-}" ]] && PAIR_ARGS+=(--baseline-experiment "${BASELINE_EXPERIMENT}")
+        [[ -n "${BASELINE_MODEL:-}" ]] && PAIR_ARGS+=(--baseline-model "${BASELINE_MODEL}")
+        python -m src.analysis.paired_compare "${PAIR_ARGS[@]}"
         ;;
     *)
         echo "ERROR: unknown CPU experiment '${EXPERIMENT}'"

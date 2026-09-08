@@ -53,11 +53,16 @@ source "${REPO_ROOT}/scripts/lib/parse_gpu.sh"
 
 echo "============================================================"
 echo " tEHR run (site_a)"
+echo "   slurm job  : ${SLURM_JOB_ID}"
+echo "   command    : sbatch scripts/site_a/run.sh ${DATASET} ${EXPERIMENT}${MODEL:+ ${MODEL}}${TASK:+ ${TASK}}${EVAL_ONLY:+ evaluate}"
 echo "   dataset    : ${DATASET}"
 echo "   experiment : ${EXPERIMENT}"
 echo "   model      : ${MODEL:-<none>}"
 echo "   task       : ${TASK:-<none>}"
 echo "   host       : $(hostname)"
+if [[ -n "${EVAL_SHARD:-}" ]]; then
+    echo "   eval shard : ${EVAL_SHARD}"
+fi
 echo "============================================================"
 
 dispatch_experiment

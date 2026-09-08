@@ -1,5 +1,7 @@
 # Prompt SFT: emit 0/1, then logit eval on test.
 # Usage: sbatch scripts/<site>/run.sh <dataset> sft mistral <task>
+# evaluate scores held_out only (skips val so hospital tasks fit 24h).
+# Killed evals resume from results/held_out_partial.json.
 
 extends:
   - ../shared/lora.yaml

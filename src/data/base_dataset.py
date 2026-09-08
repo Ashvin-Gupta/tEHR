@@ -7,6 +7,7 @@ from tqdm import tqdm
 from torch.utils.data import Dataset
 
 from src.data.base_token_translator import BaseTokenTranslator
+from src.data.token_filter import kept_window_start, truncate_to_max_included_events
 
 HEADER_SPLIT_MARKER = " <HEADER_SPLIT> "
 
@@ -167,6 +168,28 @@ class BaseDataset(ABC, Dataset):
             drop_time=bool(getattr(self, "drop_time", False)),
             drop_values=bool(getattr(self, "drop_values", False)),
         )
+
+    def _max_events_limit(self) -> Optional[int]:
+        raw = getattr(self, "max_events", None)
+        if raw is None:
+            return None
+        limit = int(raw)
+        return limit if limit > 0 else None
+
+    def _apply_max_events_to_codes(self, string_codes: List[str]) -> List[str]:
+        """Keep the last N encoder-style events (plus time/value payloads)."""
+        return truncate_to_max_included_events(string_codes, self._max_events_limit())
+
+    def _apply_max_events_to_ids(self, token_ids: List[int]) -> List[int]:
+        """Same window as ``_apply_max_events_to_codes``, on integer token IDs."""
+        limit = self._max_events_limit()
+        if limit is None:
+            return token_ids
+        string_codes = [self.id_to_token.get(tid, "") for tid in token_ids]
+        start = kept_window_start(string_codes, limit)
+        if start <= 0:
+            return token_ids
+        return list(token_ids[start:])
 
     @abstractmethod
     def __len__(self) -> int:

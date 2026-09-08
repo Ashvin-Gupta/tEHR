@@ -1,0 +1,41 @@
+# Custom transformer decoder: stage-1 next-token prediction + supervised head.
+# Same size / token filter / stage-2 recipe as ``encoder``.
+# Usage: sbatch --gpus=4 scripts/<site>/run.sh <dataset> decoder <task>
+# Launches with torchrun (one process per GPU).
+
+name: "{dataset}_decoder_{task}"
+
+model:
+  vocab_size: null
+  hidden_dim: 512
+  num_layers: 6
+  num_heads: 8
+  ff_dim: 2048
+  dropout: 0.1
+  max_seq_length: 512
+  num_labels: 2
+  head_type: "linear"
+  head_hidden_size: 256
+  pooling: "mean"
+
+training:
+  output_dir: "{results_root}/{dataset}-decoder-{task}"
+  overwrite_output_dir: true
+  epochs: 20
+  # per-GPU. 4 GPUs × 8 = 32 global. 32-on-one-GPU OOMs at long context.
+  batch_size: 8
+  learning_rate: 1e-4
+  weight_decay: 0.01
+  dataloader_num_workers: 2
+  eval_epoch_fractions: [0.25, 0.50, 0.75, 1.00]
+
+pretrain:
+  enabled: true
+  pretrained_checkpoint: "{decoder_ntp_checkpoint}"
+  force_pretrain: false
+  use_all_splits_for_mimic: true
+  epochs: 30
+  batch_size: 8
+  learning_rate: 1e-4
+  weight_decay: 0.01
+  dataloader_num_workers: 2

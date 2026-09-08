@@ -1,7 +1,8 @@
 """
 Shared HuggingFace Trainer loop for ClinicalBERT and frozen-LLM linear head.
 
-Not an experiment itself — used by ``clinicalbert`` and ``ablation_nopretrain_frozen``.
+Not an experiment itself — used by ``clinicalbert``, ``bioclinical_modernbert``,
+and ``ablation_nopretrain_frozen``.
 """
 import torch
 import numpy as np
@@ -58,6 +59,27 @@ class BaseLLMClassifierBaseline(BaseBaseline):
         """Override in subclasses to allow different parameters to be trained."""
         return []
 
+    def _maybe_pin_single_gpu(self):
+        """
+        Single-process 4-bit / ClinicalBERT jobs must not DataParallel.
+
+        Under torchrun (WORLD_SIZE>1) every rank already has a LOCAL_RANK;
+        pinning would map all ranks onto GPU 0.
+        """
+        if int(os.environ.get("WORLD_SIZE", "1")) > 1:
+            return
+        visible = os.environ.get("CUDA_VISIBLE_DEVICES", "")
+        if "," not in visible:
+            return
+        first = visible.split(",")[0].strip() or "0"
+        os.environ["CUDA_VISIBLE_DEVICES"] = first
+        logger.warning(
+            "Multiple GPUs in CUDA_VISIBLE_DEVICES (%s); pinning to %s "
+            "for single-process baseline training.",
+            visible,
+            first,
+        )
+
     def _build_training_args(self, run_name: str, eval_steps: int, save_steps: int) -> TrainingArguments:
         """Build TrainingArguments from config. Shared across all LLM classifier baselines."""
         device_pref = str(self.training_config.get("device", "auto")).lower()
@@ -91,7 +113,7 @@ class BaseLLMClassifierBaseline(BaseBaseline):
             print("fp16 requested but CUDA is unavailable; disabling fp16.")
             use_fp16 = False
 
-        return TrainingArguments(
+        ta_kwargs = dict(
             output_dir=os.path.join(self.output_dir, "checkpoints"),
             run_name=run_name,
             overwrite_output_dir=self.training_config.get("overwrite_output_dir", True),
@@ -117,7 +139,14 @@ class BaseLLMClassifierBaseline(BaseBaseline):
             dataloader_num_workers=int(self.training_config.get("dataloader_num_workers", 0)),
             report_to="wandb" if self.config.get("wandb", {}).get("enabled", False) else "none",
             remove_unused_columns=False,
+            ddp_find_unused_parameters=False,
+            gradient_checkpointing=bool(
+                self.training_config.get("gradient_checkpointing", False)
+            ),
         )
+        if ta_kwargs["gradient_checkpointing"]:
+            ta_kwargs["gradient_checkpointing_kwargs"] = {"use_reentrant": False}
+        return TrainingArguments(**ta_kwargs)
 
     def create_trainer(self, train_dataset, val_dataset, run_name: str):
         collator = ClassificationCollator(
@@ -150,6 +179,10 @@ class BaseLLMClassifierBaseline(BaseBaseline):
             save_steps = int(self.training_config.get("save_steps", 500))
 
         append_max_runtime_callback(callbacks, self.training_config)
+
+        if bool(self.training_config.get("gradient_checkpointing", False)):
+            if hasattr(self.classifier_model, "enable_input_require_grads"):
+                self.classifier_model.enable_input_require_grads()
 
         self.trainer = Trainer(
             model=self.classifier_model,
@@ -245,11 +278,7 @@ class BaseLLMClassifierBaseline(BaseBaseline):
 
         self.training_config["overwrite_output_dir"] = False
 
-        # Prefer a single visible GPU, same as run().
-        visible = os.environ.get("CUDA_VISIBLE_DEVICES", "")
-        if "," in visible:
-            first = visible.split(",")[0].strip() or "0"
-            os.environ["CUDA_VISIBLE_DEVICES"] = first
+        self._maybe_pin_single_gpu()
 
         self.load_model()
         self.create_classifier()
@@ -294,18 +323,7 @@ class BaseLLMClassifierBaseline(BaseBaseline):
         return None, test_metrics
 
     def run(self, resume_from_checkpoint: str | None = None):
-        # Prefer a single visible GPU for this plain-python path. Must run
-        # before model load; run.sh also pins CUDA_VISIBLE_DEVICES for safety.
-        visible = os.environ.get("CUDA_VISIBLE_DEVICES", "")
-        if "," in visible:
-            first = visible.split(",")[0].strip() or "0"
-            os.environ["CUDA_VISIBLE_DEVICES"] = first
-            logger.warning(
-                "Multiple GPUs in CUDA_VISIBLE_DEVICES (%s); pinning to %s "
-                "for single-process 4-bit LLM baseline training.",
-                visible,
-                first,
-            )
+        self._maybe_pin_single_gpu()
 
         run_name = self.setup_wandb()
         self.load_model()

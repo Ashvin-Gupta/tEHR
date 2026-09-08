@@ -1,3 +1,4 @@
+# Run artifacts
 HPC_Pretrain/
 HPC_Classifier/
 HPC_Base/
@@ -11,8 +12,17 @@ core
 core.*
 __pycache__/
 .ipynb_checkpoints/
-analysis_out/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+.env
+*.egg-info/
 Miniconda3-latest-Linux-x86_64.sh
+
+# Generated analysis products (bootstrap CSVs, figures, case dumps, …)
+analysis_out/
 
 # Machine-specific paths and secrets
 configs/local.yaml
@@ -20,7 +30,25 @@ configs/_resolved/
 scripts/site_a/local.env
 scripts/site_b/local.env
 
-# Local-only tests (not part of the anonymous tree)
+# CLMBR weights and compiled maps (regenerate with python -m src.clmbr.build_maps)
+data/clmbr_t_base/
+data/clmbr_maps/
+
+# Not part of the public experiment tree
 tests/
 src/resources/subject_information.csv
 src/resources/new_pancan_formatted.csv
+scripts/topk_code_coverage.py
+scripts/unmapped_closest.py
+scripts/site_b/probe_account.sh
+
+# Exploratory analysis. Paper-facing scripts are the exceptions below.
+src/analysis/*
+!src/analysis/bootstrap_ci.py
+!src/analysis/seed_ci.py
+!src/analysis/paired_compare.py
+!src/analysis/plot_ablation_auroc.py
+!src/analysis/plot_ablation_deltas.py
+src/resources/lab_reference_ranges.py
+src/resources/lab_terms.py
+src/resources/my_terms.py

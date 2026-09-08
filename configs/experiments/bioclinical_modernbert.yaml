@@ -1,0 +1,46 @@
+# BioClinical-ModernBERT-base fine-tune (8192-token context).
+# Same recipe as clinicalbert; longer window, smaller micro-batch.
+# Usage: sbatch --gpus=4 scripts/<site>/run.sh <dataset> bioclinical_modernbert <task>
+# https://huggingface.co/thomas-sounack/BioClinical-ModernBERT-base
+
+name: "{dataset}_bioclinical_modernbert_{task}"
+
+model:
+  model_name: "thomas-sounack/BioClinical-ModernBERT-base"
+  num_labels: 2
+  max_length: 8192
+  attn_implementation: "flash_attention_2"
+
+wandb:
+  enabled: true
+  project: "tEHR-baselines"
+  run_name: "bioclinical-modernbert-{dataset}-{task}"
+
+training:
+  output_dir: "{results_root}/{dataset}-bioclinical_modernbert-{task}"
+  overwrite_output_dir: true
+  device: "auto"
+  require_cuda: false
+  epochs: 1
+  # per-GPU micro-batch. 4 GPUs × 4 × accum 2 = 32 global (same as the 1-GPU recipe).
+  batch_size: 16
+  eval_batch_size: 16
+  learning_rate: 2e-5
+  weight_decay: 0.01
+  warmup_steps: 100
+  gradient_accumulation_steps: 2
+  gradient_checkpointing: true
+  fp16: false
+  bf16: true
+  logging_steps: 50
+  eval_steps: 250
+  save_steps: 500
+  save_total_limit: 2
+  dataloader_num_workers: 4
+  # Mid-epoch check at 20%, plus end-of-epoch so best-checkpoint is not the 20% weights.
+  eval_epoch_fractions: [0.25, 0.50, 0.75, 1.00]
+
+data:
+  max_length: 8192
+  sort_by_length: false
+  format: "text"

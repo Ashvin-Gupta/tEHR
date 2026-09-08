@@ -1,6 +1,8 @@
 """
 Binary classification metrics and plots (AUROC, AUPR, ECE).
 """
+from __future__ import annotations
+
 import os
 import json
 import numpy as np
@@ -92,6 +94,136 @@ def compute_binary_metrics(labels: np.ndarray, probs: np.ndarray) -> dict:
         "auroc": float(auroc),
         "aupr": float(aupr),
         "ece": float(ece),
+    }
+
+
+def mean_t_ci(values, ci: float = 0.95) -> dict:
+    """Mean, sample SD, and Student-t CI for a list of seed-level metrics.
+
+    ``n=1`` returns the point with empty ``lo``/``hi``. This is the
+    across-run interval (training luck), not the test-set bootstrap.
+    """
+    x = np.asarray(list(values), dtype=np.float64)
+    x = x[np.isfinite(x)]
+    n = int(x.size)
+    if n == 0:
+        raise ValueError("mean_t_ci got no finite values")
+    mean = float(np.mean(x))
+    out = {
+        "n": n,
+        "mean": mean,
+        "sd": float("nan") if n < 2 else float(np.std(x, ddof=1)),
+        "min": float(np.min(x)),
+        "max": float(np.max(x)),
+        "lo": None,
+        "hi": None,
+        "ci": float(ci),
+        "t_crit": None,
+    }
+    if n < 2:
+        return out
+    from scipy.stats import t as student_t
+
+    se = out["sd"] / np.sqrt(n)
+    t_crit = float(student_t.ppf(0.5 + ci / 2.0, df=n - 1))
+    out["t_crit"] = t_crit
+    out["lo"] = mean - t_crit * se
+    out["hi"] = mean + t_crit * se
+    return out
+
+
+def bootstrap_binary_ci(
+    labels: np.ndarray,
+    probs: np.ndarray,
+    *,
+    n_boot: int = 1000,
+    ci: float = 0.95,
+    seed: int = 42,
+    stratified: bool = True,
+    clusters: np.ndarray | None = None,
+) -> dict:
+    """Percentile bootstrap CIs for AUROC and AUPR on a fixed test set.
+
+    Resamples the already-scored ``(label, prob)`` pairs — no retraining.
+    ``stratified=True`` keeps the positive rate fixed in each replicate
+    (appropriate for rare-event clinical tasks). If ``clusters`` is given
+    (e.g. patient IDs), whole clusters are drawn with replacement instead.
+    """
+    labels = np.asarray(labels)
+    probs = np.asarray(probs)
+    if labels.shape[0] != probs.shape[0]:
+        raise ValueError("labels and probs must have the same length")
+    if labels.size == 0:
+        raise ValueError("empty arrays")
+
+    alpha = (1.0 - ci) / 2.0
+    rng = np.random.default_rng(seed)
+    n = labels.shape[0]
+
+    if clusters is not None:
+        clusters = np.asarray(clusters)
+        if clusters.shape[0] != n:
+            raise ValueError("clusters must align with labels")
+        uniq, inverse = np.unique(clusters, return_inverse=True)
+        groups = [np.where(inverse == i)[0] for i in range(len(uniq))]
+        n_groups = len(groups)
+
+    pos = np.flatnonzero(labels == 1)
+    neg = np.flatnonzero(labels == 0)
+
+    aurocs = np.empty(n_boot, dtype=np.float64)
+    auprs = np.empty(n_boot, dtype=np.float64)
+    kept = 0
+    for _ in range(n_boot):
+        if clusters is not None:
+            chosen = rng.integers(0, n_groups, size=n_groups)
+            idx = np.concatenate([groups[i] for i in chosen])
+        elif stratified and pos.size and neg.size:
+            idx = np.concatenate(
+                [
+                    rng.choice(pos, size=pos.size, replace=True),
+                    rng.choice(neg, size=neg.size, replace=True),
+                ]
+            )
+        else:
+            idx = rng.integers(0, n, size=n)
+        y_b, p_b = labels[idx], probs[idx]
+        if np.unique(y_b).size < 2:
+            continue
+        try:
+            aurocs[kept] = roc_auc_score(y_b, p_b)
+            auprs[kept] = average_precision_score(y_b, p_b)
+        except ValueError:
+            continue
+        kept += 1
+
+    if kept == 0:
+        raise ValueError("every bootstrap replicate had a single class")
+    aurocs = aurocs[:kept]
+    auprs = auprs[:kept]
+
+    def _ci(arr: np.ndarray) -> tuple[float, float, float]:
+        lo, hi = np.quantile(arr, [alpha, 1.0 - alpha])
+        return float(np.mean(arr)), float(lo), float(hi)
+
+    auroc_mean, auroc_lo, auroc_hi = _ci(aurocs)
+    aupr_mean, aupr_lo, aupr_hi = _ci(auprs)
+    point = compute_binary_metrics(labels, probs)
+    return {
+        "n": int(n),
+        "n_pos": int(pos.size),
+        "n_boot": int(kept),
+        "ci": float(ci),
+        "stratified": bool(stratified and clusters is None),
+        "clustered": clusters is not None,
+        "auroc": float(point["auroc"]),
+        "auroc_boot_mean": auroc_mean,
+        "auroc_lo": auroc_lo,
+        "auroc_hi": auroc_hi,
+        "aupr": float(point["aupr"]),
+        "aupr_boot_mean": aupr_mean,
+        "aupr_lo": aupr_lo,
+        "aupr_hi": aupr_hi,
     }
 
 

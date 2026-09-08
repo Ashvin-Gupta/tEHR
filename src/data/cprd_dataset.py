@@ -41,12 +41,14 @@ class CPRDDataset(BaseDataset):
         split: str = 'train',
         drop_time: bool = False,
         drop_values: bool = False,
+        max_events: Optional[int] = None,
     ):
         self.split = split
         self.cutoff_months = cutoff_months
         self.format = format
         self.drop_time = bool(drop_time)
         self.drop_values = bool(drop_values)
+        self.max_events = int(max_events) if max_events else None
 
         # Vocabulary: token_id -> token_string
         vocab_df = pd.read_csv(vocab_file, dtype={'str': str})
@@ -157,6 +159,7 @@ class CPRDDataset(BaseDataset):
         token_ids = self._filter_cancer_tokens(token_ids)
 
         if self.format == 'tokens':
+            token_ids = self._apply_max_events_to_ids(token_ids)
             return {
                 'tokens': token_ids,
                 'label': torch.tensor(label, dtype=torch.long),
@@ -165,6 +168,7 @@ class CPRDDataset(BaseDataset):
         
         # Text format
         string_codes = [self.id_to_token.get(tid, "") for tid in token_ids]
+        string_codes = self._apply_max_events_to_codes(string_codes)
         narrative = "".join(self._tokens_to_phrases(string_codes))
         return {
             'text': narrative,

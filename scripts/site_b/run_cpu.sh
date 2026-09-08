@@ -8,7 +8,7 @@
 #
 # Site B CPU dispatcher.
 # Usage: sbatch scripts/site_b/run_cpu.sh <dataset> <experiment> [task]
-# Experiments: xgboost_bow | plot_ablation | hdbscan | plot_labs | plot_rr
+# Experiments: xgboost_bow | plot_ablation | plot_ablation_deltas | bootstrap_ci | seed_ci | paired_compare
 
 set -euo pipefail
 

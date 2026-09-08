@@ -11,11 +11,22 @@ import re
 import math
 import torch
 import numpy as np
-from typing import Dict, Any, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 from tqdm import tqdm
 from unsloth import FastLanguageModel
 
 from src.baselines.base import BaseBaseline
+from src.evaluations.evaluations import compute_binary_metrics, write_split_artifacts
+from src.evaluations.eval_resume import (
+    load_eval_partial,
+    maybe_flush_partial,
+    parse_eval_shard,
+    partial_pred_path,
+    shard_bounds,
+    shard_result_path,
+    try_merge_shards,
+    write_shard_file,
+)
 from src.training.training_utils import resolve_binary_label_token_ids
 
 
@@ -384,10 +395,18 @@ class ZeroShotBaseline(BaseBaseline):
             inputs["attention_mask"] = inputs["attention_mask"][:, -max_length:]
         return inputs
 
-    def predict_batch_logit_01(self, texts: List[str], batch_size: int = 4) -> np.ndarray:
+    def predict_batch_logit_01(
+        self,
+        texts: List[str],
+        batch_size: int = 4,
+        *,
+        resume_probs: Optional[List[float]] = None,
+        partial_path: Optional[str] = None,
+    ) -> np.ndarray:
         """Forward-pass scoring via softmax over next-token logits for 0/1."""
         self.model.eval()
-        probs = []
+        probs: List[float] = list(resume_probs or [])
+        n_expected = len(probs) + len(texts)
         self.total_predictions = 0
         self.low_logit_fallbacks = 0
         self._debug_printed = 0
@@ -430,7 +449,7 @@ class ZeroShotBaseline(BaseBaseline):
                         for tid in top_ids
                     ]
                     self._maybe_debug_example(
-                        index=i + j,
+                        index=len(probs) - 1,
                         prompt=batch_prompts[j],
                         n_tokens=n_tokens,
                         truncated=n_tokens >= max_length,
@@ -439,6 +458,9 @@ class ZeroShotBaseline(BaseBaseline):
                         prob=prob,
                         top_tokens=top_tokens,
                     )
+                maybe_flush_partial(partial_path, probs, n_expected)
+
+        maybe_flush_partial(partial_path, probs, n_expected, force=True)
 
         if self.total_predictions > 0:
             fallback_rate = 100.0 * self.low_logit_fallbacks / self.total_predictions
@@ -451,11 +473,17 @@ class ZeroShotBaseline(BaseBaseline):
         return np.array(probs, dtype=np.float32)
 
     def predict_batch_generate_probability(
-        self, texts: List[str], batch_size: int = 1
+        self,
+        texts: List[str],
+        batch_size: int = 1,
+        *,
+        resume_probs: Optional[List[float]] = None,
+        partial_path: Optional[str] = None,
     ) -> np.ndarray:
         """Generate a short answer and parse a 2-decimal probability in [0, 1]."""
         self.model.eval()
-        probs: List[float] = []
+        probs: List[float] = list(resume_probs or [])
+        n_expected = len(probs) + len(texts)
         self.total_predictions = 0
         self.parse_fallbacks = 0
         self._debug_printed = 0
@@ -509,7 +537,7 @@ class ZeroShotBaseline(BaseBaseline):
 
                     n_tokens = int(prompt_lens[j])
                     self._maybe_debug_example(
-                        index=i + j,
+                        index=len(probs) - 1,
                         prompt=batch_prompts[j],
                         n_tokens=n_tokens,
                         truncated=n_tokens >= max_length,
@@ -522,6 +550,9 @@ class ZeroShotBaseline(BaseBaseline):
                         ],
                         generated=gen_text,
                     )
+                maybe_flush_partial(partial_path, probs, n_expected)
+
+        maybe_flush_partial(partial_path, probs, n_expected, force=True)
 
         if self.total_predictions > 0:
             rate = 100.0 * self.parse_fallbacks / self.total_predictions
@@ -532,15 +563,58 @@ class ZeroShotBaseline(BaseBaseline):
             )
         return np.array(probs, dtype=np.float32)
 
-    def predict_batch(self, texts: List[str], batch_size: int = 4) -> np.ndarray:
+    def predict_batch(
+        self,
+        texts: List[str],
+        batch_size: int = 4,
+        **resume_kw,
+    ) -> np.ndarray:
         if self.inference_mode == "generate_probability":
-            return self.predict_batch_generate_probability(texts, batch_size=batch_size)
+            return self.predict_batch_generate_probability(
+                texts, batch_size=batch_size, **resume_kw
+            )
         if self.inference_mode in {"logit_01", "logit", "binary_logit"}:
-            return self.predict_batch_logit_01(texts, batch_size=batch_size)
+            return self.predict_batch_logit_01(
+                texts, batch_size=batch_size, **resume_kw
+            )
         raise ValueError(
             f"Unknown inference.mode={self.inference_mode!r}. "
             "Use 'logit_01' or 'generate_probability'."
         )
+
+    def _collect_texts_labels(self, dataset) -> Tuple[List[str], List[int]]:
+        texts: List[str] = []
+        labels: List[int] = []
+        for i in range(len(dataset)):
+            item = dataset[i]
+            if item is None:
+                continue
+            text = item.get("text")
+            if text is None:
+                continue
+            texts.append(text)
+            label_value = item["label"].item()
+            labels.append(0 if label_value == 0 else 1)
+        return texts, labels
+
+    def _predict_with_resume(self, texts: List[str], tag: str) -> np.ndarray:
+        if self.model is None or self.tokenizer is None:
+            raise RuntimeError("Model not loaded. Did you call load_model()?")
+        if not texts:
+            return np.array([], dtype=np.float32)
+        path = partial_pred_path(self.output_dir, tag)
+        done = load_eval_partial(path, len(texts))
+        remaining = texts[len(done):]
+        batch_size = int(self.inference_config.get("batch_size", 4))
+        if not remaining:
+            print(f"  All {len(texts)} {tag} predictions already flushed.", flush=True)
+            return np.array(done, dtype=np.float32)
+        return self.predict_batch(
+            remaining,
+            batch_size=batch_size,
+            resume_probs=done,
+            partial_path=path,
+        ).astype(np.float32)
 
     def predict(self, dataset) -> np.ndarray:
         """
@@ -551,22 +625,88 @@ class ZeroShotBaseline(BaseBaseline):
         dataset and skipping `None` items. We mirror that ordering here so
         labels and probabilities align.
         """
-        if self.model is None or self.tokenizer is None:
-            raise RuntimeError("Model not loaded. Did you call load_model()?")
+        texts, _labels = self._collect_texts_labels(dataset)
+        return self._predict_with_resume(texts, "predict")
 
-        texts: List[str] = []
-        for i in range(len(dataset)):
-            item = dataset[i]
-            if item is None:
-                continue
-            text = item.get("text")
-            if text is None:
-                continue
-            texts.append(text)
+    def evaluate_split(self, dataset, split_name: str) -> Dict[str, float]:
+        """Score one split, flushing partials and optionally a ``EVAL_SHARD`` slice."""
+        texts, labels = self._collect_texts_labels(dataset)
+        n_total = len(texts)
+        shard = parse_eval_shard()
+        if shard:
+            index, n_shards = shard
+            start, end = shard_bounds(n_total, index, n_shards)
+            texts = texts[start:end]
+            labels = labels[start:end]
+            tag = f"{split_name}_shard_{index}of{n_shards}"
+            print(
+                f"Zero-shot shard {index}/{n_shards}: "
+                f"indices [{start}, {end}) of {n_total}",
+                flush=True,
+            )
+        else:
+            index, n_shards, start, end = 0, 1, 0, n_total
+            tag = split_name
 
-        if not texts:
-            return np.array([], dtype=np.float32)
+        probs = self._predict_with_resume(texts, tag)
+        if len(probs) != len(labels):
+            raise RuntimeError(
+                f"{tag}: got {len(probs)} probs for {len(labels)} labels"
+            )
 
-        batch_size = int(self.inference_config.get("batch_size", 4))
-        probs = self.predict_batch(texts, batch_size=batch_size)
-        return probs.astype(np.float32)
+        if shard:
+            shard_path = shard_result_path(
+                self.output_dir, split_name, index, n_shards
+            )
+            write_shard_file(
+                shard_path,
+                split_name=split_name,
+                index=index,
+                n_shards=n_shards,
+                start=start,
+                end=end,
+                n_total=n_total,
+                labels=labels,
+                probs=[float(p) for p in probs.tolist()],
+            )
+            partial = partial_pred_path(self.output_dir, tag)
+            if os.path.isfile(partial):
+                os.remove(partial)
+            merged = try_merge_shards(
+                self.output_dir, split_name, n_shards, n_total
+            )
+            if merged is None:
+                print(
+                    "  This shard is done. Submit the other EVAL_SHARD jobs; "
+                    "the last one to finish writes held_out_results.json.",
+                    flush=True,
+                )
+                return compute_binary_metrics(np.array(labels), probs)
+            labels, probs_list = merged
+            metrics = write_split_artifacts(
+                self.output_dir, split_name, np.array(labels), np.array(probs_list)
+            )
+            return metrics
+
+        metrics = write_split_artifacts(
+            self.output_dir, split_name, np.array(labels), probs
+        )
+        partial = partial_pred_path(self.output_dir, tag)
+        if os.path.isfile(partial):
+            os.remove(partial)
+        return metrics
+
+    def run(self, resume_from_checkpoint: str | None = None):
+        """Score held_out only. Zero-shot has no training and does not need val."""
+        self.setup_wandb()
+        self.load_model()
+        datasets = self.load_datasets(splits=["held_out"])
+        shard = parse_eval_shard()
+        extra = f" EVAL_SHARD={shard[0]}/{shard[1]}" if shard else ""
+        print(
+            "Zero-shot: scoring test split (held_out) only; "
+            f"skipping tuning/val.{extra}",
+            flush=True,
+        )
+        test_metrics = self.evaluate_split(datasets["held_out"], "held_out")
+        return None, test_metrics

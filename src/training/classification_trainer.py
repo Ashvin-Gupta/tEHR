@@ -2,7 +2,8 @@
 Linear-head LLM classifier (LoRA).
 
 Used by: tehr_stage2, ablation_supervised_only, ablation_cpt_frozen,
-ablation_hash, ablation_scrambled, ablation_no_time, ablation_no_value.
+ablation_hash, ablation_scrambled, ablation_no_time, ablation_no_value,
+ablation_max_events.
 """
 import os
 import time
@@ -255,14 +256,26 @@ class TehrClassifierTrainer:
             except TypeError:
                 return torch.load(path, map_location="cpu")
 
-        # Fast path: cache already exists
-        if os.path.exists(cache_path):
-            print(
-                f"  - Found cached length-sorted indices for split '{split}' "
-                f"at {cache_path}"
-            )
-            indices = _load_indices(cache_path)
-            return torch.utils.data.Subset(dataset, indices)
+        def _try_load(path):
+            try:
+                return _load_indices(path)
+            except (EOFError, RuntimeError, OSError, ValueError):
+                return None
+
+        # Fast path: finished cache, no writer in progress
+        if os.path.exists(cache_path) and not os.path.exists(lock_path):
+            indices = _try_load(cache_path)
+            if indices is not None:
+                print(
+                    f"  - Found cached length-sorted indices for split '{split}' "
+                    f"at {cache_path}"
+                )
+                return torch.utils.data.Subset(dataset, indices)
+            print(f"  - Ignoring corrupt length-sort cache at {cache_path}")
+            try:
+                os.remove(cache_path)
+            except OSError:
+                pass
 
         # Try to acquire lock so only one process computes (multi-GPU / multi-seed)
         acquired = False
@@ -274,35 +287,50 @@ class TehrClassifierTrainer:
             pass
 
         if acquired:
-            # We hold the lock: compute and write, then remove lock
+            # We hold the lock: compute and write atomically, then remove lock
             print(
                 f"  - No cached length-sorted indices for split '{split}', "
                 f"computing and caching to {cache_path}..."
             )
-            sorted_dataset = compute_and_sort_by_length(
-                dataset,
-                self.tokenizer,
-                shuffle_buckets=shuffle_buckets,
-                num_buckets=num_buckets,
-            )
-            if isinstance(sorted_dataset, torch.utils.data.Subset):
-                torch.save(sorted_dataset.indices, cache_path)
-                print(f"  ✓ Cached sorted indices for split '{split}' to: {cache_path}")
             try:
-                os.remove(lock_path)
-            except OSError:
-                pass
+                sorted_dataset = compute_and_sort_by_length(
+                    dataset,
+                    self.tokenizer,
+                    shuffle_buckets=shuffle_buckets,
+                    num_buckets=num_buckets,
+                )
+                if isinstance(sorted_dataset, torch.utils.data.Subset):
+                    tmp_path = cache_path + ".tmp"
+                    torch.save(sorted_dataset.indices, tmp_path)
+                    os.replace(tmp_path, cache_path)
+                    print(
+                        f"  ✓ Cached sorted indices for split '{split}' to: {cache_path}"
+                    )
+            finally:
+                try:
+                    os.remove(lock_path)
+                except OSError:
+                    pass
+                try:
+                    os.remove(cache_path + ".tmp")
+                except OSError:
+                    pass
             return sorted_dataset
 
-        # Another process is computing; wait for cache to appear (with timeout)
+        # Another process is computing; wait until the lock is gone and the
+        # cache file is complete (exists() during torch.save is a partial file).
         for _ in range(14400):
             time.sleep(1)
+            if os.path.exists(lock_path):
+                continue
             if os.path.exists(cache_path):
+                indices = _try_load(cache_path)
+                if indices is None:
+                    continue
                 print(
                     f"  - Found cached length-sorted indices for split '{split}' "
                     f"(written by another process), loading..."
                 )
-                indices = _load_indices(cache_path)
                 return torch.utils.data.Subset(dataset, indices)
         raise TimeoutError(
             f"Timeout waiting for length-sorted cache for split '{split}' at {cache_path}"

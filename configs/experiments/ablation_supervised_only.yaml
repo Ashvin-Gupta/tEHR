@@ -1,14 +1,15 @@
-# Ablation: no EHR pretraining; fresh LLM + LoRA + head. MIMIC only.
-# Usage: sbatch scripts/<site>/run.sh mimic ablation_supervised_only mistral <task>
+# Ablation: no EHR pretraining; fresh LLM + LoRA + head.
+# Usage: sbatch scripts/<site>/run.sh <dataset> ablation_supervised_only mistral <task>
+# Allowed datasets: mimic, ehrshot.
 
 extends:
   - ../shared/lora.yaml
   - ../shared/training_classifier.yaml
 
-name: "mimic_ablation_supervised_only_{model}_{task}"
+name: "{dataset}_ablation_supervised_only_{model}_{task}"
 
 wandb:
-  run_name: "ablation-supervised-only-{model}-{task}"
+  run_name: "ablation-supervised-only-{dataset}-{model}-{task}"
 
 model:
   pretrained_checkpoint: null
@@ -18,5 +19,5 @@ model:
   pooling: "mean"
 
 training:
-  output_dir: "{results_root}/mimic-ablation_supervised_only-{model}-{task}"
+  output_dir: "{results_root}/{dataset}-ablation_supervised_only-{model}-{task}"
   learning_rate: 1e-5
