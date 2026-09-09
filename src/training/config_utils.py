@@ -258,13 +258,28 @@ def build_config(
     seed = int(cfg.get("seed") or (cfg.get("training") or {}).get("seed") or 42)
     seed_dir = f"seed_{seed}"
 
+    stage1_tag = (os.environ.get("TEHR_STAGE1_TAG") or "").strip()
+    if stage1_tag and not stage1_tag.replace("_", "").isalnum():
+        raise ValueError(
+            f"TEHR_STAGE1_TAG must be alphanumeric (got {stage1_tag!r})."
+        )
+
     if spec.uses_stage1_ckpt and model:
         ckpt = (ds_local.get("checkpoints") or {}).get(model)
-        if not ckpt:
+        if stage1_tag:
+            ckpt = os.path.join(
+                results_root,
+                f"{dataset}-tehr_stage1-{model}-{stage1_tag}",
+                seed_dir,
+                "final_model",
+            )
+        elif not ckpt:
             ckpt = os.path.join(
                 results_root, f"{dataset}-tehr_stage1-{model}", seed_dir, "final_model"
             )
         cfg.setdefault("model", {})["pretrained_checkpoint"] = ckpt
+        if stage1_tag:
+            cfg.setdefault("_meta", {})["stage1_tag"] = stage1_tag
 
     encoder_ckpt = ds_local.get("encoder_mlm_checkpoint") or os.path.join(
         results_root, f"{dataset}-encoder", "models", "pretrained_encoder_stage1_mlm.pt"
@@ -319,12 +334,52 @@ def build_config(
     if isinstance(overlay, dict) and overlay:
         cfg["training"] = deep_merge(cfg.get("training") or {}, overlay)
 
-    # EHRSHOT dataset training wins last (sparse evals). Experiment YAMLs and
-    # local.yaml eval_batch_size would otherwise restore the 7-point schedule.
-    if dataset == "ehrshot":
+    # EHRSHOT dataset training wins last (sparse classifier evals). Experiment
+    # YAMLs and local.yaml would otherwise restore the 7-point schedule.
+    # Skip for LM continued pretraining: HuggingFace requires save_steps to be
+    # a multiple of eval_steps when load_best_model_at_end is set, and stage 1
+    # keeps save_steps=1000 / eval_steps=500.
+    _stage1 = experiment in {"tehr_stage1", "tehr_stage1_v2"}
+    if dataset == "ehrshot" and not _stage1:
         ds_training = dataset_cfg.get("training")
         if isinstance(ds_training, dict) and ds_training:
             cfg["training"] = deep_merge(cfg.get("training") or {}, ds_training)
+    elif dataset == "ehrshot" and _stage1:
+        # Dataset YAML still merged earlier; drop classifier-only keys.
+        (cfg.get("training") or {}).pop("eval_epoch_fractions", None)
+
+    # EHRSHOT labels are bags over long histories, not a fixed endpoint token.
+    # Keep last_token on MIMIC. Write mean-pool runs next to the last-token
+    # dirs so those numbers stay on disk.
+    _ehrshot_mean_pool = {
+        "tehr_stage2",
+        "ablation_cpt_frozen",
+        "ablation_no_time",
+        "ablation_no_value",
+    }
+    if dataset == "ehrshot" and experiment in _ehrshot_mean_pool:
+        cfg.setdefault("model", {})["pooling"] = "mean"
+        training = cfg.setdefault("training", {})
+        out = training.get("output_dir")
+        if isinstance(out, str) and out and not out.rstrip("/").endswith("-mean"):
+            training["output_dir"] = out.rstrip("/") + "-mean"
+        wb = cfg.setdefault("wandb", {})
+        run_name = wb.get("run_name")
+        if isinstance(run_name, str) and run_name and not run_name.endswith("-mean"):
+            wb["run_name"] = run_name + "-mean"
+
+    # Score a tagged stage-1 recipe (e.g. TEHR_STAGE1_TAG=v2) without
+    # clobbering the default CPT stage-2 dirs.
+    if stage1_tag and spec.uses_stage1_ckpt:
+        training = cfg.setdefault("training", {})
+        out = training.get("output_dir")
+        suffix = f"-{stage1_tag}"
+        if isinstance(out, str) and out and not out.rstrip("/").endswith(suffix):
+            training["output_dir"] = out.rstrip("/") + suffix
+        wb = cfg.setdefault("wandb", {})
+        run_name = wb.get("run_name")
+        if isinstance(run_name, str) and run_name and not run_name.endswith(suffix):
+            wb["run_name"] = run_name + suffix
 
     data = cfg.get("data") or {}
     for key, value in list(data.items()):

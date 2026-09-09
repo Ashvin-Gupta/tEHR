@@ -113,3 +113,6 @@ BUILD_ARGS=(--dataset "${DATASET}" --experiment "${EXPERIMENT}" --out "${RESOLVE
 python -m src.training.config_utils build "${BUILD_ARGS[@]}"
 echo "Resolved config → ${RESOLVED_CFG}"
 echo "Using nproc_per_node=${NPROC}"
+if [[ -n "${TEHR_STAGE1_TAG:-}" ]]; then
+    echo "TEHR_STAGE1_TAG=${TEHR_STAGE1_TAG}"
+fi

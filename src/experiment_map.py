@@ -72,6 +72,19 @@ SPECS: dict[str, Spec] = {
             "checkpoint to score. Train tehr_stage2 and evaluate that."
         ),
     ),
+    "tehr_stage1_v2": Spec(
+        runner="src.training.pretrainer_trainer.TehrStage1Trainer",
+        ddp=True,
+        needs_model=True,
+        supports_eval=False,
+        task_optional=True,
+        clear_pretrained=True,
+        eval_error=(
+            "tehr_stage1_v2 is continued pretraining; it has no classification "
+            "checkpoint to score. Point stage 2 at this run's final_model "
+            "explicitly when you want to score it."
+        ),
+    ),
     "tehr_stage2": Spec(
         runner=_TEHR_CLF,
         ddp=True,

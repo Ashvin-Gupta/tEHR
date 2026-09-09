@@ -1,0 +1,48 @@
+# tEHR stage 1, second CPT recipe. Writes to a *different* directory than
+# tehr_stage1 so the 16k packed checkpoints stay on disk.
+#
+# vs tehr_stage1: per-device batch 4→2 (2× optimizer steps at the same 4 GPUs),
+# warmup 500→50 (the first EHRSHOT run never left warmup), eval/save 200 so
+# save_steps stays a multiple of eval_steps.
+# Usage: sbatch --gpus=4 scripts/<site>/run.sh <dataset> tehr_stage1_v2 mistral
+
+extends:
+  - ../shared/lora.yaml
+
+name: "{dataset}_tehr_stage1_{model}_v2"
+
+wandb:
+  enabled: true
+  project: "tEHR-pretrain"
+  run_name: "tehr-stage1-v2-{dataset}-{model}"
+
+model:
+  max_length: 16000
+
+training:
+  output_dir: "{results_root}/{dataset}-tehr_stage1-{model}-v2"
+  overwrite_output_dir: true
+  load_in_4bit: true
+  epochs: 1
+  batch_size: 2
+  eval_batch_size: 1
+  learning_rate: 1e-5
+  weight_decay: 0.05
+  warmup_steps: 50
+  gradient_accumulation_steps: 4
+  gradient_checkpointing: true
+  fp16: false
+  bf16: true
+  logging_steps: 10
+  # Mid-train HF eval under Unsloth DDP hangs NCCL (mistral v2 job 6426634).
+  # eval_on_main_process_only turns eval_strategy off; keep save_steps.
+  eval_on_main_process_only: true
+  eval_steps: 100000
+  eval_max_batches: 32
+  save_steps: 100
+  save_total_limit: 3
+  dataloader_num_workers: 4
+
+data:
+  task: "pretrain"
+  sort_by_length: false

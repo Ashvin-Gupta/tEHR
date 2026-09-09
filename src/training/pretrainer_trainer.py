@@ -303,10 +303,16 @@ class TehrStage1Trainer:
         """
         Prepare training and validation datasets using a Rank-0-only processing pattern.
         """
-        # 1. Define paths
-        cache_dir = os.path.join(self.training_config['output_dir'], "data_cache")
-        train_cache_path = os.path.join(cache_dir, "train_packed")
-        val_cache_path = os.path.join(cache_dir, "val_packed")
+        # Length must be in the cache path. A leftover 32k pack under the old
+        # unversioned ``train_packed`` dir is truncated by Unsloth to
+        # max_length while labels stay 32k, which crashes fused CE:
+        # ``Expected input batch_size (64000) to match target batch_size (128000)``.
+        max_length = int(self.model_config["max_length"])
+        cache_root = self.training_config.get("data_cache_dir") or self.training_config["output_dir"]
+        cache_dir = os.path.join(cache_root, "data_cache")
+        train_cache_path = os.path.join(cache_dir, f"train_packed_len{max_length}")
+        val_cache_path = os.path.join(cache_dir, f"val_packed_len{max_length}")
+        train_info = os.path.join(train_cache_path, "dataset_info.json")
 
         if not torch.distributed.is_initialized():
             # Fallback for some environments: ensure we know who we are
@@ -316,22 +322,24 @@ class TehrStage1Trainer:
         # 2. Only Rank 0 performs the heavy lifting
         if self.local_rank == 0:
             try:
-                if not os.path.exists(os.path.join(train_cache_path, "dataset_info.json")):
-                    os.makedirs(cache_dir, exist_ok=True)
+                os.makedirs(cache_dir, exist_ok=True)
+                if not os.path.exists(train_info):
                     logger.info("\n--- Data Preparation (Rank 0 Only) ---")
+                    logger.info(f"  - Packed cache → {train_cache_path}")
 
                     # Get datasets that returns dict of text,label and subject id
                     train_base = get_dataset(self.data_config['dataset'], self.data_config, "train")
                     val_base = get_dataset(self.data_config['dataset'], self.data_config, "tuning")
 
                     # Process Training Data
-                    extract_and_pack(train_base, self.tokenizer, self.model_config['max_length'], train_cache_path)
+                    extract_and_pack(train_base, self.tokenizer, max_length, train_cache_path)
 
                     # Process Validation Data
-                    extract_and_pack(val_base, self.tokenizer, self.model_config['max_length'], val_cache_path)
+                    extract_and_pack(val_base, self.tokenizer, max_length, val_cache_path)
                     
                 else:
                     logger.info("\n--- Found existing cached dataset, skipping processing ---")
+                    logger.info(f"  - Packed cache → {train_cache_path}")
             
             except Exception as e:
                 logger.error(f"Rank {self.local_rank} error: {e}")
@@ -340,7 +348,7 @@ class TehrStage1Trainer:
         
         max_idle = 600  # max seconds Rank 0 can be idle before giving up
         heartbeat_file = os.path.join(train_cache_path, "heartbeat_rank0.txt")
-        dataset_file = os.path.join(train_cache_path, "dataset_info.json")
+        dataset_file = train_info
 
         while not os.path.exists(dataset_file):
             if os.path.exists(heartbeat_file):
@@ -363,6 +371,14 @@ class TehrStage1Trainer:
         val_dataset = None
         if os.path.exists(val_cache_path):
             val_dataset = Dataset.load_from_disk(val_cache_path)
+
+        if len(train_dataset) > 0:
+            observed = len(train_dataset[0]["input_ids"])
+            if observed != max_length:
+                raise ValueError(
+                    f"Packed cache sequence length {observed} != model max_length "
+                    f"{max_length} at {train_cache_path}. Delete that directory and rerun."
+                )
 
         return train_dataset, val_dataset
     
@@ -402,6 +418,31 @@ class TehrStage1Trainer:
             )
             use_fp16, use_bf16 = False, True
 
+        eval_steps = int(self.training_config.get("eval_steps", 500) or 0)
+        save_steps = int(self.training_config.get("save_steps", 1000) or 0)
+        eval_on_main = bool(
+            self.training_config.get("eval_on_main_process_only", False)
+        )
+        # Unsloth's inner loop desyncs DDP at eval_steps (NCCL timeout). Skip
+        # mid-train eval when requested; keep save_steps checkpoints.
+        do_eval = bool(val_dataset) and not eval_on_main
+        load_best = do_eval
+        if load_best and eval_steps and save_steps % eval_steps != 0:
+            load_best = False
+            msg = (
+                "load_best_model_at_end disabled: save_steps="
+                f"{save_steps} is not a multiple of eval_steps={eval_steps}"
+            )
+            logger.warning(msg)
+            print(f"  {msg}", flush=True)
+        if eval_on_main and val_dataset is not None:
+            msg = (
+                "eval_on_main_process_only: eval_strategy=no to avoid "
+                f"Unsloth/NCCL desync; checkpoints every {save_steps} steps"
+            )
+            logger.info(msg)
+            print(f"  {msg}", flush=True)
+
         # Define the SFT configuration with all your detailed parameters
         training_args = SFTConfig(
             output_dir=self.training_config['output_dir'],
@@ -421,15 +462,15 @@ class TehrStage1Trainer:
             
             # Logging and evaluation
             logging_steps=self.training_config.get('logging_steps', 100),
-            eval_strategy="steps" if val_dataset else "no",
-            eval_steps=self.training_config.get('eval_steps', 500),
+            eval_strategy="steps" if do_eval else "no",
+            eval_steps=eval_steps or 500,
             
             # Saving
             save_strategy="steps",
-            save_steps=self.training_config.get('save_steps', 1000),
+            save_steps=save_steps or 1000,
             save_total_limit=self.training_config.get('save_total_limit', 2),
-            load_best_model_at_end=True if val_dataset else False,
-            metric_for_best_model="loss" if val_dataset else None,
+            load_best_model_at_end=load_best,
+            metric_for_best_model="loss" if load_best else None,
             
             # Performance
             fp16=use_fp16,
@@ -453,7 +494,6 @@ class TehrStage1Trainer:
             dataloader_drop_last=True,
         )
 
-        
         logger.info("\nInitializing SFTTrainer...")
         print("\nInitializing SFTTrainer...", flush=True)
 
@@ -463,7 +503,7 @@ class TehrStage1Trainer:
             "model": self.model,
             "tokenizer": self.tokenizer,
             "train_dataset": train_dataset, # This is already packed!
-            "eval_dataset": val_dataset,
+            "eval_dataset": val_dataset if do_eval else None,
             "args": training_args,
             "data_collator": collator,
         }
@@ -472,26 +512,6 @@ class TehrStage1Trainer:
         append_max_runtime_callback(callbacks, self.training_config)
         if callbacks:
             trainer_kwargs["callbacks"] = callbacks
-
-        eval_on_main = bool(
-            self.training_config.get("eval_on_main_process_only", False)
-        )
-        # Unsloth replaces Trainer._inner_training_loop with _fast_inner_training_loop.
-        # At eval_steps, rank 0 can enter a long local eval while other ranks race
-        # ahead into get_batch_samples() → accelerator.gather → NCCL timeout (see
-        # isa-mimic-run-5978520). Mid-train eval is unsafe under that loop; keep
-        # save_steps checkpoints instead.
-        if eval_on_main and val_dataset is not None:
-            training_args.eval_strategy = "no"
-            training_args.load_best_model_at_end = False
-            training_args.metric_for_best_model = None
-            msg = (
-                "eval_on_main_process_only: disabling mid-train eval "
-                f"(eval_strategy=no) to avoid Unsloth/NCCL desync; "
-                f"checkpoints still saved every {training_args.save_steps} steps"
-            )
-            logger.info(msg)
-            print(f"  {msg}", flush=True)
 
         self.trainer = SFTTrainer(**trainer_kwargs)
         

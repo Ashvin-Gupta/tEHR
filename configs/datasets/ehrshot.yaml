@@ -7,8 +7,9 @@ data:
   sort_by_length: true
   label_column: "label"
 
-# Re-applied last in build_config so experiment / local.yaml cannot restore
-# the 7-point classifier schedule. Mid-train evals only; final val/test still run.
+# Re-applied last in build_config for classifier experiments (not tehr_stage1)
+# so experiment / local.yaml cannot restore the 7-point schedule. Mid-train
+# evals only; final val/test still run.
 training:
   eval_epoch_fractions: [0.25, 0.50, 0.75]
   eval_steps: 100000

@@ -262,20 +262,58 @@ class TehrClassifierTrainer:
             except (EOFError, RuntimeError, OSError, ValueError):
                 return None
 
-        # Fast path: finished cache, no writer in progress
-        if os.path.exists(cache_path) and not os.path.exists(lock_path):
-            indices = _try_load(cache_path)
-            if indices is not None:
-                print(
-                    f"  - Found cached length-sorted indices for split '{split}' "
-                    f"at {cache_path}"
-                )
-                return torch.utils.data.Subset(dataset, indices)
-            print(f"  - Ignoring corrupt length-sort cache at {cache_path}")
+        def _remove_stale_lock():
+            # A killed writer can leave a 0-byte lock; waiters then sit silent
+            # for 4h (see ehrshot scrambled readmission/pancreatic). Held-out
+            # sort itself is ~7 min, so a lock older than this is abandoned.
+            if not os.path.exists(lock_path):
+                return False
             try:
-                os.remove(cache_path)
+                age = time.time() - os.path.getmtime(lock_path)
             except OSError:
-                pass
+                return False
+            if age <= 20 * 60:
+                return False
+            print(
+                f"  - Removing stale length-sort lock ({age / 60:.1f} min old) "
+                f"at {lock_path}",
+                flush=True,
+            )
+            try:
+                os.remove(lock_path)
+            except OSError:
+                return False
+            return True
+
+        def _load_finished_cache():
+            if not os.path.exists(cache_path) or os.path.exists(lock_path):
+                return None
+            indices = _try_load(cache_path)
+            if indices is None:
+                print(f"  - Ignoring corrupt length-sort cache at {cache_path}")
+                try:
+                    os.remove(cache_path)
+                except OSError:
+                    pass
+            return indices
+
+        # Fast path: finished cache, no writer in progress
+        indices = _load_finished_cache()
+        if indices is not None:
+            print(
+                f"  - Found cached length-sorted indices for split '{split}' "
+                f"at {cache_path}"
+            )
+            return torch.utils.data.Subset(dataset, indices)
+
+        _remove_stale_lock()
+        indices = _load_finished_cache()
+        if indices is not None:
+            print(
+                f"  - Found cached length-sorted indices for split '{split}' "
+                f"at {cache_path}"
+            )
+            return torch.utils.data.Subset(dataset, indices)
 
         # Try to acquire lock so only one process computes (multi-GPU / multi-seed)
         acquired = False
@@ -290,7 +328,8 @@ class TehrClassifierTrainer:
             # We hold the lock: compute and write atomically, then remove lock
             print(
                 f"  - No cached length-sorted indices for split '{split}', "
-                f"computing and caching to {cache_path}..."
+                f"computing and caching to {cache_path}...",
+                flush=True,
             )
             try:
                 sorted_dataset = compute_and_sort_by_length(
@@ -319,8 +358,20 @@ class TehrClassifierTrainer:
 
         # Another process is computing; wait until the lock is gone and the
         # cache file is complete (exists() during torch.save is a partial file).
-        for _ in range(14400):
+        for waited in range(14400):
             time.sleep(1)
+            if waited > 0 and waited % 60 == 0:
+                print(
+                    f"  - Waiting for length-sort lock ({waited}s) at {lock_path}",
+                    flush=True,
+                )
+            if _remove_stale_lock():
+                return self._sort_with_cache(
+                    dataset,
+                    split=split,
+                    shuffle_buckets=shuffle_buckets,
+                    num_buckets=num_buckets,
+                )
             if os.path.exists(lock_path):
                 continue
             if os.path.exists(cache_path):

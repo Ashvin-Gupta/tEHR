@@ -1,4 +1,6 @@
 # tEHR stage 2: pretrained LLM → LoRA + linear head.
+# pooling last_token is the MIMIC default (endpoint tasks). EHRSHOT overrides
+# to mean pooling and a separate *-mean output dir in build_config.
 # Usage: sbatch scripts/<site>/run.sh <dataset> tehr_stage2 mistral <task>
 
 extends:
