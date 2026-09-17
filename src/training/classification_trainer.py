@@ -30,7 +30,6 @@ from src.training.model_loader import (
 )
 from src.evaluations.evaluations import (
     compute_classification_metrics,
-    plot_all_curves,
     save_results,
 )
 
@@ -604,86 +603,41 @@ class TehrClassifierTrainer:
         self.trainer.save_model(final_model_path)
         print(f"  - Model saved to: {final_model_path}")
     
+    def _score_and_save_split(self, dataset, split_name: str, metric_key_prefix: str) -> Dict[str, Any]:
+        """One forward pass: metrics + labels/probs JSON. No ROC/PR plots."""
+        print("\n" + "=" * 80)
+        print(f"Running evaluation on {split_name} set...")
+        print("=" * 80)
+        pred_output = self.trainer.predict(dataset, metric_key_prefix=metric_key_prefix)
+        metrics = pred_output.metrics or {}
+        print(f"\nFinal {split_name} Results:")
+        for key, value in metrics.items():
+            print(f"  {key}: {value:.4f}" if isinstance(value, float) else f"  {key}: {value}")
+        self._save_split_predictions(
+            dataset,
+            pred_output,
+            split_name=split_name,
+            metrics=metrics,
+        )
+        return metrics
+
     def evaluate_and_visualize(self, val_dataset, test_dataset):
-        """Run evaluation and create visualization plots."""
+        """Score val/test, write metrics and prediction JSON. No plots."""
         combine_eval_splits = self.data_config.get("combine_eval_splits", False)
 
         if combine_eval_splits:
-            print("\n" + "=" * 80)
-            print("Running final evaluation on combined validation + test set...")
-            print("=" * 80)
-
             combined_dataset = ConcatDataset([val_dataset, test_dataset])
             print(
                 f"  - Combined eval dataset size: {len(combined_dataset)} "
                 f"(val={len(val_dataset)} + test={len(test_dataset)})"
             )
-
-            combined_results = self.trainer.evaluate(combined_dataset, metric_key_prefix="combined")
-            print("\nFinal Combined Results:")
-            for key, value in combined_results.items():
-                print(f"  {key}: {value:.4f}" if isinstance(value, float) else f"  {key}: {value}")
-
-            print("\nGenerating ROC and PR curves for combined validation + test set...")
-            combined_pred_output = self.trainer.predict(combined_dataset)
-            c_labels, c_probs = self._pred_to_labels_and_probs(combined_pred_output)
-            plot_all_curves(
-                c_labels,
-                c_probs,
-                os.path.join(self.training_config['output_dir'], 'plots_combined')
-            )
-            self._save_split_predictions(
-                combined_dataset,
-                combined_pred_output,
-                split_name="combined",
-                metrics=combined_results,
+            combined_results = self._score_and_save_split(
+                combined_dataset, "combined", "combined"
             )
             return combined_results, combined_results
 
-        # Evaluate on validation set
-        print("\n" + "=" * 80)
-        print("Running final evaluation on validation set...")
-        print("=" * 80)
-        
-        eval_results = self.trainer.evaluate()
-        print("\nFinal Validation Results:")
-        for key, value in eval_results.items():
-            print(f"  {key}: {value:.4f}" if isinstance(value, float) else f"  {key}: {value}")
-        
-        # Generate validation plots
-        print("\nGenerating ROC and PR curves for validation set...")
-        pred_output = self.trainer.predict(val_dataset)
-        v_labels, v_probs = self._pred_to_labels_and_probs(pred_output)
-        plot_all_curves(v_labels, v_probs, os.path.join(self.training_config['output_dir'], 'plots_validation'))
-        self._save_split_predictions(
-            val_dataset,
-            pred_output,
-            split_name="validation",
-            metrics=eval_results,
-        )
-        
-        # Evaluate on test set
-        print("\n" + "=" * 80)
-        print("Running evaluation on test set...")
-        print("=" * 80)
-        
-        test_results = self.trainer.evaluate(test_dataset, metric_key_prefix="test")
-        print("\nFinal Test Results:")
-        for key, value in test_results.items():
-            print(f"  {key}: {value:.4f}" if isinstance(value, float) else f"  {key}: {value}")
-        
-        # Generate test plots
-        print("\nGenerating ROC and PR curves for test set...")
-        test_pred_output = self.trainer.predict(test_dataset)
-        t_labels, t_probs = self._pred_to_labels_and_probs(test_pred_output)
-        plot_all_curves(t_labels, t_probs, os.path.join(self.training_config['output_dir'], 'plots_test'))
-        self._save_split_predictions(
-            test_dataset,
-            test_pred_output,
-            split_name="test",
-            metrics=test_results,
-        )
-        
+        eval_results = self._score_and_save_split(val_dataset, "validation", "eval")
+        test_results = self._score_and_save_split(test_dataset, "test", "test")
         return eval_results, test_results
     
     def restore_weights_from_checkpoint(
@@ -861,7 +815,7 @@ class TehrClassifierTrainer:
     def _pred_to_labels_and_probs(self, pred_output):
         """
         Convert a PredictionOutput into 1-D numpy arrays suitable for sklearn
-        metrics and the plot_all_curves helper.
+        metrics and the saved ``*_results.json``.
 
         - label_ids may be 1-D class indices or 2-D one-hot; we always return
           1-D class indices.
@@ -957,20 +911,6 @@ class TehrClassifierTrainer:
             f"{split_name}_results.json",
         )
 
-    def _generate_plots(self, pred_output, plot_dir_name: str):
-        """Helper to generate ROC and PR curves."""
-        logits = pred_output.predictions
-        if isinstance(logits, tuple):
-            logits = logits[0]
-        
-        probs = self._logits_to_pos_probs(logits)
-        labels = pred_output.label_ids
-        
-        # Create plots
-        plot_output_dir = os.path.join(self.training_config['output_dir'], plot_dir_name)
-        plot_all_curves(labels, probs, plot_output_dir)
-        print(f"  - Plots saved to: {plot_output_dir}")
-    
     def run(self, resume_from_checkpoint: str | None = None):
         return self.run_full_pipeline(resume_from_checkpoint=resume_from_checkpoint)
 
@@ -1022,8 +962,8 @@ class TehrClassifierTrainer:
 
         Recovers the metrics for a run whose training was killed after its last
         checkpoint but before the final evaluation — the usual outcome when a
-        job hits the wall clock. Writes the same ``results/test_results.json``
-        and ``plots_test/`` layout a completed run would.
+        job hits the wall clock. Writes ``results/test_results.json`` (metrics
+        plus labels/probs). No ROC/PR plots.
 
         The train and tuning splits are never loaded: they cost a full pass over
         hundreds of thousands of examples and are not needed for a test-only score.
@@ -1064,28 +1004,7 @@ class TehrClassifierTrainer:
         # checkpoints, which never fire here; the test split stands in for it.
         self.create_trainer(test_dataset, test_dataset, collator, run_name)
 
-        print("\n" + "=" * 80)
-        print("Running evaluation on test set...")
-        print("=" * 80)
-        test_results = self.trainer.evaluate(test_dataset, metric_key_prefix="test")
-        print("\nFinal Test Results:")
-        for key, value in test_results.items():
-            print(f"  {key}: {value:.4f}" if isinstance(value, float) else f"  {key}: {value}")
-
-        print("\nGenerating ROC and PR curves for test set...")
-        test_pred_output = self.trainer.predict(test_dataset)
-        t_labels, t_probs = self._pred_to_labels_and_probs(test_pred_output)
-        plot_all_curves(
-            t_labels,
-            t_probs,
-            os.path.join(self.training_config["output_dir"], "plots_test"),
-        )
-        self._save_split_predictions(
-            test_dataset,
-            test_pred_output,
-            split_name="test",
-            metrics=test_results,
-        )
+        test_results = self._score_and_save_split(test_dataset, "test", "test")
 
         if self.local_rank == 0:
             self._write_eval_provenance(checkpoint_path, n_test=len(test_dataset))

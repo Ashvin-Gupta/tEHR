@@ -106,7 +106,7 @@ Shared pieces (not experiments): `src/baselines/base.py`, `src/baselines/hf_clas
 | Metrics / ROC / PR / ECE **plots** | `src/evaluations/evaluations.py` |
 | Re-score a checkpoint | sbatch `… evaluate` → `run.py --eval_only` (not `src/evaluations/`) |
 
-`src/training/` is the tEHR pipeline (CPT + linear head). `src/baselines/` is every comparison method, including prompt SFT; **file names match experiment names**. Every job writes under `output_dir/seed_<n>/`. `src/evaluations/` only scores arrays and writes plots — it does not launch jobs. Prompt SFT still uses `torchrun` because it trains a full LLM with LoRA.
+`src/training/` is the tEHR pipeline (CPT + linear head). `src/baselines/` is every comparison method, including prompt SFT; **file names match experiment names**. Every job writes under `output_dir/seed_<n>/`. `src/evaluations/` scores arrays and writes metrics JSON — it does not launch jobs or draw ROC/PR plots. Prompt SFT still uses `torchrun` because it trains a full LLM with LoRA.
 
 ## Examples
 

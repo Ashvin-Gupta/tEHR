@@ -1099,7 +1099,7 @@ class EncoderBaseline:
             data_loader: DataLoader instance
             device: Device to run on
             split_name: Name of the split
-            save_artifacts: If False, skip plots/JSON (used for mid-epoch matched evals)
+            save_artifacts: If False, skip JSON (used for mid-epoch matched evals)
         
         Returns:
             Dictionary of metrics

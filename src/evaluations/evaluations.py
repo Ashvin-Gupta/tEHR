@@ -1,5 +1,5 @@
 """
-Binary classification metrics and plots (AUROC, AUPR, ECE).
+Binary classification metrics (AUROC, AUPR, ECE). Optional ROC/PR plots.
 """
 from __future__ import annotations
 
@@ -452,27 +452,33 @@ def write_split_artifacts(
     labels,
     probs,
     *,
-    plots: bool = True,
+    plots: bool = False,
     extra: dict | None = None,
 ) -> dict:
-    """Score a split, print metrics, and write plots + ``{split}_results.json``."""
+    """Score a split, print metrics, and write ``{split}_results.json``.
+
+    ROC/PR/calibration PNGs are off by default (they cost a full extra
+    forward pass in the HF trainer path, and dpi=300 matplotlib on the
+    baseline path). Pass ``plots=True`` only if you explicitly want them.
+    Labels/probs JSON is always written so analysis can recompute metrics.
+    """
     labels = np.asarray(labels)
     probs = np.asarray(probs)
     metrics = compute_binary_metrics(labels, probs)
     print_results(metrics, split_name)
     if plots:
         plot_all_curves(labels, probs, os.path.join(output_dir, "plots", split_name))
-        payload = {
-            "metrics": metrics,
-            "labels": labels.tolist(),
-            "probs": probs.tolist(),
-        }
-        if extra:
-            payload.update(extra)
-        save_results(
-            payload,
-            os.path.join(output_dir, "results"),
-            f"{split_name}_results.json",
-        )
+    payload = {
+        "metrics": metrics,
+        "labels": labels.tolist(),
+        "probs": probs.tolist(),
+    }
+    if extra:
+        payload.update(extra)
+    save_results(
+        payload,
+        os.path.join(output_dir, "results"),
+        f"{split_name}_results.json",
+    )
     return metrics
 

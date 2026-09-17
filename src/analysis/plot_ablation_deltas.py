@@ -142,7 +142,7 @@ def _task_colors(n: int):
 
 def plot_deltas(
     mat: np.ndarray,
-    yerr: np.ndarray,
+    yerr: np.ndarray | None,
     *,
     ylabel: str,
     out_path: Path,
@@ -157,24 +157,24 @@ def plot_deltas(
     ax.axhline(0.0, color="#333333", linewidth=0.9, linestyle="--", zorder=1)
 
     for j, ((_, task_label), off, color) in enumerate(zip(TASKS, offsets, colors)):
-        ax.bar(
-            x + off,
-            mat[:, j],
+        bar_kw = dict(
             width=width * 0.94,
             color=color,
             edgecolor="black",
             linewidth=0.45,
             label=task_label,
-            yerr=yerr[:, :, j],
-            error_kw={
+            zorder=2,
+        )
+        if yerr is not None:
+            bar_kw["yerr"] = yerr[:, :, j]
+            bar_kw["error_kw"] = {
                 "ecolor": "0.15",
                 "elinewidth": 0.7,
                 "capsize": 1.6,
                 "capthick": 0.7,
                 "zorder": 3,
-            },
-            zorder=2,
-        )
+            }
+        ax.bar(x + off, mat[:, j], **bar_kw)
 
     ax.set_xticks(x)
     ax.set_xticklabels([label for _, label in ABLATIONS], fontsize=10)
@@ -195,9 +195,12 @@ def plot_deltas(
         columnspacing=1.4,
         borderaxespad=0.0,
     )
-    low = mat - yerr[0]
-    high = mat + yerr[1]
-    finite = np.concatenate([low[np.isfinite(low)], high[np.isfinite(high)]])
+    if yerr is not None:
+        low = mat - yerr[0]
+        high = mat + yerr[1]
+        finite = np.concatenate([low[np.isfinite(low)], high[np.isfinite(high)]])
+    else:
+        finite = mat[np.isfinite(mat)]
     pad = 0.008
     ax.set_ylim(min(finite.min(), 0.0) - pad, max(finite.max(), 0.0) + pad)
     fig.subplots_adjust(left=0.07, right=0.995, top=0.98, bottom=0.24)
@@ -214,6 +217,11 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--csv", type=Path, default=DEFAULT_CSV)
     parser.add_argument("--out-dir", type=Path, default=DEFAULT_OUT_DIR)
+    parser.add_argument(
+        "--no-ci",
+        action="store_true",
+        help="Write delta_auroc_no_ci.png without error bars (AUROC only).",
+    )
     args = parser.parse_args()
     if not args.csv.is_file():
         raise SystemExit(f"CSV not found: {args.csv}")
@@ -221,6 +229,14 @@ def main() -> None:
     data = load_preferred(args.csv)
     out_dir = Path(args.out_dir)
     auroc, auroc_err = metric_matrix(data, "auroc")
+    if args.no_ci:
+        plot_deltas(
+            auroc,
+            None,
+            ylabel="Δ AUROC (ablation − tEHR)",
+            out_path=out_dir / "delta_auroc_no_ci.png",
+        )
+        return
     plot_deltas(
         auroc,
         auroc_err,
