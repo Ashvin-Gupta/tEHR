@@ -152,7 +152,20 @@ def summarise_groups(
             "ci": ci,
         }
         for metric in METRIC_KEYS:
-            stats = mean_t_ci([m[metric] for m in members], ci=ci)
+            vals = [
+                m[metric]
+                for m in members
+                if m.get(metric) not in ("", None)
+            ]
+            if not vals:
+                summary[f"{metric}_mean"] = ""
+                summary[f"{metric}_sd"] = ""
+                summary[f"{metric}_min"] = ""
+                summary[f"{metric}_max"] = ""
+                summary[f"{metric}_lo"] = ""
+                summary[f"{metric}_hi"] = ""
+                continue
+            stats = mean_t_ci(vals, ci=ci)
             summary[f"{metric}_mean"] = stats["mean"]
             summary[f"{metric}_sd"] = stats["sd"]
             summary[f"{metric}_min"] = stats["min"]

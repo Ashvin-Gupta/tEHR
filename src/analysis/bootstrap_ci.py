@@ -23,7 +23,14 @@ import numpy as np
 import yaml
 
 from src.evaluations.evaluations import bootstrap_binary_ci
-from src.experiment_map import CPRD_TASKS, DATASETS, MIMIC_TASKS, MODELS, SPECS
+from src.experiment_map import (
+    CPRD_TASKS,
+    DATASETS,
+    EHRSHOT_TASKS,
+    MIMIC_TASKS,
+    MODELS,
+    SPECS,
+)
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_LOCAL = REPO_ROOT / "configs" / "local.yaml"
@@ -59,7 +66,10 @@ LEGACY_EXPERIMENT_ALIASES: dict[str, str] = {
     "prompt": "zero_shot",
 }
 
-_TASKS = tuple(sorted(set(MIMIC_TASKS) | set(CPRD_TASKS), key=len, reverse=True))
+_TASKS = tuple(
+    sorted(set(MIMIC_TASKS) | set(CPRD_TASKS) | set(EHRSHOT_TASKS), key=len, reverse=True)
+)
+_POOLS = ("mean-v2", "mean")
 _MODELS = tuple(MODELS)
 _DATASETS = tuple(DATASETS)
 
@@ -93,6 +103,12 @@ def parse_run_dirname(name: str) -> dict[str, Any] | None:
     if stem.endswith("-rerun"):
         variant = "rerun"
         stem = stem[: -len("-rerun")]
+    for pool in _POOLS:
+        suffix = f"-{pool}"
+        if stem.endswith(suffix):
+            variant = pool if variant is None else f"{variant}+{pool}"
+            stem = stem[: -len(suffix)]
+            break
 
     dataset = None
     rest = stem
@@ -174,18 +190,31 @@ def extract_labels_probs(
     return y, p, clusters
 
 
+_PRED_RELATIVE = (
+    "results/test_results.json",
+    "results/held_out_results.json",
+    "test_results.json",
+    "held_out_results.json",
+)
+
+
 def find_test_prediction(run_dir: Path) -> Path | None:
-    """Prefer ``test_results.json`` over ``held_out_results.json``; seed_42 if present."""
+    """Prefer ``test_results.json`` over ``held_out_results.json``.
+
+    Only checks known relative paths. Do not rglob Results trees: they contain
+    multi-GB checkpoints and NFS listings hang.
+    """
     found: list[Path] = []
-    for fname in TEST_FILENAMES:
-        found.extend(run_dir.rglob(fname))
+    for rel in _PRED_RELATIVE:
+        p = run_dir / rel
+        if p.is_file():
+            found.append(p)
     if not found:
         return None
 
-    def rank(p: Path) -> tuple[int, int, int]:
+    def rank(p: Path) -> tuple[int, int]:
         is_test = 0 if p.name == "test_results.json" else 1
-        in_seed = 0 if "seed_" in p.parts else 1
-        return (is_test, in_seed, -int(p.stat().st_mtime))
+        return (is_test, -int(p.stat().st_mtime))
 
     found.sort(key=rank)
     return found[0]
