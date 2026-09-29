@@ -20,6 +20,7 @@ from src.baselines.base import setup_output_dir
 from src.evaluations.evaluations import compute_binary_metrics, save_results, write_split_artifacts
 from src.data.token_filter import should_include_token
 from src.data.dataset_factory import get_dataset, is_aces_dataset
+from src.training.training_utils import skip_final_eval, training_max_steps
 
 
 def filter_tokens(token_list: List[str]) -> List[str]:
@@ -967,6 +968,9 @@ class EncoderBaseline:
             
             total_loss += loss.item()
             num_batches += 1
+            max_steps = training_max_steps(self.training_config)
+            if max_steps and num_batches >= max_steps:
+                break
         
         return self._reduce_mean(total_loss, num_batches, device)
 
@@ -1381,7 +1385,10 @@ class EncoderBaseline:
         num_epochs = int(self.training_config.get('epochs', 1))
         from src.training.eval_schedule import get_eval_epoch_fractions
         raw_fractions = self.training_config.get("eval_epoch_fractions", "default")
-        use_fraction_schedule = raw_fractions not in (None, False, "steps", "legacy")
+        use_fraction_schedule = (
+            raw_fractions not in (None, False, "steps", "legacy")
+            and not training_max_steps(self.training_config)
+        )
         fractions = get_eval_epoch_fractions(self.training_config) if use_fraction_schedule else []
         n_train = len(filtered_datasets["train"])
         convergence_path = os.path.join(self.output_dir, "results", "convergence.jsonl")
@@ -1464,6 +1471,11 @@ class EncoderBaseline:
             print(f"  - Best model saved to: {final_model_dir}")
         self._barrier()
         
+        if skip_final_eval(self.training_config):
+            if self._is_rank0():
+                print("skip_final_eval: leaving after the training loop (smoke)")
+            return None, None
+
         # Final evaluation (on best model)
         val_metrics = self.evaluate(val_loader, device, 'validation')
         test_metrics = self.evaluate(test_loader, device, 'test')
@@ -1497,19 +1509,33 @@ class EncoderBaseline:
             ["train", "tuning", "held_out"], task_override=stage2_task
         )
         filtered = {k: FilteredTokenDataset(v) for k, v in datasets.items()}
-        self.build_vocabulary(filtered)
         weight = resolve_weight_path(checkpoint_path)
-        self.create_model()
-        self.model = self.model.to(device)
-        state = torch.load(weight, map_location=device)
-        if isinstance(state, dict) and (
-            "encoder_state_dict" in state
-            or "decoder_state_dict" in state
-            or "vocab" in state
-        ):
+        probe = torch.load(weight, map_location="cpu")
+        bundled = isinstance(probe, dict) and (
+            "encoder_state_dict" in probe
+            or "decoder_state_dict" in probe
+            or "vocab" in probe
+        )
+        del probe
+        if bundled:
+            # Stage-1 MLM/NTP bundle already carries vocab + weights.
             self._load_pretrained_checkpoint(weight, device)
         else:
-            self.model.load_state_dict(state, strict=False)
+            # Classifier `best_model.pt` is a raw state_dict. Restore the
+            # stage-1 vocab first so token ids match the saved embeddings.
+            mlm = (self.pretrain_config or {}).get("pretrained_checkpoint")
+            if mlm and os.path.isfile(mlm):
+                self._load_pretrained_checkpoint(mlm, device)
+            else:
+                self.build_vocabulary(filtered)
+                self.create_model()
+                self.model = self.model.to(device)
+            state = torch.load(weight, map_location=device)
+            incompatible = self.model.load_state_dict(state, strict=False)
+            if incompatible.missing_keys:
+                print(f"  - Missing keys: {incompatible.missing_keys[:8]}")
+            if incompatible.unexpected_keys:
+                print(f"  - Unexpected keys: {incompatible.unexpected_keys[:8]}")
 
         batch_size = int(self.training_config.get("batch_size", 32))
         workers = int(self.training_config.get("dataloader_num_workers", 4))

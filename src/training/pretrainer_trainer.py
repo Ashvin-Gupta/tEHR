@@ -12,7 +12,7 @@ from transformers import DataCollatorForLanguageModeling
 from unsloth import FastLanguageModel
 from trl import SFTTrainer, SFTConfig
 
-from src.training.training_utils import extract_and_pack, init_wandb
+from src.training.training_utils import apply_hf_step_limit, extract_and_pack, init_wandb
 from src.data.dataset_factory import get_dataset
 from src.training.eval_schedule import append_max_runtime_callback
 
@@ -330,6 +330,16 @@ class TehrStage1Trainer:
                     # Get datasets that returns dict of text,label and subject id
                     train_base = get_dataset(self.data_config['dataset'], self.data_config, "train")
                     val_base = get_dataset(self.data_config['dataset'], self.data_config, "tuning")
+                    max_p = int(self.training_config.get("smoke_max_patients") or 0)
+                    if max_p > 0:
+                        from torch.utils.data import Subset
+                        n_train = min(max_p, len(train_base))
+                        n_val = min(max_p, len(val_base))
+                        train_base = Subset(train_base, range(n_train))
+                        val_base = Subset(val_base, range(n_val))
+                        logger.info(
+                            f"  - smoke_max_patients: train={n_train} val={n_val}"
+                        )
 
                     # Process Training Data
                     extract_and_pack(train_base, self.tokenizer, max_length, train_cache_path)
@@ -444,55 +454,41 @@ class TehrStage1Trainer:
             print(f"  {msg}", flush=True)
 
         # Define the SFT configuration with all your detailed parameters
-        training_args = SFTConfig(
+        sft_kwargs = dict(
             output_dir=self.training_config['output_dir'],
             overwrite_output_dir=self.training_config.get('overwrite_output_dir', True),
-            
             packing=False, # Have manually packed the data ourselves
             max_seq_length=self.model_config['max_length'],
             dataset_num_proc=4,
-
-            # Training Hyperparameters
             num_train_epochs=self.training_config['epochs'],
             per_device_train_batch_size=self.training_config['batch_size'],
             per_device_eval_batch_size=self.training_config.get('eval_batch_size', self.training_config['batch_size']),
             learning_rate=float(self.training_config['learning_rate']),
             weight_decay=float(self.training_config.get('weight_decay', 0.01)),
             warmup_steps=self.training_config.get('warmup_steps', 500),
-            
-            # Logging and evaluation
             logging_steps=self.training_config.get('logging_steps', 100),
             eval_strategy="steps" if do_eval else "no",
             eval_steps=eval_steps or 500,
-            
-            # Saving
             save_strategy="steps",
             save_steps=save_steps or 1000,
             save_total_limit=self.training_config.get('save_total_limit', 2),
             load_best_model_at_end=load_best,
             metric_for_best_model="loss" if load_best else None,
-            
-            # Performance
             fp16=use_fp16,
             bf16=use_bf16,
             gradient_accumulation_steps=self.training_config.get('gradient_accumulation_steps', 1),
             gradient_checkpointing=self.training_config.get('gradient_checkpointing', False),
-            # Avoid an extra NCCL allgather every step in Unsloth's
-            # get_batch_samples; that gather is what hangs if ranks desync at eval.
             average_tokens_across_devices=False,
-            
-            # System
             report_to=report_to,
             run_name=run_name,
             ddp_find_unused_parameters=False,
             gradient_checkpointing_kwargs={"use_reentrant": False},
-            
-            # Other
             remove_unused_columns=False,
-            # Since we use a standard Dataset now, num_workers is safe to use
             dataloader_num_workers=self.training_config.get('dataloader_num_workers', 8),
             dataloader_drop_last=True,
         )
+        apply_hf_step_limit(sft_kwargs, self.training_config)
+        training_args = SFTConfig(**sft_kwargs)
 
         logger.info("\nInitializing SFTTrainer...")
         print("\nInitializing SFTTrainer...", flush=True)

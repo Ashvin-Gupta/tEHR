@@ -39,6 +39,26 @@ def _pred_time(value) -> Optional[datetime]:
     return None
 
 
+def _subset_labels_both_classes(rows: List[dict], n: int) -> List[dict]:
+    """Cap to ``n`` labels while keeping both classes when they exist.
+
+    Taking ``rows[:n]`` on a rare-event task (ICU mortality ~8%) often yields
+    an all-negative slice, which sklearn's logistic regression cannot fit.
+    """
+    if n >= len(rows):
+        return rows
+    pos_idx = [i for i, r in enumerate(rows) if int(r["label"]) == 1]
+    neg_idx = [i for i, r in enumerate(rows) if int(r["label"]) != 1]
+    if not pos_idx or not neg_idx:
+        return rows[:n]
+    n_pos = min(len(pos_idx), max(1, n // 2))
+    n_neg = min(len(neg_idx), n - n_pos)
+    if n_pos + n_neg < n:
+        n_pos = min(len(pos_idx), n - n_neg)
+    keep = set(pos_idx[:n_pos] + neg_idx[:n_neg])
+    return [r for i, r in enumerate(rows) if i in keep]
+
+
 class CLMBRBaseline(BaseBaseline):
     """EHRSHOT-style linear probe on frozen CLMBR-T representations."""
 
@@ -94,6 +114,17 @@ class CLMBRBaseline(BaseBaseline):
                     "label": int(lab or 0),
                 }
             )
+        max_labels = (self.config.get("clmbr") or {}).get("max_labels")
+        if max_labels:
+            orig = len(rows)
+            n = min(int(max_labels), orig)
+            if n < orig:
+                rows = _subset_labels_both_classes(rows, n)
+                n_pos = sum(int(r["label"]) == 1 for r in rows)
+                print(
+                    f"  clmbr.max_labels={len(rows)} "
+                    f"(of {orig} {split}; {n_pos} positive)"
+                )
         return rows
 
     def _extract_split(self, split: str) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -166,6 +197,14 @@ class CLMBRBaseline(BaseBaseline):
         Xv = scaler.transform(X_val)
         best_clf, best_auc, best_C = None, -1.0, None
         from sklearn.metrics import roc_auc_score
+
+        n_classes = int(np.unique(y_train).size)
+        if n_classes < 2:
+            raise ValueError(
+                "CLMBR probe train labels contain a single class "
+                f"{sorted(set(int(x) for x in y_train))}. "
+                "Increase clmbr.max_labels or use a both-class subset."
+            )
 
         for C in self.C_grid:
             clf = LogisticRegression(

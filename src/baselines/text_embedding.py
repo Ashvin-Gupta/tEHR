@@ -20,6 +20,7 @@ from src.baselines.base import setup_output_dir
 from src.data.base_dataset import tokens_to_phrases
 from src.data.dataset_factory import get_dataset
 from src.evaluations.evaluations import compute_binary_metrics, write_split_artifacts
+from src.training.training_utils import skip_final_eval, training_max_steps
 
 
 # ---------------------------------------------------------------------------
@@ -550,7 +551,10 @@ class TextEmbeddingBaseline:
 
         from src.training.eval_schedule import get_eval_epoch_fractions
         raw_fractions = self.training_config.get("eval_epoch_fractions", "default")
-        use_fraction_schedule = raw_fractions not in (None, False, "steps", "legacy")
+        use_fraction_schedule = (
+            raw_fractions not in (None, False, "steps", "legacy")
+            and not training_max_steps(self.training_config)
+        )
         fractions = get_eval_epoch_fractions(self.training_config) if use_fraction_schedule else []
         n_train = len(datasets["train"])
         convergence_path = os.path.join(self.output_dir, "results", "convergence.jsonl")
@@ -630,6 +634,9 @@ class TextEmbeddingBaseline:
                     optimizer.step()
                     total_loss += loss.item()
                     n_batches += 1
+                    max_steps = training_max_steps(self.training_config)
+                    if max_steps and n_batches >= max_steps:
+                        break
 
                 avg_loss = total_loss / max(n_batches, 1)
                 print(f"  Epoch {epoch + 1} train loss: {avg_loss:.4f}")
@@ -718,6 +725,10 @@ class TextEmbeddingBaseline:
 
         datasets = self._load_datasets()
         self._train(datasets, device)
+
+        if skip_final_eval(self.training_config):
+            print("skip_final_eval: leaving after the training loop (smoke)")
+            return None, None
 
         val_metrics = self._evaluate_split(datasets["tuning"], "tuning", device)
         test_metrics = self._evaluate_split(datasets["held_out"], "held_out", device)

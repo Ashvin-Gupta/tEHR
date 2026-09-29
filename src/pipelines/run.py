@@ -19,7 +19,7 @@ import os
 import pprint
 
 from src.experiment_map import get_spec
-from src.training.config_utils import load_config
+from src.training.config_utils import apply_smoke_config, load_config
 from src.training.training_utils import (
     check_clobber,
     find_eval_checkpoint,
@@ -111,6 +111,17 @@ def _parse_args() -> argparse.Namespace:
 def main() -> None:
     args = _parse_args()
     config = load_config(args.config_filepath)
+    if os.environ.get("TEHR_SMOKE", "").strip().lower() in {"1", "true", "yes", "on"}:
+        config = apply_smoke_config(config, eval_only=bool(args.eval_only))
+        print(
+            "TEHR_SMOKE=1: outputs under _smoke, "
+            f"max_steps={config.get('training', {}).get('max_steps')} "
+            f"skip_final_eval={config.get('training', {}).get('skip_final_eval')}"
+        )
+        if args.eval_only:
+            # _smoke trees are disposable; a train smoke's result files must
+            # not block the matching evaluate smoke.
+            args.overwrite = True
     experiment = _experiment(config)
     spec = get_spec(experiment)
 

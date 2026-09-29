@@ -1,4 +1,4 @@
-# Shared GPU experiment routing. Sourced by scripts/site_a/run.sh and site_b/run.sh
+# Shared GPU experiment routing. Sourced by scripts/site_*/run.sh
 # after local.env has been loaded and the config has been resolved.
 #
 # Experiment lists (ALL_EXPERIMENTS, LLM_DDP_EXPERIMENTS, …) are loaded in
@@ -60,6 +60,10 @@ dispatch_experiment() {
         echo "ERROR: 'evaluate' is not supported for experiment '${EXPERIMENT}'."
         echo "  Supported: ${EVAL_SUPPORTED[*]}"
         exit 1
+    fi
+    if [[ -n "${TEHR_SMOKE:-}" ]]; then
+        echo "TEHR_SMOKE=${TEHR_SMOKE} (1-step / tiny eval under results/_smoke)"
+        export TEHR_SMOKE
     fi
     if is_in "${EXPERIMENT}" "${NEEDS_MODEL[@]}"; then
         require_model

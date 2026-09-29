@@ -28,7 +28,7 @@ from src.evaluations.eval_resume import (
     maybe_flush_partial,
     partial_pred_path,
 )
-from src.training.training_utils import init_wandb, resolve_binary_label_token_ids
+from src.training.training_utils import apply_hf_step_limit, init_wandb, resolve_binary_label_token_ids, skip_final_eval
 
 import logging
 logger = logging.getLogger(__name__)
@@ -580,6 +580,17 @@ class SFTBaseline:
         print("  - Loading held_out shards + building prediction examples...", flush=True)
         held_out = self._load_split("held_out")
         print(f"    {len(held_out.samples):,} samples ready", flush=True)
+        max_samples = self.training_config.get("eval_max_samples")
+        if max_samples is not None:
+            n = int(max_samples)
+            subset = held_out.subset(n, seed=int(self.training_config.get("seed", 42)))
+            if subset is not held_out:
+                print(
+                    f"    eval_max_samples={n}: using {len(subset.samples):,} / "
+                    f"{len(held_out.samples):,}",
+                    flush=True,
+                )
+                held_out = subset
         return {"held_out": held_out}
 
     def _mid_train_eval_dataset(self, full_tuning: "_SFTDataset") -> "_SFTDataset":
@@ -659,7 +670,7 @@ class SFTBaseline:
             f"{len(mid_eval.samples):,} samples (CE loss + logit AUROC)",
             flush=True,
         )
-        sft_config = SFTConfig(
+        sft_kwargs = dict(
             output_dir=self.output_dir,
             overwrite_output_dir=bool(self.training_config.get("overwrite_output_dir", False)),
             num_train_epochs=int(self.training_config.get("epochs", 1)),
@@ -681,17 +692,16 @@ class SFTBaseline:
             load_best_model_at_end=False,
             report_to=report_to,
             max_length=max_length,
-            # Labels already mask the prompt (-100); do not ask TRL/Unsloth to
-            # re-derive completion-only loss from prompt/completion columns.
             completion_only_loss=False,
             packing=False,
             dataloader_num_workers=int(self.training_config.get("dataloader_num_workers", 0)),
             remove_unused_columns=False,
-            # DDP + checkpointing: non-reentrant required (see isa-mimic-run-5975278).
             gradient_checkpointing=True,
             gradient_checkpointing_kwargs={"use_reentrant": False},
             ddp_find_unused_parameters=False,
         )
+        apply_hf_step_limit(sft_kwargs, self.training_config)
+        sft_config = SFTConfig(**sft_kwargs)
 
         print("  Constructing SFTTrainer...", flush=True)
         sft_callbacks: List[Any] = [
@@ -858,6 +868,10 @@ class SFTBaseline:
         self.load_model()
         splits = self.prepare_datasets()
         self.train(splits, resume_from_checkpoint=resume_from_checkpoint)
+
+        if skip_final_eval(self.training_config):
+            print("skip_final_eval: leaving after the training loop (smoke)", flush=True)
+            return None, None
 
         # Switch to inference mode (Unsloth optimisation — skip for HF backend)
         if self.model_config.get("use_unsloth", True):

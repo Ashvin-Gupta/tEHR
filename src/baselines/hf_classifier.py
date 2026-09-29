@@ -19,6 +19,7 @@ from src.training.eval_schedule import (
     eval_optimizer_steps_from_fractions,
     get_eval_epoch_fractions,
 )
+from src.training.training_utils import apply_hf_step_limit, skip_final_eval
 from src.evaluations.evaluations import (
     compute_classification_metrics,
 )
@@ -146,6 +147,7 @@ class BaseLLMClassifierBaseline(BaseBaseline):
         )
         if ta_kwargs["gradient_checkpointing"]:
             ta_kwargs["gradient_checkpointing_kwargs"] = {"use_reentrant": False}
+        apply_hf_step_limit(ta_kwargs, self.training_config)
         return TrainingArguments(**ta_kwargs)
 
     def create_trainer(self, train_dataset, val_dataset, run_name: str):
@@ -285,9 +287,17 @@ class BaseLLMClassifierBaseline(BaseBaseline):
         self._restore_weights_from_checkpoint(checkpoint_path)
 
         datasets = self.load_datasets(splits=["held_out"])
+        held_out = datasets["held_out"]
+        max_n = self.training_config.get("eval_max_samples")
+        if max_n:
+            n = min(int(max_n), len(held_out))
+            if n < len(held_out):
+                held_out = torch.utils.data.Subset(held_out, range(n))
+                print(f"  - eval_max_samples={n}")
+        datasets["held_out"] = held_out
         # create_trainer needs a train slot for the fraction schedule math; the
         # test split stands in — no training loop runs.
-        self.create_trainer(datasets["held_out"], datasets["held_out"], "eval-only")
+        self.create_trainer(held_out, held_out, "eval-only")
 
         test_metrics = self.evaluate_split(datasets["held_out"], "held_out")
 
@@ -337,6 +347,10 @@ class BaseLLMClassifierBaseline(BaseBaseline):
             self.trainer.train(resume_from_checkpoint=resume_ckpt)
         else:
             self.trainer.train()
+
+        if skip_final_eval(self.training_config):
+            print("skip_final_eval: leaving after the training loop (smoke)")
+            return None, None
 
         val_metrics = self.evaluate_split(datasets["tuning"], "tuning")
         test_metrics = self.evaluate_split(datasets["held_out"], "held_out")

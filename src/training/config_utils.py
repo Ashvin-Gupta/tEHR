@@ -392,6 +392,50 @@ def build_config(
     return cfg
 
 
+def apply_smoke_config(config: Dict[str, Any], eval_only: bool = False) -> Dict[str, Any]:
+    """Redirect a resolved config to ``{results_root}/_smoke/...`` for 1-step / tiny evals.
+
+    Does not touch production ``seed_42/43/44`` trees. Honoured when ``TEHR_SMOKE=1``.
+    """
+    meta = config.setdefault("_meta", {})
+    meta["smoke"] = True
+    experiment = str(meta.get("experiment") or "")
+    training = config.setdefault("training", {})
+    orig = training.get("output_dir") or config.get("output_dir")
+    if not orig:
+        raise ValueError("apply_smoke_config: config has no training.output_dir")
+    orig = os.path.abspath(orig)
+    results_root = os.path.dirname(orig)
+    tag = os.path.basename(orig.rstrip(os.sep))
+    smoke_dir = os.path.join(results_root, "_smoke", tag)
+    training["output_dir"] = smoke_dir
+    config["output_dir"] = smoke_dir
+    config.setdefault("wandb", {})["enabled"] = False
+    training["warmup_steps"] = 0
+    training["overwrite_output_dir"] = True
+    training["eval_max_samples"] = int(training.get("eval_max_samples") or 8)
+    debug = config.setdefault("debug", {})
+    debug["enabled"] = True
+    debug["max_samples"] = int(debug.get("max_samples") or 8)
+    clmbr = config.setdefault("clmbr", {})
+    clmbr["max_labels"] = 16
+    # Previous all-negative 16-row caches must not be reused on a smoke retry.
+    clmbr["overwrite_embeddings"] = True
+    if eval_only:
+        training["skip_final_eval"] = False
+    else:
+        training["max_steps"] = 1
+        training["epochs"] = 1
+        training["eval_epoch_fractions"] = False
+        training["skip_final_eval"] = experiment != "zero_shot"
+        training["smoke_max_patients"] = 32
+        config.setdefault("model", {})["n_estimators"] = 2
+        config.setdefault("hyperparameter_search", {})["enabled"] = False
+        pretrain = config.setdefault("pretrain", {})
+        pretrain["force_pretrain"] = False
+    return config
+
+
 def save_config(config: Dict[str, Any], path: str) -> str:
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
     with open(path, "w") as f:

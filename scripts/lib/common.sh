@@ -24,11 +24,36 @@ if [[ -n "${CONDA_SETUP:-}" ]]; then
     fi
     set -- "${__conda_saved_args[@]}"
     unset __conda_saved_args
+elif [[ -n "${VENV_ACTIVATE:-}" ]]; then
+    if [[ ! -f "${VENV_ACTIVATE}" ]]; then
+        echo "ERROR: VENV_ACTIVATE not found: ${VENV_ACTIVATE}"
+        exit 1
+    fi
+    # shellcheck disable=SC1090
+    source "${VENV_ACTIVATE}"
 fi
 
 cd "${REPO_ROOT}"
 mkdir -p "${REPO_ROOT}/logs" "${REPO_ROOT}/configs/_resolved"
-export PYTHONPATH="${REPO_ROOT}${PYTHONPATH:+:${PYTHONPATH}}"
+
+# Triton compiles cuda_utils.c against Python.h. python3.11-libs on this
+# cluster does not ship headers; use a user-extracted python3.11-devel tree.
+if [[ -z "${PYTHON_INCLUDE_DIR:-}" ]]; then
+    _pyh_cand="${HOME}/.local/opt/python3.11-devel/usr/include/python3.11"
+    if [[ -f "${_pyh_cand}/Python.h" ]]; then
+        PYTHON_INCLUDE_DIR="${_pyh_cand}"
+    fi
+    unset _pyh_cand
+fi
+if [[ -n "${PYTHON_INCLUDE_DIR:-}" && -f "${PYTHON_INCLUDE_DIR}/Python.h" ]]; then
+    export PYTHON_INCLUDE_DIR
+    export CPATH="${PYTHON_INCLUDE_DIR}${CPATH:+:${CPATH}}"
+    export C_INCLUDE_PATH="${PYTHON_INCLUDE_DIR}${C_INCLUDE_PATH:+:${C_INCLUDE_PATH}}"
+    echo "Triton Python.h: ${PYTHON_INCLUDE_DIR}/Python.h"
+fi
+
+# sitecustomize.py patches sysconfig include so Triton's gcc -I finds Python.h.
+export PYTHONPATH="${REPO_ROOT}/scripts/lib:${REPO_ROOT}${PYTHONPATH:+:${PYTHONPATH}}"
 eval "$(python -m src.experiment_map emit_bash)"
 
 get_free_port() {

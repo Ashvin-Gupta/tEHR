@@ -83,21 +83,18 @@ class LLMClassifier(nn.Module):
 
         Unsloth's causal-LM wrapper sets ``_has_no_labels = True`` when LM labels
         are omitted (classification). That enables a broken
-        ``inputs_embeds *= attention_mask`` path if ``max_seq_length`` is stale
-        while sequences are longer. Hitting the inner model and clearing the
-        flag avoids it.
+        ``inputs_embeds *= attention_mask`` path **during training** if
+        ``max_seq_length`` is stale. Eval uses the July CausalLM path (one
+        unwrap) so last-token states match the original cluster. Train still
+        hits the inner decoder and clears the flag.
         """
         backbone = getattr(self.base_model, "model", self.base_model)
         inner = getattr(backbone, "model", None)
         if inner is not None:
             inner._has_no_labels = False
-            return inner(
-                input_ids=input_ids,
-                attention_mask=attention_mask,
-                output_hidden_states=True,
-                return_dict=True,
-            )
-        return backbone(
+        use_inner = inner is not None and self.training
+        model = inner if use_inner else backbone
+        return model(
             input_ids=input_ids,
             attention_mask=attention_mask,
             output_hidden_states=True,
@@ -129,9 +126,8 @@ class LLMClassifier(nn.Module):
             self._lora_verified = True
 
         outputs = self._forward_backbone(input_ids, attention_mask)
-        if hasattr(outputs, "last_hidden_state"):
-            hidden_states = outputs.last_hidden_state
-        else:
+        hidden_states = getattr(outputs, "last_hidden_state", None)
+        if hidden_states is None:
             hidden_states = outputs.hidden_states[-1]
 
         logits = self.classifier(self._pool(hidden_states, attention_mask))

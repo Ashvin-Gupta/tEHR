@@ -632,6 +632,11 @@ class ZeroShotBaseline(BaseBaseline):
         """Score one split, flushing partials and optionally a ``EVAL_SHARD`` slice."""
         texts, labels = self._collect_texts_labels(dataset)
         n_total = len(texts)
+        max_n = int((self.debug_config or {}).get("max_samples") or 0)
+        if max_n > 0 and max_n < n_total:
+            texts, labels = texts[:max_n], labels[:max_n]
+            n_total = len(texts)
+            print(f"  debug.max_samples={max_n}", flush=True)
         shard = parse_eval_shard()
         if shard:
             index, n_shards = shard

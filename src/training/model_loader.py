@@ -153,10 +153,13 @@ def load_pretrained_lora_model(
     )
 
     print(f"  - Loaded model and tokenizer via Unsloth (vocab size: {len(tokenizer)})")
+    tokenizer.padding_side = "right"
+    print(f"  - tokenizer.padding_side={tokenizer.padding_side} (last-token pooling)")
 
     has_lora = any("lora" in name.lower() for name, _ in model.named_parameters())
     if has_lora:
-        print("  - SUCCESS: Model has LoRA adapters applied with Unsloth kernels.")
+        n_lora = sum(1 for n, _ in model.named_parameters() if "lora" in n.lower())
+        print(f"  - SUCCESS: stage-1 checkpoint has {n_lora} LoRA tensors.")
     else:
         print("  - WARNING: No LoRA adapters detected in the loaded model!")
 

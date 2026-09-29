@@ -29,6 +29,7 @@ configs/local.yaml
 configs/_resolved/
 scripts/site_a/local.env
 scripts/site_b/local.env
+scripts/site_c/local.env
 
 # CLMBR weights and compiled maps (regenerate with python -m src.clmbr.build_maps)
 data/clmbr_t_base/

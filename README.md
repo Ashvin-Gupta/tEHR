@@ -5,12 +5,13 @@ EHR text modelling for clinical prediction on MIMIC-IV, CPRD, and EHRSHOT.
 ## Start here
 
 1. Copy [`configs/local.yaml.example`](configs/local.yaml.example) to `configs/local.yaml` (data and results paths).
-2. Copy `scripts/site_a/local.env.example` or `scripts/site_b/local.env.example` to `local.env` (conda, tokens).
+2. Copy `scripts/site_a/local.env.example`, `scripts/site_b/local.env.example`, or `scripts/site_c/local.env.example` to `local.env` (conda/venv, tokens).
 3. From the repository root, submit a job. That is the only way most people need to run experiments.
 
 ```bash
 sbatch scripts/site_a/run.sh <dataset> <experiment> [model] [task]
 sbatch scripts/site_b/run.sh <dataset> <experiment> [model] [task]
+sbatch scripts/site_c/run.sh <dataset> <experiment> [model] [task]
 ```
 
 `run.sh` builds a resolved YAML, then calls **`src/pipelines/run.py`**. That one Python file looks at `config['_meta']['experiment']` and starts the matching trainer. You do not pick a trainer on the command line.
@@ -99,7 +100,7 @@ Shared pieces (not experiments): `src/baselines/base.py`, `src/baselines/hf_clas
 
 | You want to… | Look here |
 |---|---|
-| Submit a job | `scripts/site_a/` or `scripts/site_b/` (`run.sh`, `run_cpu.sh`) |
+| Submit a job | `scripts/site_a/`, `scripts/site_b/`, or `scripts/site_c/` (`run.sh`, `run_cpu.sh`) |
 | Change hyperparameters | `configs/experiments/<experiment>.yaml` (plus `configs/models/`, `configs/tasks/`) |
 | Change a method | the Python file in the table above |
 | Merge dataset + experiment + model + paths | `src/training/config_utils.py` |
@@ -119,6 +120,8 @@ sbatch scripts/site_b/run.sh cprd tehr_stage1 qwen8
 sbatch scripts/site_b/run.sh cprd sft mistral 6m
 sbatch scripts/site_b/run.sh mimic text_embedding icu_mortality
 sbatch scripts/site_a/run_cpu.sh mimic xgboost_bow hospital_readmission
+sbatch scripts/site_c/run.sh mimic encoder icu_mortality
+sbatch scripts/site_c/run_cpu.sh mimic xgboost_bow icu_mortality
 sbatch scripts/site_b/run.sh ehrshot tehr_stage2 mistral icu_admission
 sbatch scripts/site_b/run.sh ehrshot ablation_hash mistral pancreatic_cancer
 sbatch scripts/site_b/run.sh mimic tehr_stage2 mistral hospital_readmission evaluate

@@ -287,6 +287,32 @@ def find_eval_checkpoint(output_dir: Optional[str]) -> Optional[str]:
     return None
 
 
+def training_max_steps(training_config: Optional[Dict[str, Any]]) -> int:
+    """Positive ``training.max_steps`` for short/smoke runs; else 0 (full run)."""
+    if not training_config:
+        return 0
+    try:
+        return max(0, int(training_config.get("max_steps") or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+def skip_final_eval(training_config: Optional[Dict[str, Any]]) -> bool:
+    return bool(training_config and training_config.get("skip_final_eval"))
+
+
+def apply_hf_step_limit(kwargs: Dict[str, Any], training_config: Dict[str, Any]) -> Dict[str, Any]:
+    """Cap HuggingFace/TRL Trainer to ``max_steps`` and skip eval/save/best-model."""
+    ms = training_max_steps(training_config)
+    if ms > 0:
+        kwargs["max_steps"] = ms
+        kwargs["load_best_model_at_end"] = False
+        kwargs["eval_strategy"] = "no"
+        kwargs["save_strategy"] = "no"
+        kwargs["metric_for_best_model"] = None
+    return kwargs
+
+
 def resolve_weight_path(checkpoint_path: str) -> str:
     """If ``checkpoint_path`` is a run directory, pick the weight file inside it."""
     if os.path.isfile(checkpoint_path):

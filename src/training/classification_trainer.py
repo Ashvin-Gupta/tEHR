@@ -20,7 +20,12 @@ from src.training.eval_schedule import (
 from torch.utils.data import ConcatDataset
 
 from src.data.classification_collator import ClassificationCollator
-from src.training.training_utils import compute_and_sort_by_length, init_wandb
+from src.training.training_utils import (
+    apply_hf_step_limit,
+    compute_and_sort_by_length,
+    init_wandb,
+    skip_final_eval,
+)
 from src.models.llm_classifier import LLMClassifier
 from src.training.model_loader import (
     load_pretrained_lora_model,
@@ -472,6 +477,11 @@ class TehrClassifierTrainer:
         save_safetensors = bool(self.training_config.get("save_safetensors", False))
 
         per_device_batch = int(self.training_config.get('batch_size', 8))
+        eval_batch = int(self.training_config.get('eval_batch_size', 8))
+        env_eval_bs = os.environ.get("TEHR_EVAL_BATCH_SIZE", "").strip()
+        if env_eval_bs:
+            eval_batch = int(env_eval_bs)
+            print(f"  - TEHR_EVAL_BATCH_SIZE={eval_batch} (overrides config eval_batch_size)")
         grad_accum = int(self.training_config.get('gradient_accumulation_steps', 1))
         raw_fractions = self.training_config.get("eval_epoch_fractions", "default")
         use_fraction_schedule = raw_fractions not in (None, False, "steps", "legacy")
@@ -506,7 +516,7 @@ class TehrClassifierTrainer:
             # Training hyperparameters
             num_train_epochs=int(self.training_config.get('epochs', 10)),
             per_device_train_batch_size=per_device_batch,
-            per_device_eval_batch_size=int(self.training_config.get('eval_batch_size', 8)),
+            per_device_eval_batch_size=eval_batch,
             learning_rate=float(self.training_config.get('learning_rate', 1e-3)),
             weight_decay=float(self.training_config.get('weight_decay', 0.01)),
             warmup_steps=int(self.training_config.get('warmup_steps', 100)),
@@ -540,6 +550,7 @@ class TehrClassifierTrainer:
             remove_unused_columns=False,
         )
         training_args_kwargs["save_safetensors"] = save_safetensors
+        apply_hf_step_limit(training_args_kwargs, self.training_config)
 
         training_args = TrainingArguments(**training_args_kwargs)
         
@@ -669,7 +680,8 @@ class TehrClassifierTrainer:
         print("\n" + "=" * 80)
         print("Warm-starting weights from checkpoint (LoRA adapters + classifier head)...")
         print("=" * 80)
-        print(f"  - Source checkpoint: {checkpoint_path}")
+        print(f"  - Stage 1 already loaded: {self.model_config.get('pretrained_checkpoint')}")
+        print(f"  - Overlaying stage 2 from: {checkpoint_path}")
 
         weights_file = os.path.join(checkpoint_path, "model.safetensors")
         if not os.path.exists(weights_file):
@@ -729,68 +741,105 @@ class TehrClassifierTrainer:
                 "classifier head will be randomly initialised."
             )
 
-        missing, unexpected = self.classifier_model.load_state_dict(transfer_state, strict=False)
-        print(f"  - Loaded {len(lora_keys)} LoRA parameter tensors.")
-        print(f"  - Loaded {len(head_keys)} classifier head tensors.")
+        # Snapshot live (stage-1 CPT) LoRA before overlay. Clone so in-place
+        # writes cannot alias the "before" tensors.
+        live_params = dict(self.classifier_model.named_parameters())
+        before_lora = {
+            k: live_params[k].detach().float().cpu().clone()
+            for k in lora_keys
+            if k in live_params
+        }
 
-        # Critical check: unexpected keys mean the key names in transfer_state
-        # do NOT exist in the current model — those weights were silently dropped.
-        if unexpected:
+        copied, skipped = 0, []
+        for key, value in transfer_state.items():
+            param = live_params.get(key)
+            if param is None:
+                skipped.append(key)
+                continue
+            src = value.detach().to(device=param.device, dtype=param.dtype)
+            if src.shape != param.shape:
+                raise RuntimeError(
+                    f"Shape mismatch for {key}: checkpoint {tuple(src.shape)} "
+                    f"vs model {tuple(param.shape)}"
+                )
+            param.data.copy_(src)
+            copied += 1
+
+        print(f"  - Copied {copied} tensors in-place ({len(lora_keys)} LoRA, {len(head_keys)} classifier).")
+        if skipped:
             print(
-                f"  - *** WARNING: {len(unexpected)} keys from the checkpoint could NOT "
-                f"be matched to the current model and were DROPPED (weights NOT loaded). "
-                f"This likely means a key-name mismatch between the checkpoint and the "
-                f"current model (e.g. different Unsloth/PEFT version). ***"
+                f"  - *** WARNING: {len(skipped)} keys from the checkpoint could NOT "
+                f"be matched to named_parameters and were DROPPED. ***"
             )
-            print("  - First 10 unmatched keys:")
-            for k in unexpected[:10]:
+            for k in skipped[:10]:
                 print(f"      {k}")
         else:
             print("  - All transfer keys matched the current model successfully.")
 
-        if missing:
-            # Non-LoRA / non-classifier missing keys are expected (base model weights).
-            unexpected_missing = [
-                k for k in missing
-                if any(kw in k for kw in lora_keywords) or k.startswith("classifier.")
-            ]
-            if unexpected_missing:
+        # Prove overlay: live LoRA must match stage-2 checkpoint, and (when
+        # stage 1 adapters are on disk) must differ from CPT LoRA.
+        after_state = dict(self.classifier_model.named_parameters())
+        lora_vs_ckpt = []
+        lora_vs_s1 = []
+        for key in lora_keys:
+            if key not in after_state:
+                continue
+            live = after_state[key].detach().float().cpu()
+            ckpt = transfer_state[key].detach().float().cpu()
+            lora_vs_ckpt.append(float((live - ckpt).abs().max()))
+            if key in before_lora:
+                lora_vs_s1.append(float((live - before_lora[key]).abs().max()))
+        if lora_vs_ckpt:
+            ckpt_max = max(lora_vs_ckpt)
+            print(f"  - LoRA vs stage-2 checkpoint: max |delta| = {ckpt_max:.6g}")
+            if ckpt_max > 1e-5:
+                raise RuntimeError(
+                    "Stage-2 LoRA overlay failed: live adapters do not match "
+                    f"{checkpoint_path} (max |delta|={ckpt_max:.6g})."
+                )
+        if lora_vs_s1:
+            s1_max = max(lora_vs_s1)
+            print(f"  - LoRA vs stage-1 (pre-overlay): max |delta| = {s1_max:.6g}")
+            if s1_max < 1e-8:
                 print(
-                    f"  - *** WARNING: {len(unexpected_missing)} LoRA/classifier keys are "
-                    f"missing from the checkpoint (will use random init): "
-                    f"{unexpected_missing[:5]}{'...' if len(unexpected_missing) > 5 else ''} ***"
+                    "  - *** WARNING: live LoRA is identical to stage-1 CPT. "
+                    "Stage-2 adapters did not change the weights (or stage 2 "
+                    "never moved them). ***"
                 )
+            else:
+                print("  - Stage-2 adapters overlaid on stage-1 CPT successfully.")
 
-        # ── Sanity-check: verify a LoRA weight was actually changed ──────────
-        # Use std and a specific element — LoRA A means are always ≈ 0 by init.
-        if lora_keys:
-            probe_key = lora_keys[0]
-            if probe_key in model_state and probe_key in transfer_state:
-                # Keep everything on CPU for comparison — state_dict() may
-                # return GPU tensors depending on where the model lives.
-                t_before = model_state[probe_key].float().cpu()
-                t_ckpt   = transfer_state[probe_key].float().cpu()
-                t_after  = self.classifier_model.state_dict()[probe_key].float().cpu()
-                logger.info(
-                    f"  - Sanity check on '{probe_key}':\n"
-                    f"      std  before={t_before.std().item():.6f}  "
-                    f"ckpt={t_ckpt.std().item():.6f}  "
-                    f"after={t_after.std().item():.6f}\n"
-                    f"      [0,0] before={t_before.flatten()[0].item():.8f}  "
-                    f"ckpt={t_ckpt.flatten()[0].item():.8f}  "
-                    f"after={t_after.flatten()[0].item():.8f}"
-                )
-                if not torch.allclose(t_after, t_ckpt, atol=1e-5):
-                    print("  - *** Sanity check FAILED: loaded tensor does not match checkpoint! ***")
-                elif torch.allclose(t_before, t_after, atol=1e-8):
+        cpt_dir = self.model_config.get("pretrained_checkpoint")
+        cpt_file = os.path.join(cpt_dir or "", "adapter_model.safetensors") if cpt_dir else ""
+        if lora_keys and cpt_file and os.path.exists(cpt_file):
+            try:
+                from safetensors.torch import load_file as _st_cpt
+                cpt_state = _st_cpt(cpt_file, device="cpu")
+
+                def _lora_tail(name: str) -> str:
+                    name = name.replace(".lora_A.default.weight", ".lora_A.weight")
+                    name = name.replace(".lora_B.default.weight", ".lora_B.weight")
+                    if "layers." in name:
+                        return name[name.index("layers."):]
+                    return name
+
+                cpt_by_tail = {_lora_tail(k): v for k, v in cpt_state.items() if "lora_" in k}
+                file_deltas = []
+                for key in lora_keys:
+                    tail = _lora_tail(key)
+                    if tail not in cpt_by_tail or key not in after_state:
+                        continue
+                    live = after_state[key].detach().float().cpu()
+                    cpt = cpt_by_tail[tail].detach().float().cpu()
+                    if live.shape == cpt.shape:
+                        file_deltas.append(float((live - cpt).abs().max()))
+                if file_deltas:
                     print(
-                        "  - *** Sanity check WARNING: tensor unchanged after load. "
-                        "The pretrained_checkpoint may already contain these LoRA values "
-                        "(expected if both checkpoints share the same pretraining base). ***"
+                        f"  - LoRA vs stage-1 adapter file: max |delta| = {max(file_deltas):.6g} "
+                        f"({len(file_deltas)} tensors)"
                     )
-                else:
-                    logger.info("  - Sanity check PASSED: LoRA weight matches checkpoint and differs from pre-load value.")
-        # ─────────────────────────────────────────────────────────────────────
+            except Exception as exc:
+                print(f"  - Could not compare against stage-1 adapter file: {exc}")
 
         logger.info("  - Training will start from step 0 with the above weights.")
 
@@ -950,6 +999,10 @@ class TehrClassifierTrainer:
         
         # Save
         self.save_model()
+
+        if skip_final_eval(self.training_config):
+            print("skip_final_eval: leaving after the training loop (smoke)")
+            return None, None
         
         # Evaluate
         eval_results, test_results = self.evaluate_and_visualize(val_dataset, test_dataset)
@@ -974,19 +1027,30 @@ class TehrClassifierTrainer:
         """
         print("\n" + "=" * 80)
         print("Evaluation-only run (test set, no training)")
-        print(f"  - Checkpoint: {checkpoint_path}")
+        print(f"  - Stage 1 (CPT / pretrained_checkpoint): {self.model_config.get('pretrained_checkpoint')}")
+        print(f"  - Stage 2 (LoRA + classifier head):     {checkpoint_path}")
         print("=" * 80)
 
         # Guard against any code path that would clear the run directory we are
         # reading the checkpoint from.
         self.training_config["overwrite_output_dir"] = False
+        # Original cluster eval used 1 example per GPU. Batch 8 on Unsloth 2026
+        # without FA2 can change last-token pooling. Keep 1 unless overridden.
+        if not os.environ.get("TEHR_EVAL_BATCH_SIZE", "").strip():
+            self.training_config["eval_batch_size"] = 1
+            print("  - eval_only: eval_batch_size=1 (matches original cluster)")
 
         self.load_pretrained_model()
+        if getattr(self, "tokenizer", None) is not None:
+            self.tokenizer.padding_side = "right"
         self.create_classifier()
         self.restore_weights_from_checkpoint(
             checkpoint_path,
             require_lora=bool(self.model_config.get("train_lora", False)),
         )
+        # Do not call FastLanguageModel.for_inference here. Original cluster
+        # eval used the Trainer eval path without it; the extra graph rewrite
+        # can change last-token states on Unsloth 2026.
 
         print("\n" + "=" * 80)
         print("Loading test dataset (held_out)...")
@@ -997,6 +1061,12 @@ class TehrClassifierTrainer:
                 test_dataset, split="held_out", shuffle_buckets=False, num_buckets=20
             )
         print(f"  - Test dataset: {len(test_dataset)} examples")
+        max_n = self.training_config.get("eval_max_samples")
+        if max_n:
+            n = min(int(max_n), len(test_dataset))
+            if n < len(test_dataset):
+                test_dataset = torch.utils.data.Subset(test_dataset, range(n))
+                print(f"  - eval_max_samples={n}")
         self._log_class_distribution(test_dataset, "test")
 
         collator = self.create_collator()
