@@ -5,14 +5,13 @@ from typing import Dict, Any
 from torch.utils.data import Dataset
 
 from src.data.cprd_dataset import CPRDDataset
-from src.data.ehrshot_dataset import EHRSHOTDataset
 from src.data.mimic_dataset import MIMICDataset
 
-ACES_DATASETS = frozenset({"MIMIC", "EHRSHOT"})
+ACES_DATASETS = frozenset({"MIMIC"})
 
 
 def is_aces_dataset(dataset_name: str) -> bool:
-    """MIMIC / EHRSHOT use ACES parquet labels and prediction-time cutoff."""
+    """MIMIC uses ACES parquet labels and a prediction-time cutoff."""
     return str(dataset_name).upper() in ACES_DATASETS
 
 
@@ -51,24 +50,6 @@ def get_dataset(
             vocab_file=data_config['vocab_filepath'],
             aces_label_dir=data_config.get('aces_label_dir'),
             lookup_dir=data_config['lookup_dir'],
-            split=split,
-            label_column=data_config.get('label_column', 'label'),
-            task=data_config.get('task', 'pretrain'),
-            format=data_config.get('format', 'text'),
-            surface_form=data_config.get('surface_form', 'text'),
-            scramble_seed=int(data_config.get('scramble_seed', 42)),
-            drop_time=bool(data_config.get('drop_time', False)),
-            drop_values=bool(data_config.get('drop_values', False)),
-            max_events=data_config.get('max_events'),
-            file_fraction=data_config.get('file_fraction'),
-            file_fraction_seed=int(data_config.get('file_fraction_seed', 42)),
-        )
-    if dataset_name == 'EHRSHOT':
-        return EHRSHOTDataset(
-            data_dir=data_config['data_dir'],
-            vocab_file=data_config['vocab_filepath'],
-            aces_label_dir=data_config.get('aces_label_dir'),
-            concept_csv=data_config.get('concept_csv') or "",
             split=split,
             label_column=data_config.get('label_column', 'label'),
             task=data_config.get('task', 'pretrain'),

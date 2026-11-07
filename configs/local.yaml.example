@@ -19,21 +19,6 @@ mimic:
   decoder_ntp_checkpoint: /path/to/mimic-decoder/models/pretrained_decoder_stage1_ntp.pt
   text_embedding_path: /path/to/mimic-text_embedding/phrase_embeddings.pt
 
-ehrshot:
-  data_dir: /path/to/EHRSHOT_tokenisation
-  vocab_filepath: /path/to/EHRSHOT_tokenisation/vocab.csv
-  concept_csv: /path/to/EHRSHOT_ASSETS/femr/logs/omop_dir/concept.csv
-  labels_root: /path/to/EHRSHOT_data/labels
-  events_csv: /path/to/EHRSHOT_ASSETS/data/ehrshot.csv
-  splits_csv: /path/to/EHRSHOT_ASSETS/splits/person_id_map.csv
-  checkpoints:
-    mistral: /path/to/tehr_stage1_ehrshot_mistral/final_model
-    qwen0.6: /path/to/tehr_stage1_ehrshot_qwen0.6/final_model
-    qwen8: /path/to/tehr_stage1_ehrshot_qwen8/final_model
-  encoder_mlm_checkpoint: /path/to/ehrshot-encoder/models/pretrained_encoder_stage1_mlm.pt
-  decoder_ntp_checkpoint: /path/to/ehrshot-decoder/models/pretrained_decoder_stage1_ntp.pt
-  text_embedding_path: /path/to/ehrshot-text_embedding/phrase_embeddings.pt
-
 clmbr:
   model_dir: /path/to/clmbr_t_base
   maps_dir: /path/to/clmbr_maps

@@ -110,9 +110,6 @@ dispatch_experiment() {
             if [[ "${DATASET}" == "mimic" ]]; then
                 LOOKUP="$(python -c "import yaml,os; c=yaml.safe_load(open(os.environ['RESOLVED_CFG'])); print(c['data']['lookup_dir'])")"
                 PRE_ARGS+=(--lookup_dir "${LOOKUP}")
-            elif [[ "${DATASET}" == "ehrshot" ]]; then
-                CONCEPT="$(python -c "import yaml,os; c=yaml.safe_load(open(os.environ['RESOLVED_CFG'])); print(c['data']['concept_csv'])")"
-                PRE_ARGS+=(--concept_csv "${CONCEPT}")
             else
                 for key in medical_lookup_filepath lab_lookup_filepath region_lookup_filepath time_lookup_filepath; do
                     val="$(python -c "import yaml,os; c=yaml.safe_load(open(os.environ['RESOLVED_CFG'])); print(c['data']['${key}'])")"

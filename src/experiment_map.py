@@ -13,7 +13,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 
-DATASETS = ("mimic", "cprd", "ehrshot")
+DATASETS = ("mimic", "cprd")
 MODELS = ("mistral", "qwen0.6", "qwen8", "medgemma")
 # Checkpoints that are not interchangeable with the causal-LM training stack.
 MODEL_EXPERIMENTS = {
@@ -26,15 +26,9 @@ MIMIC_TASKS = (
     "icu_readmission",
 )
 CPRD_TASKS = ("1m", "3m", "6m", "12m")
-EHRSHOT_TASKS = (
-    "icu_admission",
-    "readmission_30d",
-    "pancreatic_cancer",
-)
 DEFAULT_TASK = {
     "mimic": "icu_mortality",
     "cprd": "6m",
-    "ehrshot": "icu_admission",
 }
 
 CLASSIFIER_RESULTS = ("test_results.json", "combined_results.json", "held_out_results.json")
@@ -175,7 +169,7 @@ SPECS: dict[str, Spec] = {
         runner=_TEHR_CLF,
         ddp=True,
         needs_model=True,
-        allowed_datasets=("mimic", "ehrshot"),
+        allowed_datasets=("mimic",),
         clear_pretrained=True,
         eval_result_files=CLASSIFIER_RESULTS,
     ),
@@ -183,7 +177,7 @@ SPECS: dict[str, Spec] = {
         runner=_TEHR_CLF,
         ddp=True,
         needs_model=True,
-        allowed_datasets=("mimic", "ehrshot"),
+        allowed_datasets=("mimic",),
         uses_stage1_ckpt=True,
         eval_result_files=CLASSIFIER_RESULTS,
     ),
@@ -191,14 +185,14 @@ SPECS: dict[str, Spec] = {
         runner="src.baselines.ablation_nopretrain_frozen.AblationNopretrainFrozenBaseline",
         one_gpu=True,
         needs_model=True,
-        allowed_datasets=("mimic", "ehrshot"),
+        allowed_datasets=("mimic",),
         clear_pretrained=True,
     ),
     "ablation_hash": Spec(
         runner=_TEHR_CLF,
         ddp=True,
         needs_model=True,
-        allowed_datasets=("mimic", "ehrshot"),
+        allowed_datasets=("mimic",),
         clear_pretrained=True,
         eval_result_files=CLASSIFIER_RESULTS,
     ),
@@ -206,7 +200,7 @@ SPECS: dict[str, Spec] = {
         runner=_TEHR_CLF,
         ddp=True,
         needs_model=True,
-        allowed_datasets=("mimic", "ehrshot"),
+        allowed_datasets=("mimic",),
         clear_pretrained=True,
         eval_result_files=CLASSIFIER_RESULTS,
     ),
@@ -290,7 +284,6 @@ def emit_bash() -> str:
         _bash_array("KNOWN_MODELS", MODELS),
         _bash_array("MIMIC_TASKS", MIMIC_TASKS),
         _bash_array("CPRD_TASKS", CPRD_TASKS),
-        _bash_array("EHRSHOT_TASKS", EHRSHOT_TASKS),
         _bash_array("ALL_EXPERIMENTS", list(SPECS)),
         _bash_array("LLM_DDP_EXPERIMENTS", [n for n, s in SPECS.items() if s.ddp]),
         _bash_array("ONE_GPU_EXPERIMENTS", [n for n, s in SPECS.items() if s.one_gpu]),

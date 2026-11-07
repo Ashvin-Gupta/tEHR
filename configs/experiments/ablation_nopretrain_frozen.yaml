@@ -1,6 +1,6 @@
 # Ablation: no pretraining and frozen backbone; train head only.
 # Usage: sbatch scripts/<site>/run.sh <dataset> ablation_nopretrain_frozen mistral <task>
-# Allowed datasets: mimic, ehrshot.
+# Allowed datasets: mimic.
 
 extends:
   - ../shared/training_classifier.yaml

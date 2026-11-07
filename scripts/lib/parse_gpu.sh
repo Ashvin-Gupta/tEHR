@@ -11,7 +11,6 @@ if [[ -z "${DATASET}" || -z "${EXPERIMENT}" ]]; then
     echo "  models:   ${KNOWN_MODELS[*]}"
     echo "  mimic tasks:    ${MIMIC_TASKS[*]}"
     echo "  cprd tasks:     ${CPRD_TASKS[*]}"
-    echo "  ehrshot tasks:  ${EHRSHOT_TASKS[*]}"
     exit 1
 fi
 
@@ -47,8 +46,6 @@ EVAL_ONLY=""
 KNOWN_TASKS=("${MIMIC_TASKS[@]}")
 if [[ "${DATASET}" == "cprd" ]]; then
     KNOWN_TASKS=("${CPRD_TASKS[@]}")
-elif [[ "${DATASET}" == "ehrshot" ]]; then
-    KNOWN_TASKS=("${EHRSHOT_TASKS[@]}")
 fi
 
 for arg in "$@"; do
@@ -75,8 +72,6 @@ esac
 if [[ -z "${TASK}" ]] && ! is_in "${EXPERIMENT}" "${TASK_OPTIONAL_EXPERIMENTS[@]}"; then
     if [[ "${DATASET}" == "cprd" ]]; then
         TASK="6m"
-    elif [[ "${DATASET}" == "ehrshot" ]]; then
-        TASK="icu_admission"
     else
         TASK="icu_mortality"
     fi

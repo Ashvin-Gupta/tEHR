@@ -28,7 +28,6 @@ from src.experiment_map import (
     CPRD_TASKS,
     DATASETS,
     DEFAULT_TASK,
-    EHRSHOT_TASKS,
     MIMIC_TASKS,
     MODEL_EXPERIMENTS,
     MODELS,
@@ -221,10 +220,6 @@ def build_config(
         raise ValueError(f"Unknown MIMIC task '{task}'. Expected: {MIMIC_TASKS}")
     if dataset == "cprd" and task is not None and task not in CPRD_TASKS:
         raise ValueError(f"Unknown CPRD task '{task}'. Expected: {CPRD_TASKS}")
-    if dataset == "ehrshot" and task is not None and task not in EHRSHOT_TASKS:
-        raise ValueError(
-            f"Unknown EHRSHOT task '{task}'. Expected: {EHRSHOT_TASKS}"
-        )
 
     local = load_local_config(configs_root)
     local.setdefault("repo_root", REPO_ROOT)
@@ -389,41 +384,6 @@ def build_config(
     overlay = local.get("training")
     if isinstance(overlay, dict) and overlay:
         cfg["training"] = deep_merge(cfg.get("training") or {}, overlay)
-
-    # EHRSHOT dataset training wins last (sparse classifier evals). Experiment
-    # YAMLs and local.yaml would otherwise restore the 7-point schedule.
-    # Skip for LM continued pretraining: HuggingFace requires save_steps to be
-    # a multiple of eval_steps when load_best_model_at_end is set, and stage 1
-    # keeps save_steps=1000 / eval_steps=500.
-    _stage1 = experiment in {"tehr_stage1", "tehr_stage1_v2", "event_token_stage1"}
-    if dataset == "ehrshot" and not _stage1:
-        ds_training = dataset_cfg.get("training")
-        if isinstance(ds_training, dict) and ds_training:
-            cfg["training"] = deep_merge(cfg.get("training") or {}, ds_training)
-    elif dataset == "ehrshot" and _stage1:
-        # Dataset YAML still merged earlier; drop classifier-only keys.
-        (cfg.get("training") or {}).pop("eval_epoch_fractions", None)
-
-    # EHRSHOT labels are bags over long histories, not a fixed endpoint token.
-    # Keep last_token on MIMIC. Write mean-pool runs next to the last-token
-    # dirs so those numbers stay on disk.
-    _ehrshot_mean_pool = {
-        "tehr_stage2",
-        "ablation_cpt_frozen",
-        "ablation_no_time",
-        "ablation_no_value",
-        "event_token_stage2",
-    }
-    if dataset == "ehrshot" and experiment in _ehrshot_mean_pool:
-        cfg.setdefault("model", {})["pooling"] = "mean"
-        training = cfg.setdefault("training", {})
-        out = training.get("output_dir")
-        if isinstance(out, str) and out and not out.rstrip("/").endswith("-mean"):
-            training["output_dir"] = out.rstrip("/") + "-mean"
-        wb = cfg.setdefault("wandb", {})
-        run_name = wb.get("run_name")
-        if isinstance(run_name, str) and run_name and not run_name.endswith("-mean"):
-            wb["run_name"] = run_name + "-mean"
 
     # Score a tagged stage-1 recipe (e.g. TEHR_STAGE1_TAG=v2) without
     # clobbering the default CPT stage-2 dirs.

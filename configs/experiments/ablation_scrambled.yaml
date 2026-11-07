@@ -1,6 +1,6 @@
 # Lexical ablation: permute real titles across codes.
 # Usage: sbatch scripts/<site>/run.sh <dataset> ablation_scrambled mistral <task>
-# Allowed datasets: mimic, ehrshot.
+# Allowed datasets: mimic.
 
 extends:
   - ../shared/lora.yaml

@@ -1,6 +1,6 @@
 # Lexical ablation: scramble titles → Concept_<hash> IDs.
 # Usage: sbatch scripts/<site>/run.sh <dataset> ablation_hash mistral <task>
-# Allowed datasets: mimic, ehrshot.
+# Allowed datasets: mimic.
 
 extends:
   - ../shared/lora.yaml

@@ -26,7 +26,6 @@ from src.evaluations.evaluations import bootstrap_binary_ci
 from src.experiment_map import (
     CPRD_TASKS,
     DATASETS,
-    EHRSHOT_TASKS,
     MIMIC_TASKS,
     MODELS,
     SPECS,
@@ -68,7 +67,7 @@ LEGACY_EXPERIMENT_ALIASES: dict[str, str] = {
 }
 
 _TASKS = tuple(
-    sorted(set(MIMIC_TASKS) | set(CPRD_TASKS) | set(EHRSHOT_TASKS), key=len, reverse=True)
+    sorted(set(MIMIC_TASKS) | set(CPRD_TASKS), key=len, reverse=True)
 )
 _POOLS = ("mean-v2", "mean")
 _MODELS = tuple(MODELS)

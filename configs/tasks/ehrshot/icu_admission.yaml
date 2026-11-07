@@ -1,9 +1,0 @@
-# EHRSHOT guo_icu (Guo et al. 2020 / Wornow et al. 2023).
-# Prediction time = start of the hospital admission (official labeled_patients.csv).
-# Label = ICU transfer during that stay. History is cut at prediction_time.
-task:
-  name: "icu_admission"
-  description: "be admitted to the ICU during this hospital stay"
-
-data:
-  aces_label_dir: "{ehrshot.labels_root}/icu_admission"

@@ -33,8 +33,6 @@ EVAL_ONLY=""
 KNOWN_TASKS=("${MIMIC_TASKS[@]}")
 if [[ "${DATASET}" == "cprd" ]]; then
     KNOWN_TASKS=("${CPRD_TASKS[@]}")
-elif [[ "${DATASET}" == "ehrshot" ]]; then
-    KNOWN_TASKS=("${EHRSHOT_TASKS[@]}")
 fi
 for arg in "$@"; do
     if is_in "$arg" "${KNOWN_TASKS[@]}"; then
@@ -59,8 +57,6 @@ case "${EXPERIMENT}" in
         if [[ -z "${TASK}" ]]; then
             if [[ "${DATASET}" == "cprd" ]]; then
                 TASK="6m"
-            elif [[ "${DATASET}" == "ehrshot" ]]; then
-                TASK="icu_admission"
             else
                 TASK="icu_mortality"
             fi

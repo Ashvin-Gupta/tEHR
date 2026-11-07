@@ -1,9 +1,0 @@
-# EHRSHOT new_pancan (first-diagnosis assignment).
-# Prediction time = discharge from an inpatient visit.
-# Label = first pancreatic-cancer diagnosis in 1–365 days (prior cases excluded).
-task:
-  name: "pancreatic_cancer"
-  description: "be diagnosed with pancreatic cancer for the first time in the next 1 to 365 days"
-
-data:
-  aces_label_dir: "{ehrshot.labels_root}/pancreatic_cancer"

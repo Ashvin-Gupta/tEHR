@@ -1,6 +1,4 @@
 # Stage-2 ablation: same CPT + linear head, numeric values and units stripped.
-# pooling last_token is the MIMIC default. EHRSHOT overrides to mean pooling
-# and a separate *-mean output dir in build_config.
 # Usage: sbatch scripts/<site>/run.sh <dataset> ablation_no_value mistral <task>
 
 extends:

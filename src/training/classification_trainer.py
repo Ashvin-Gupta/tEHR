@@ -268,8 +268,8 @@ class TehrClassifierTrainer:
 
         def _remove_stale_lock():
             # A killed writer can leave a 0-byte lock; waiters then sit silent
-            # for 4h (see ehrshot scrambled readmission/pancreatic). Held-out
-            # sort itself is ~7 min, so a lock older than this is abandoned.
+            # for hours. Held-out sort itself is ~7 min, so a lock older than
+            # this is abandoned.
             if not os.path.exists(lock_path):
                 return False
             try:

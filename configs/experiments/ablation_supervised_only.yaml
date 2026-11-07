@@ -1,6 +1,6 @@
 # Ablation: no EHR pretraining; fresh LLM + LoRA + head.
 # Usage: sbatch scripts/<site>/run.sh <dataset> ablation_supervised_only mistral <task>
-# Allowed datasets: mimic, ehrshot.
+# Allowed datasets: mimic.
 
 extends:
   - ../shared/lora.yaml

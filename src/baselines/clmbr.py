@@ -60,7 +60,7 @@ def _subset_labels_both_classes(rows: List[dict], n: int) -> List[dict]:
 
 
 class CLMBRBaseline(BaseBaseline):
-    """EHRSHOT-style linear probe on frozen CLMBR-T representations."""
+    """Linear probe on frozen CLMBR-T representations."""
 
     def __init__(self, config: Dict[str, Any]):
         super().__init__(config)

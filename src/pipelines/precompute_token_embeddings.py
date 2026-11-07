@@ -43,7 +43,6 @@ from tqdm import tqdm
 from src.data.base_dataset import tokens_to_phrases
 from src.data.base_token_translator import BaseTokenTranslator
 from src.data.cprd_translator import CPRDTokenTranslator
-from src.data.ehrshot_translator import EHRSHOTTokenTranslator
 from src.data.mimic_translator import MIMICTokenTranslator
 
 
@@ -264,14 +263,9 @@ def main(args):
             region_lookup_file=args.region_lookup_filepath,
             time_lookup_file=args.time_lookup_filepath,
         )
-    elif dataset == "ehrshot":
-        if not args.concept_csv:
-            raise SystemExit("--concept_csv is required for dataset=ehrshot")
-        print(f"\nLoading EHRSHOT translator from: {args.concept_csv}")
-        translator = EHRSHOTTokenTranslator.from_concept_csv(args.concept_csv)
     else:
         raise SystemExit(
-            f"Unknown dataset '{args.dataset}'. Use mimic, cprd, or ehrshot."
+            f"Unknown dataset '{args.dataset}'. Use mimic or cprd."
         )
 
     print(f"\nCollecting unique phrases from: {args.data_dir}")
@@ -342,13 +336,13 @@ def main(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        description="Precompute phrase embeddings (last-token pool) for MIMIC, CPRD, or EHRSHOT"
+        description="Precompute phrase embeddings (last-token pool) for MIMIC or CPRD"
     )
     parser.add_argument(
         "--dataset",
         type=str,
         default="mimic",
-        choices=("mimic", "cprd", "ehrshot"),
+        choices=("mimic", "cprd"),
         help="Which token translator to use",
     )
     parser.add_argument(
@@ -367,12 +361,6 @@ if __name__ == "__main__":
     parser.add_argument("--lab_lookup_filepath", type=str, default=None)
     parser.add_argument("--region_lookup_filepath", type=str, default=None)
     parser.add_argument("--time_lookup_filepath", type=str, default=None)
-    parser.add_argument(
-        "--concept_csv",
-        type=str,
-        default=None,
-        help="EHRSHOT Athena concept.csv (vocabulary_id / concept_code / concept_name)",
-    )
     parser.add_argument(
         "--data_dir",
         type=str,

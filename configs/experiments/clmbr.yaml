@@ -1,7 +1,6 @@
 # Frozen CLMBR-T-base embeddings + logistic regression.
-# This is the EHRSHOT / ICASSP "CLMBR" full-data probe (all train labels),
-# not the k=16 "CLMBR (few-shot)" row. Other TextCancEHR2 baselines also
-# use the full train set.
+# Full training set, not a few-shot probe. Other baselines also use the
+# full train set. MIMIC-IV only.
 # First compile maps (once):
 #   python -m src.clmbr.build_maps --download-model --report
 # Coverage only (no recompile):

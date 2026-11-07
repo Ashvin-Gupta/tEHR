@@ -30,7 +30,7 @@ pretrain:
   enabled: true
   pretrained_checkpoint: "{encoder_mlm_checkpoint}"
   force_pretrain: false
-  use_all_splits_for_mimic: true  # MIMIC only. EHRSHOT stage-1 is unlabeled train.
+  use_all_splits_for_mimic: true  # unlabeled train+tuning+held_out
   epochs: 30
   batch_size: 16
   learning_rate: 1e-4

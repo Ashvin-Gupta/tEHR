@@ -1466,37 +1466,27 @@ class EncoderBaseline:
             train_drop = self._world_size > 1
 
             # Stage-1 must be unlabeled full timelines, not the labeled task cohort.
-            # EHRSHOT: train patients only (tuning for MLM val). MIMIC keeps the
-            # existing full-corpus option via use_all_splits_for_mimic.
+            # MIMIC can use the full corpus via use_all_splits_for_mimic.
             stage1_train_ds = filtered_datasets['train']
             stage1_val_ds = filtered_datasets['tuning']
-            if is_aces_dataset(dataset_name):
-                if str(dataset_name).upper() == "EHRSHOT":
-                    stage1_raw = self._load_datasets(
-                        ['train', 'tuning'],
-                        task_override="pretrain",
-                    )
-                    stage1_train_ds = FilteredTokenDataset(stage1_raw['train'])
-                    stage1_val_ds = FilteredTokenDataset(stage1_raw['tuning'])
-                    print(
-                        "  - EHRSHOT stage-1: unlabeled full timelines on "
-                        "train patients; tuning for MLM val (no labels, no cutoff)"
-                    )
-                elif self.pretrain_config.get("use_all_splits_for_mimic", True):
-                    stage1_raw = self._load_datasets(
-                        ['train', 'tuning', 'held_out'],
-                        task_override="pretrain",
-                    )
-                    stage1_filtered = [
-                        FilteredTokenDataset(stage1_raw[s])
-                        for s in ['train', 'tuning', 'held_out']
-                    ]
-                    stage1_train_ds = ConcatDataset(stage1_filtered)
-                    stage1_val_ds = stage1_train_ds
-                    print(
-                        f"  - {dataset_name} stage-1 uses train+tuning+held_out "
-                        "in pretrain mode"
-                    )
+            if (
+                is_aces_dataset(dataset_name)
+                and self.pretrain_config.get("use_all_splits_for_mimic", True)
+            ):
+                stage1_raw = self._load_datasets(
+                    ['train', 'tuning', 'held_out'],
+                    task_override="pretrain",
+                )
+                stage1_filtered = [
+                    FilteredTokenDataset(stage1_raw[s])
+                    for s in ['train', 'tuning', 'held_out']
+                ]
+                stage1_train_ds = ConcatDataset(stage1_filtered)
+                stage1_val_ds = stage1_train_ds
+                print(
+                    f"  - {dataset_name} stage-1 uses train+tuning+held_out "
+                    "in pretrain mode"
+                )
 
             mlm_train_loader = self._make_loader(
                 stage1_train_ds,
@@ -1523,25 +1513,16 @@ class EncoderBaseline:
             mlm_epochs = int(self.pretrain_config.get('epochs', 1))
             
             best_mlm_loss = float('inf')
-            ehrshot_mlm = str(dataset_name).upper() == "EHRSHOT"
             for epoch in range(mlm_epochs):
                 self._set_sampler_epoch(mlm_train_loader, epoch)
                 if self._is_rank0():
                     print(f"\n[{self._pretrain_label()}] Epoch {epoch + 1}/{mlm_epochs}")
                 train_mlm_loss = self.train_mlm_epoch(mlm_train_loader, mlm_optimizer, device)
-                # EHRSHOT: skip most MLM vals (full-seq, ~vocab 50k). Keep last + every 10th.
-                run_mlm_val = (not ehrshot_mlm) or (epoch + 1) == mlm_epochs or (epoch + 1) % 10 == 0
-                if run_mlm_val:
-                    val_mlm_loss = self.evaluate_mlm(mlm_val_loader, device)
-                    if self._is_rank0():
-                        print(f"  - {self._pretrain_label()} train loss: {train_mlm_loss:.4f}")
-                        print(f"  - {self._pretrain_label()} val loss:   {val_mlm_loss:.4f}")
-                    best_mlm_loss = min(best_mlm_loss, val_mlm_loss)
-                elif self._is_rank0():
-                    print(
-                        f"  - {self._pretrain_label()} train loss: {train_mlm_loss:.4f} "
-                        "(skipped MLM val)"
-                    )
+                val_mlm_loss = self.evaluate_mlm(mlm_val_loader, device)
+                if self._is_rank0():
+                    print(f"  - {self._pretrain_label()} train loss: {train_mlm_loss:.4f}")
+                    print(f"  - {self._pretrain_label()} val loss:   {val_mlm_loss:.4f}")
+                best_mlm_loss = min(best_mlm_loss, val_mlm_loss)
             
             if self._is_rank0():
                 print(
