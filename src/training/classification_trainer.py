@@ -721,11 +721,18 @@ class TehrClassifierTrainer:
         )
         transfer_state = {
             k: v for k, v in ckpt_state.items()
-            if any(kw in k for kw in lora_keywords) or k.startswith("classifier.")
+            if any(kw in k for kw in lora_keywords)
+            or k.startswith("classifier.")
+            or k.startswith("input_proj.")
+            or k.startswith("input_norm.")
         }
 
         lora_keys = [k for k in transfer_state if any(kw in k for kw in lora_keywords)]
         head_keys = [k for k in transfer_state if k.startswith("classifier.")]
+        proj_keys = [
+            k for k in transfer_state
+            if k.startswith("input_proj.") or k.startswith("input_norm.")
+        ]
 
         if not lora_keys and require_lora:
             raise RuntimeError(
@@ -765,7 +772,11 @@ class TehrClassifierTrainer:
             param.data.copy_(src)
             copied += 1
 
-        print(f"  - Copied {copied} tensors in-place ({len(lora_keys)} LoRA, {len(head_keys)} classifier).")
+        print(
+            f"  - Copied {copied} tensors in-place "
+            f"({len(lora_keys)} LoRA, {len(head_keys)} classifier, "
+            f"{len(proj_keys)} projection)."
+        )
         if skipped:
             print(
                 f"  - *** WARNING: {len(skipped)} keys from the checkpoint could NOT "
@@ -1052,34 +1063,105 @@ class TehrClassifierTrainer:
         # eval used the Trainer eval path without it; the extra graph rewrite
         # can change last-token states on Unsloth 2026.
 
-        print("\n" + "=" * 80)
-        print("Loading test dataset (held_out)...")
-        print("=" * 80)
-        test_dataset = get_dataset(self.data_config["dataset"], self.data_config, "held_out")
-        if self.data_config.get("sort_by_length", False):
-            test_dataset = self._sort_with_cache(
-                test_dataset, split="held_out", shuffle_buckets=False, num_buckets=20
-            )
-        print(f"  - Test dataset: {len(test_dataset)} examples")
-        max_n = self.training_config.get("eval_max_samples")
-        if max_n:
-            n = min(int(max_n), len(test_dataset))
-            if n < len(test_dataset):
-                test_dataset = torch.utils.data.Subset(test_dataset, range(n))
-                print(f"  - eval_max_samples={n}")
-        self._log_class_distribution(test_dataset, "test")
+        split_env = os.environ.get("EVAL_SPLIT", "").strip().lower()
+        score_val = split_env in {"tuning", "validation", "val", "both"}
+        score_test = split_env not in {"tuning", "validation", "val"}
 
+        val_dataset = (
+            self._prediction_dataset("tuning", "validation") if score_val else None
+        )
+        test_dataset = (
+            self._prediction_dataset("held_out", "test") if score_test else None
+        )
+        # create_trainer reads len(train_dataset) only to place eval-fraction
+        # checkpoints, which never fire here.
+        stand_in = val_dataset if val_dataset is not None else test_dataset
         collator = self.create_collator()
-        # create_trainer reads len(train_dataset) only to place the eval-fraction
-        # checkpoints, which never fire here; the test split stands in for it.
-        self.create_trainer(test_dataset, test_dataset, collator, run_name)
+        self.create_trainer(stand_in, stand_in, collator, run_name)
 
-        test_results = self._score_and_save_split(test_dataset, "test", "test")
+        val_results = None
+        test_results = None
+        if val_dataset is not None:
+            val_results = self._score_and_save_split(val_dataset, "validation", "eval")
+        if test_dataset is not None:
+            test_results = self._score_and_save_split(test_dataset, "test", "test")
 
         if self.local_rank == 0:
-            self._write_eval_provenance(checkpoint_path, n_test=len(test_dataset))
+            if score_val and not score_test:
+                self._write_validation_provenance(
+                    checkpoint_path, n_val=len(val_dataset)
+                )
+            elif score_val and score_test:
+                self._write_validation_provenance(
+                    checkpoint_path,
+                    n_val=len(val_dataset),
+                    n_test=len(test_dataset),
+                )
+            else:
+                self._write_eval_provenance(checkpoint_path, n_test=len(test_dataset))
 
-        return None, test_results
+        return val_results, test_results
+
+    def _prediction_dataset(self, split_name: str, label: str):
+        """Load one scored split. Subclasses wrap this when the inputs are not text."""
+        print("\n" + "=" * 80)
+        print(f"Loading {label} dataset ({split_name})...")
+        print("=" * 80)
+        dataset = get_dataset(self.data_config["dataset"], self.data_config, split_name)
+        if self.data_config.get("sort_by_length", False):
+            dataset = self._sort_with_cache(
+                dataset, split=split_name, shuffle_buckets=False, num_buckets=20
+            )
+        print(f"  - {label} dataset: {len(dataset)} examples")
+        max_n = self.training_config.get("eval_max_samples")
+        if max_n:
+            n = min(int(max_n), len(dataset))
+            if n < len(dataset):
+                dataset = torch.utils.data.Subset(dataset, range(n))
+                print(f"  - eval_max_samples={n}")
+        self._log_class_distribution(dataset, label)
+        return dataset
+
+    def _write_validation_provenance(
+        self, checkpoint_path: str, n_val: int, n_test: int | None = None
+    ):
+        """Record a tuning score without replacing ``eval_provenance.json``."""
+        import json
+
+        step = None
+        base = os.path.basename(os.path.normpath(checkpoint_path))
+        if base.startswith("checkpoint-"):
+            try:
+                step = int(base.split("-")[-1])
+            except ValueError:
+                pass
+        results_dir = os.path.join(self.training_config["output_dir"], "results")
+        os.makedirs(results_dir, exist_ok=True)
+        path = os.path.join(results_dir, "validation_provenance.json")
+        if n_test is None:
+            note = (
+                "Tuning split only. test_results.json in this directory was not "
+                "rewritten."
+            )
+        else:
+            note = (
+                "Tuning and held-out scored from the checkpoint above. "
+                "Published classifier test_results.json files were not rewritten."
+            )
+        payload = {
+            "evaluated_checkpoint": checkpoint_path,
+            "checkpoint_step": step,
+            "produced_by": "src.pipelines.run --eval_only",
+            "eval_split": os.environ.get("EVAL_SPLIT", ""),
+            "note": note,
+            "n_validation": n_val,
+            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        }
+        if n_test is not None:
+            payload["n_test"] = n_test
+        with open(path, "w") as f:
+            json.dump(payload, f, indent=2)
+        print(f"  - Validation provenance written to {path}")
 
     def _write_eval_provenance(self, checkpoint_path: str, n_test: int, n_val: int | None = None):
         """Record which checkpoint produced the results files in this directory."""

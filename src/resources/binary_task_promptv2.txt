@@ -1,0 +1,13 @@
+You are an expert in clinical prediction from longitudinal electronic health record (EHR) data.
+Your task is to predict whether the patient will {task} based only on the EHR information provided below.  
+Demographic information appears at the beginning, followed by clinical events in chronological order. Events are separated by semicolons. Numerical measurements are reported to one decimal place with their units, and elapsed time between events is included.  
+Consider the patient's longitudinal history, including relevant clinical events, measurements, and trends over time.  
+Answer with exactly one digit on a single line:
+1 = yes
+0 = no  
+Do not output any additional text, explanation, probability, or symbols.
+
+Patient's medical history:
+{ehr_text}
+
+Answer:

@@ -1,0 +1,51 @@
+# Code transformer with token embeddings seeded from frozen phrase embeddings.
+# Same architecture, MLM, and supervised head as ``encoder``. The embedding
+# table is trainable: the frozen vectors are only the initial weights.
+#
+# This is not ``text_embedding``. That experiment has no embedding table. Every
+# forward pass looks up a frozen vector and the transformer cannot change it.
+#
+# Stage-1 MLM is trained from this initialization and saved separately from the
+# scratch ``encoder`` checkpoint. The first task writes that file; later tasks
+# reuse it.
+# Usage: sbatch scripts/<site>/run.sh <dataset> encoder_phrase_init <task>
+
+name: "{dataset}_encoder_phrase_init_{task}"
+
+embedder:
+  precomputed_embeddings_path: "{text_embedding_path}"
+
+model:
+  vocab_size: null
+  hidden_dim: 512
+  num_layers: 6
+  num_heads: 8
+  ff_dim: 2048
+  dropout: 0.1
+  max_seq_length: 2048
+  num_labels: 2
+  head_type: "linear"
+  head_hidden_size: 256
+  pooling: "mean"
+
+training:
+  output_dir: "{results_root}/{dataset}-encoder_phrase_init-{task}"
+  overwrite_output_dir: true
+  epochs: 10
+  batch_size: 16
+  learning_rate: 1e-4
+  weight_decay: 0.01
+  dataloader_num_workers: 2
+  eval_epoch_fractions: [0.05, 0.10, 0.20, 0.40, 0.60, 0.80, 1.00]
+
+pretrain:
+  enabled: true
+  pretrained_checkpoint: "{results_root}/{dataset}-encoder_phrase_init/models/pretrained_encoder_stage1_mlm.pt"
+  force_pretrain: false
+  use_all_splits_for_mimic: true
+  epochs: 30
+  batch_size: 16
+  learning_rate: 1e-4
+  weight_decay: 0.01
+  mlm_probability: 0.15
+  dataloader_num_workers: 2

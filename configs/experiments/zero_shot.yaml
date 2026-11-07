@@ -1,5 +1,6 @@
 # Zero-shot LLM prompting.
-# Usage: sbatch scripts/<site>/run.sh <dataset> zero_shot mistral <task>
+# Usage: sbatch scripts/<site>/run.sh <dataset> zero_shot <model> <task>
+# Models: mistral, qwen0.6, qwen8, medgemma (text-only; vision tower unused).
 # Scores held_out (test) only — no tuning/val pass.
 # Hospital-scale jobs: split with EVAL_SHARD=0/2 and EVAL_SHARD=1/2 (export
 # the var into the job). Partials flush every EVAL_FLUSH_EVERY samples.

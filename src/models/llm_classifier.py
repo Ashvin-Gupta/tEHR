@@ -77,29 +77,44 @@ class LLMClassifier(nn.Module):
         batch_size = hidden_states.size(0)
         return hidden_states[range(batch_size), sequence_lengths]
 
-    def _forward_backbone(self, input_ids: torch.Tensor, attention_mask: torch.Tensor):
+    def _forward_backbone(
+        self,
+        input_ids: Optional[torch.Tensor] = None,
+        attention_mask: Optional[torch.Tensor] = None,
+        inputs_embeds: Optional[torch.Tensor] = None,
+    ):
         """
         Run the decoder backbone and return hidden states.
 
         Unsloth's causal-LM wrapper sets ``_has_no_labels = True`` when LM labels
         are omitted (classification). That enables a broken
         ``inputs_embeds *= attention_mask`` path **during training** if
-        ``max_seq_length`` is stale. Eval uses the July CausalLM path (one
-        unwrap) so last-token states match the original cluster. Train still
-        hits the inner decoder and clears the flag.
+        ``max_seq_length`` is stale. Token-id eval still uses the outer
+        CausalLM path (one unwrap) so last-token states match the original
+        cluster. Token-id training, and every embedding forward, hits the
+        inner decoder and clears the flag.
+
+        Embedding eval cannot use the outer wrapper: it reads ``input_ids.shape``
+        and the inner decoder rejects ``input_ids`` together with ``inputs_embeds``.
         """
         backbone = getattr(self.base_model, "model", self.base_model)
         inner = getattr(backbone, "model", None)
         if inner is not None:
             inner._has_no_labels = False
-        use_inner = inner is not None and self.training
+        use_inner = inner is not None and (self.training or inputs_embeds is not None)
         model = inner if use_inner else backbone
-        return model(
-            input_ids=input_ids,
-            attention_mask=attention_mask,
-            output_hidden_states=True,
-            return_dict=True,
-        )
+        if input_ids is None and inputs_embeds is None:
+            raise ValueError("input_ids or inputs_embeds is required")
+        kwargs = {
+            "attention_mask": attention_mask,
+            "output_hidden_states": True,
+            "return_dict": True,
+        }
+        if inputs_embeds is not None:
+            kwargs["inputs_embeds"] = inputs_embeds
+        else:
+            kwargs["input_ids"] = input_ids
+        return model(**kwargs)
 
     def forward(
         self,

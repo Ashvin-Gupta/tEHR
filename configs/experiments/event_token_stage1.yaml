@@ -1,0 +1,44 @@
+# Event-token stage 1 (Mistral-7B only).
+# Each XGBoost-style event is one new vocabulary token. No text translation.
+# Each timeline keeps its most recent 2048 events. Full train split.
+# New token embeddings are trained.
+# Usage: sbatch scripts/<site>/run.sh <dataset> event_token_stage1 mistral
+
+extends:
+  - ../shared/lora.yaml
+
+name: "{dataset}_event_token_stage1_{model}"
+
+wandb:
+  enabled: true
+  project: "tEHR-pretrain"
+  run_name: "event-token-stage1-{dataset}-{model}"
+
+model:
+  # Applied in the trainer. mistral.yaml's max_length (12000) would otherwise win.
+  event_seq_length: 2048
+
+training:
+  output_dir: "{results_root}/{dataset}-event_token_stage1-{model}"
+  overwrite_output_dir: true
+  load_in_4bit: true
+  epochs: 1
+  batch_size: 4
+  eval_batch_size: 1
+  learning_rate: 1e-5
+  weight_decay: 0.05
+  warmup_steps: 500
+  gradient_accumulation_steps: 4
+  gradient_checkpointing: true
+  fp16: false
+  bf16: true
+  logging_steps: 10
+  eval_steps: 500
+  eval_max_batches: 200
+  save_steps: 1000
+  save_total_limit: 3
+  dataloader_num_workers: 4
+
+data:
+  task: "pretrain"
+  sort_by_length: false

@@ -1,0 +1,31 @@
+# Frozen phrase embeddings, one per event, projected into the LLM hidden size.
+# The LLM is the transformer. No pretraining stage: load the existing stage-1
+# checkpoint and train the projection, LoRA, and classification head.
+# Context is the most recent 2048 events (one embedding each).
+# Usage: sbatch scripts/<site>/run.sh <dataset> llm_phrase <model> <task>
+
+extends:
+  - ../shared/lora.yaml
+  - ../shared/training_classifier.yaml
+
+name: "{dataset}_llm_phrase_{model}_{task}"
+
+embedder:
+  precomputed_embeddings_path: "{text_embedding_path}"
+
+wandb:
+  run_name: "llm-phrase-{dataset}-{model}-{task}"
+
+model:
+  event_seq_length: 2048
+  num_labels: 2
+  freeze_llm: true
+  train_lora: true
+  pooling: "last_token"
+
+data:
+  sort_by_length: false
+
+training:
+  output_dir: "{results_root}/{dataset}-llm_phrase-{model}-{task}"
+  learning_rate: 1e-6

@@ -14,7 +14,11 @@ from dataclasses import dataclass
 
 
 DATASETS = ("mimic", "cprd", "ehrshot")
-MODELS = ("mistral", "qwen0.6", "qwen8")
+MODELS = ("mistral", "qwen0.6", "qwen8", "medgemma")
+# Checkpoints that are not interchangeable with the causal-LM training stack.
+MODEL_EXPERIMENTS = {
+    "medgemma": ("zero_shot",),
+}
 MIMIC_TASKS = (
     "icu_mortality",
     "hospital_mortality",
@@ -52,6 +56,8 @@ class Spec:
     instruct: bool = False
     clear_pretrained: bool = False
     uses_stage1_ckpt: bool = False
+    stage1_experiment: str | None = None
+    allowed_models: tuple[str, ...] | None = None
     eval_result_files: tuple[str, ...] = SPLIT_RESULTS
     eval_error: str | None = None
 
@@ -134,6 +140,10 @@ SPECS: dict[str, Spec] = {
         runner=_ENCODER,
         eval_result_files=ENCODER_RESULTS,
     ),
+    "encoder_ctx2048": Spec(
+        runner=_ENCODER,
+        eval_result_files=ENCODER_RESULTS,
+    ),
     "decoder": Spec(
         runner="src.baselines.decoder.DecoderBaseline",
         ddp=True,
@@ -147,8 +157,19 @@ SPECS: dict[str, Spec] = {
         runner=_ENCODER,
         eval_result_files=ENCODER_RESULTS,
     ),
+    "encoder_phrase_init": Spec(
+        runner=_ENCODER,
+        eval_result_files=ENCODER_RESULTS,
+    ),
     "text_embedding": Spec(
         runner="src.baselines.text_embedding.TextEmbeddingBaseline",
+    ),
+    "llm_phrase": Spec(
+        runner="src.baselines.llm_phrase.LLMPhraseTrainer",
+        ddp=True,
+        needs_model=True,
+        uses_stage1_ckpt=True,
+        eval_result_files=CLASSIFIER_RESULTS,
     ),
     "ablation_supervised_only": Spec(
         runner=_TEHR_CLF,
@@ -208,6 +229,29 @@ SPECS: dict[str, Spec] = {
         ddp=True,
         needs_model=True,
         uses_stage1_ckpt=True,
+        eval_result_files=CLASSIFIER_RESULTS,
+    ),
+    "event_token_stage1": Spec(
+        runner="src.training.event_token_trainer.EventTokenStage1Trainer",
+        ddp=True,
+        needs_model=True,
+        supports_eval=False,
+        task_optional=True,
+        clear_pretrained=True,
+        allowed_models=("mistral",),
+        eval_error=(
+            "event_token_stage1 is continued pretraining; it has no "
+            "classification checkpoint to score. Train event_token_stage2 "
+            "and evaluate that."
+        ),
+    ),
+    "event_token_stage2": Spec(
+        runner="src.training.event_token_trainer.EventTokenStage2Trainer",
+        ddp=True,
+        needs_model=True,
+        uses_stage1_ckpt=True,
+        stage1_experiment="event_token_stage1",
+        allowed_models=("mistral",),
         eval_result_files=CLASSIFIER_RESULTS,
     ),
 }

@@ -102,6 +102,9 @@ fi
 
 TAG="${DATASET}-${EXPERIMENT}"
 [[ -n "${MODEL}" ]] && TAG="${TAG}-${MODEL}"
+if [[ -n "${TEHR_EMBEDDER_TAG:-}" ]]; then
+    TAG="${TAG}-${TEHR_EMBEDDER_TAG}"
+fi
 [[ -n "${TASK}" ]] && TAG="${TAG}-${TASK}"
 RESOLVED_CFG="${REPO_ROOT}/configs/_resolved/${TAG}.yaml"
 export RESOLVED_CFG

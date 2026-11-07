@@ -13,7 +13,6 @@ import torch
 import numpy as np
 from typing import Any, Dict, List, Optional, Tuple
 from tqdm import tqdm
-from unsloth import FastLanguageModel
 
 from src.baselines.base import BaseBaseline
 from src.evaluations.evaluations import compute_binary_metrics, write_split_artifacts
@@ -30,9 +29,61 @@ from src.evaluations.eval_resume import (
 from src.training.training_utils import resolve_binary_label_token_ids
 
 
+# Any decimal length. A 4-digit cap made "0.03125" fail the fraction match and
+# then hit the bare "0", which scored the sample as 0.
 _PROB_RE = re.compile(
-    r"(?<!\d)((?:0?\.\d{1,4})|1\.0{1,4}|0|1)(?!\d)"
+    r"(?<!\d)((?:0?\.\d+)|(?:1\.0+)|0|1)(?!\d)"
 )
+
+
+def _hf_token():
+    return (
+        os.environ.get("HF_TOKEN")
+        or os.environ.get("HUGGING_FACE_HUB_TOKEN")
+        or True
+    )
+
+
+def load_text_only_multimodal(
+    model_name: str,
+    load_in_4bit: bool = True,
+    local_rank: int = 0,
+):
+    """
+    Load an image-text model (MedGemma / Gemma 3) for text-only prompts.
+
+    No images are passed. ``Gemma3ForConditionalGeneration`` runs the language
+    model alone when ``pixel_values`` is absent.
+
+    4-bit (and the float16 modules bitsandbytes leaves beside it) makes Gemma 3
+    greedy-decode a single ``<eos>`` on every prompt. Load the whole checkpoint
+    in bfloat16, which is what the MedGemma model card uses.
+    """
+    from transformers import AutoModelForImageTextToText, AutoTokenizer
+
+    if load_in_4bit:
+        print(
+            "  - Ignoring load_in_4bit: Gemma 3 4-bit decode emits an immediate "
+            "<eos> on every prompt. Loading bfloat16."
+        )
+
+    token = _hf_token()
+    print(f"\nLoading multimodal model for text-only inference: {model_name}")
+    tokenizer = AutoTokenizer.from_pretrained(model_name, token=token)
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
+    tokenizer.padding_side = "left"
+
+    model = AutoModelForImageTextToText.from_pretrained(
+        model_name,
+        torch_dtype=torch.bfloat16,
+        device_map={"": local_rank} if torch.cuda.is_available() else "auto",
+        trust_remote_code=True,
+        token=token,
+    )
+    model.eval()
+    print(f"  - Loaded as AutoModelForImageTextToText in bfloat16 (vocab size: {len(tokenizer)})")
+    return model, tokenizer
 
 
 class ZeroShotBaseline(BaseBaseline):
@@ -115,7 +166,7 @@ class ZeroShotBaseline(BaseBaseline):
         self._suppress_tokens: List[int] | None = None
     
     def load_model(self):
-        """Load the base causal LM (no pretraining, no LoRA)."""
+        """Load the instruct checkpoint (no task fine-tuning, no LoRA)."""
         print("\n" + "=" * 80)
         print("Loading base model...")
         print("=" * 80)
@@ -128,9 +179,21 @@ class ZeroShotBaseline(BaseBaseline):
         print(f"  - Max length: {max_length}")
         print(f"  - 4-bit quantization: {load_in_4bit}")
         
-        use_unsloth = self.model_config.get("use_unsloth", True)
+        use_unsloth = bool(self.model_config.get("use_unsloth", True))
+        multimodal = bool(self.model_config.get("multimodal", False))
+        print(f"  - Multimodal (text-only): {multimodal}")
 
-        if use_unsloth:
+        if multimodal:
+            # Unsloth's vision generate path forces a static cache. Gemma 3
+            # ships cache_implementation=hybrid and needs that left in place.
+            self.model, self.tokenizer = load_text_only_multimodal(
+                model_name=model_name,
+                load_in_4bit=load_in_4bit,
+                local_rank=self.local_rank,
+            )
+        elif use_unsloth:
+            from unsloth import FastLanguageModel
+
             self.model, self.tokenizer = FastLanguageModel.from_pretrained(
                 model_name=model_name,
                 max_seq_length=max_length,
@@ -146,7 +209,7 @@ class ZeroShotBaseline(BaseBaseline):
                 model_name=model_name,
                 max_seq_length=max_length,
                 load_in_4bit=load_in_4bit,
-                local_rank=0,
+                local_rank=self.local_rank,
             )
 
         # Decoder-only generation must left-pad.
@@ -393,6 +456,11 @@ class ZeroShotBaseline(BaseBaseline):
         if inputs["input_ids"].size(1) > max_length:
             inputs["input_ids"] = inputs["input_ids"][:, -max_length:]
             inputs["attention_mask"] = inputs["attention_mask"][:, -max_length:]
+            if "token_type_ids" in inputs:
+                inputs["token_type_ids"] = inputs["token_type_ids"][:, -max_length:]
+        # Gemma 3's processor marks image tokens with 1. Text-only prompts are all 0.
+        if self.model_config.get("multimodal") and "token_type_ids" not in inputs:
+            inputs["token_type_ids"] = torch.zeros_like(inputs["input_ids"])
         return inputs
 
     def predict_batch_logit_01(
@@ -561,6 +629,16 @@ class ZeroShotBaseline(BaseBaseline):
                 f"{self.parse_fallbacks}/{self.total_predictions} "
                 f"({rate:.2f}%) failed to parse and fell back to 0.5."
             )
+            if self.parse_fallbacks == self.total_predictions:
+                if partial_path and os.path.isfile(partial_path):
+                    os.remove(partial_path)
+                raise RuntimeError(
+                    "Every sample failed to parse a probability "
+                    f"({self.total_predictions}/{self.total_predictions}). "
+                    "The model is not answering the prompt (often an immediate "
+                    "<eos>). Refusing to save an all-0.5 result. "
+                    "Check the DEBUG prompt lines above."
+                )
         return np.array(probs, dtype=np.float32)
 
     def predict_batch(
@@ -702,12 +780,22 @@ class ZeroShotBaseline(BaseBaseline):
         return metrics
 
     def run(self, resume_from_checkpoint: str | None = None):
-        """Score held_out only. Zero-shot has no training and does not need val."""
+        """Score one split. Default is held_out. ``EVAL_SPLIT=tuning`` scores val only."""
         self.setup_wandb()
         self.load_model()
-        datasets = self.load_datasets(splits=["held_out"])
+        split = os.environ.get("EVAL_SPLIT", "").strip().lower()
         shard = parse_eval_shard()
         extra = f" EVAL_SHARD={shard[0]}/{shard[1]}" if shard else ""
+        if split in {"tuning", "validation", "val"}:
+            datasets = self.load_datasets(splits=["tuning"])
+            print(
+                "Zero-shot: scoring tuning split only; "
+                f"held_out_results.json is left unchanged.{extra}",
+                flush=True,
+            )
+            val_metrics = self.evaluate_split(datasets["tuning"], "tuning")
+            return val_metrics, None
+        datasets = self.load_datasets(splits=["held_out"])
         print(
             "Zero-shot: scoring test split (held_out) only; "
             f"skipping tuning/val.{extra}",

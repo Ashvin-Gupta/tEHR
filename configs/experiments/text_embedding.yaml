@@ -30,7 +30,7 @@ wandb:
 training:
   output_dir: "{results_root}/{dataset}-text_embedding-{task}"
   overwrite_output_dir: true
-  epochs: 1
+  epochs: 10
   batch_size: 128
   learning_rate: 1e-4
   weight_decay: 0.01

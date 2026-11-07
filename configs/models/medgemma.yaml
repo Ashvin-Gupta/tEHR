@@ -1,0 +1,12 @@
+# MedGemma 1.5 4B instruction-tuned (Gemma 3 multimodal).
+# Zero-shot only. Text prompts go through the language model; no images are passed.
+# Loaded in bfloat16. 4-bit Gemma 3 greedy-decodes a single <eos> on every prompt.
+
+model:
+  model_name: "google/medgemma-1.5-4b-it"
+  instruct_model_name: "google/medgemma-1.5-4b-it"
+  hidden_size: 2560
+  use_unsloth: false
+  multimodal: true
+  load_in_4bit: false
+  max_length: 12000

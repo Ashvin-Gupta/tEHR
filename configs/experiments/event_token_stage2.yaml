@@ -1,0 +1,26 @@
+# Event-token stage 2 (Mistral-7B only): stage-1 event embeddings, LoRA + head.
+# Most recent 2048 events per timeline, one id each. Full splits.
+# Usage: sbatch scripts/<site>/run.sh <dataset> event_token_stage2 mistral <task>
+
+extends:
+  - ../shared/lora.yaml
+  - ../shared/training_classifier.yaml
+
+name: "{dataset}_event_token_stage2_{model}_{task}"
+
+wandb:
+  run_name: "event-token-stage2-{dataset}-{model}-{task}"
+
+model:
+  event_seq_length: 2048
+  num_labels: 2
+  freeze_llm: true
+  train_lora: true
+  pooling: "last_token"
+
+training:
+  output_dir: "{results_root}/{dataset}-event_token_stage2-{model}-{task}"
+  learning_rate: 1e-6
+
+data:
+  sort_by_length: false

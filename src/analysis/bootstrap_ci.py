@@ -41,6 +41,7 @@ SKIP_TOP_LEVEL = frozenset(
     {
         "mimic-baselines",
         "mimic-encoder",  # MLM-only, no classifier test split
+        "mimic-encoder_ctx2048",  # 2048-event MLM checkpoint, no test split
         "mimic-decoder",  # NTP-only, no classifier test split
         "cprd-encoder",
         "cprd-decoder",

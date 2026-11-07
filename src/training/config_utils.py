@@ -30,6 +30,7 @@ from src.experiment_map import (
     DEFAULT_TASK,
     EHRSHOT_TASKS,
     MIMIC_TASKS,
+    MODEL_EXPERIMENTS,
     MODELS,
     dataset_allowed,
     get_spec,
@@ -145,6 +146,35 @@ def _list_yaml_stems(directory: str) -> List[str]:
     )
 
 
+def _apply_text_embedder_override(cfg, experiment, dataset, task, results_root) -> None:
+    """Keep a non-default phrase embedder off the shared Qwen cache and result dirs."""
+    if experiment != "text_embedding":
+        return
+    tag = (os.environ.get("TEHR_EMBEDDER_TAG") or "").strip()
+    if not tag:
+        return
+    if not tag.replace("_", "").replace("-", "").isalnum():
+        raise ValueError(f"TEHR_EMBEDDER_TAG must be alphanumeric (got {tag!r}).")
+    model_name = (os.environ.get("TEHR_EMBEDDER_MODEL") or "").strip()
+    if not model_name:
+        raise ValueError("TEHR_EMBEDDER_TAG is set but TEHR_EMBEDDER_MODEL is empty.")
+    emb_dir = os.path.join(results_root, f"{dataset}-text_embedding-{tag}")
+    embedder = cfg.setdefault("embedder", {})
+    embedder["model_name"] = model_name
+    embedder["precomputed_embeddings_path"] = os.path.join(emb_dir, "phrase_embeddings.pt")
+    task_name = task or "na"
+    cfg.setdefault("training", {})["output_dir"] = os.path.join(
+        results_root, f"{dataset}-text_embedding-{tag}-{task_name}"
+    )
+    cfg["name"] = f"{dataset}_text_embedding_{tag}_{task_name}"
+    cfg.setdefault("wandb", {})["run_name"] = f"text-embedding-{tag}-{dataset}-{task_name}"
+    print(
+        f"  - Phrase embedder {tag}: {model_name}\n"
+        f"  - Embeddings: {embedder['precomputed_embeddings_path']}",
+        flush=True,
+    )
+
+
 def build_config(
     dataset: str,
     experiment: str,
@@ -177,6 +207,11 @@ def build_config(
     if spec.needs_model and not model:
         raise ValueError(
             f"Experiment '{experiment}' requires a model ({', '.join(MODELS)})."
+        )
+    if spec.allowed_models is not None and model not in spec.allowed_models:
+        raise ValueError(
+            f"Experiment '{experiment}' only supports: "
+            f"{', '.join(spec.allowed_models)}."
         )
 
     if task is None and not spec.task_optional:
@@ -226,9 +261,21 @@ def build_config(
             raise FileNotFoundError(
                 f"Unknown model '{model}'. Expected: {model_path}\nAvailable: {available}"
             )
-        cfg = deep_merge(cfg, load_config(model_path))
+        allowed_exps = MODEL_EXPERIMENTS.get(model)
+        if allowed_exps is not None and experiment not in allowed_exps:
+            raise ValueError(
+                f"Model '{model}' only supports: {', '.join(allowed_exps)}."
+            )
+        model_file = load_config(model_path)
+        model_keys = set((model_file.get("model") or {}))
+        cfg = deep_merge(cfg, model_file)
+        # Experiment model keys fill defaults. A model yaml that sets the same
+        # key wins (e.g. medgemma sets load_in_4bit: false).
         if exp_model_leaf:
-            cfg.setdefault("model", {}).update(copy.deepcopy(exp_model_leaf))
+            model_cfg = cfg.setdefault("model", {})
+            for key, value in exp_model_leaf.items():
+                if key not in model_keys:
+                    model_cfg[key] = copy.deepcopy(value)
         if exp_training_leaf:
             cfg.setdefault("training", {}).update(copy.deepcopy(exp_training_leaf))
 
@@ -265,18 +312,26 @@ def build_config(
         )
 
     if spec.uses_stage1_ckpt and model:
-        ckpt = (ds_local.get("checkpoints") or {}).get(model)
-        if stage1_tag:
+        if spec.stage1_experiment:
             ckpt = os.path.join(
                 results_root,
-                f"{dataset}-tehr_stage1-{model}-{stage1_tag}",
+                f"{dataset}-{spec.stage1_experiment}-{model}",
                 seed_dir,
                 "final_model",
             )
-        elif not ckpt:
-            ckpt = os.path.join(
-                results_root, f"{dataset}-tehr_stage1-{model}", seed_dir, "final_model"
-            )
+        else:
+            ckpt = (ds_local.get("checkpoints") or {}).get(model)
+            if stage1_tag:
+                ckpt = os.path.join(
+                    results_root,
+                    f"{dataset}-tehr_stage1-{model}-{stage1_tag}",
+                    seed_dir,
+                    "final_model",
+                )
+            elif not ckpt:
+                ckpt = os.path.join(
+                    results_root, f"{dataset}-tehr_stage1-{model}", seed_dir, "final_model"
+                )
         cfg.setdefault("model", {})["pretrained_checkpoint"] = ckpt
         if stage1_tag:
             cfg.setdefault("_meta", {})["stage1_tag"] = stage1_tag
@@ -312,6 +367,7 @@ def build_config(
     mapping["text_embedding_path"] = str(text_emb_path)
 
     cfg = _substitute_placeholders(cfg, mapping)
+    _apply_text_embedder_override(cfg, experiment, dataset, task, results_root)
 
     training = cfg.setdefault("training", {})
     task_name = (cfg.get("task") or {}).get("name") or task
@@ -339,7 +395,7 @@ def build_config(
     # Skip for LM continued pretraining: HuggingFace requires save_steps to be
     # a multiple of eval_steps when load_best_model_at_end is set, and stage 1
     # keeps save_steps=1000 / eval_steps=500.
-    _stage1 = experiment in {"tehr_stage1", "tehr_stage1_v2"}
+    _stage1 = experiment in {"tehr_stage1", "tehr_stage1_v2", "event_token_stage1"}
     if dataset == "ehrshot" and not _stage1:
         ds_training = dataset_cfg.get("training")
         if isinstance(ds_training, dict) and ds_training:
@@ -356,6 +412,7 @@ def build_config(
         "ablation_cpt_frozen",
         "ablation_no_time",
         "ablation_no_value",
+        "event_token_stage2",
     }
     if dataset == "ehrshot" and experiment in _ehrshot_mean_pool:
         cfg.setdefault("model", {})["pooling"] = "mean"
@@ -370,7 +427,7 @@ def build_config(
 
     # Score a tagged stage-1 recipe (e.g. TEHR_STAGE1_TAG=v2) without
     # clobbering the default CPT stage-2 dirs.
-    if stage1_tag and spec.uses_stage1_ckpt:
+    if stage1_tag and spec.uses_stage1_ckpt and not spec.stage1_experiment:
         training = cfg.setdefault("training", {})
         out = training.get("output_dir")
         suffix = f"-{stage1_tag}"
@@ -388,6 +445,19 @@ def build_config(
             or key in {"data_dir", "lookup_dir", "aces_label_dir", "labels_filepath"}
         ):
             data[key] = os.path.normpath(os.path.join(REPO_ROOT, value))
+
+    # mistral.yaml sets max_length 12000 and wins the merge. Event-token runs
+    # keep that value as data.tehr_max_length (the text window) and train at
+    # event_seq_length.
+    if experiment in {"event_token_stage1", "event_token_stage2", "llm_phrase"}:
+        model_cfg = cfg.setdefault("model", {})
+        cap = model_cfg.get("event_seq_length")
+        if cap is None:
+            raise ValueError(
+                f"{experiment} requires model.event_seq_length "
+                "(the event-token context cap)."
+            )
+        model_cfg["max_length"] = int(cap)
 
     return cfg
 

@@ -39,7 +39,6 @@ from typing import Dict, Iterable, List, Sequence, Set
 import pandas as pd
 import torch
 from tqdm import tqdm
-from transformers import AutoModel, AutoTokenizer
 
 from src.data.base_dataset import tokens_to_phrases
 from src.data.base_token_translator import BaseTokenTranslator
@@ -73,6 +72,56 @@ def last_token_pool(
     ]
 
 
+def _hidden_states(model, enc: dict, kind: str) -> torch.Tensor:
+    """Final token states. Gemma 3 is the multimodal class; text-only skips vision."""
+    if kind == "gemma3":
+        token_type_ids = torch.zeros_like(enc["input_ids"])
+        outputs = model.model(
+            input_ids=enc["input_ids"],
+            attention_mask=enc["attention_mask"],
+            token_type_ids=token_type_ids,
+            use_cache=False,
+        )
+        return outputs.last_hidden_state
+    outputs = model(**enc)
+    return outputs.last_hidden_state
+
+
+def load_embedder(model_name: str, device: torch.device):
+    """Load a frozen phrase embedder. Gemma 3 stays in bfloat16."""
+    from transformers import AutoConfig, AutoModel, AutoTokenizer
+
+    config = AutoConfig.from_pretrained(model_name, trust_remote_code=True)
+    architectures = list(getattr(config, "architectures", None) or [])
+    gemma3 = (
+        getattr(config, "model_type", "") == "gemma3"
+        or "Gemma3ForConditionalGeneration" in architectures
+    )
+    tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
+    if gemma3:
+        from transformers import AutoModelForImageTextToText
+
+        tokenizer.padding_side = "left"
+        model = AutoModelForImageTextToText.from_pretrained(
+            model_name,
+            torch_dtype=torch.bfloat16,
+            device_map={"": device},
+        )
+        kind = "gemma3"
+    else:
+        tokenizer.padding_side = "right"
+        model = AutoModel.from_pretrained(
+            model_name,
+            trust_remote_code=True,
+            torch_dtype=torch.float32,
+        ).to(device)
+        kind = "standard"
+    model.eval()
+    return model, tokenizer, kind
+
+
 def embed_strings(
     strings: list[str],
     model,
@@ -80,11 +129,10 @@ def embed_strings(
     device: torch.device,
     batch_size: int = 256,
     max_length: int = 128,
+    kind: str = "standard",
 ) -> torch.Tensor:
     """Embed strings with last-token pooling; return (N, D) float32 L2-normalised."""
     model.eval()
-    # Qwen3-Embedding docs: left-pad so the last position is always the EOS/content token.
-    tokenizer.padding_side = "left"
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
@@ -98,12 +146,13 @@ def embed_strings(
                 truncation=True,
                 max_length=max_length,
                 return_tensors="pt",
-            ).to(device)
+            )
+            enc = {key: value.to(device) for key, value in enc.items()}
 
-            outputs = model(**enc)
-            emb = last_token_pool(outputs.last_hidden_state, enc["attention_mask"])
-            emb = torch.nn.functional.normalize(emb, p=2, dim=-1)
-            all_embeddings.append(emb.cpu().float())
+            hidden = _hidden_states(model, enc, kind)
+            emb = last_token_pool(hidden, enc["attention_mask"])
+            emb = torch.nn.functional.normalize(emb.float(), p=2, dim=-1)
+            all_embeddings.append(emb.cpu())
 
     return torch.cat(all_embeddings, dim=0)
 
@@ -237,29 +286,23 @@ def main(args):
         print(f"  sample phrase: {p!r}")
 
     print(f"\nLoading embedding model: {args.model_name}")
-    tokenizer = AutoTokenizer.from_pretrained(args.model_name, trust_remote_code=True)
-    tokenizer.padding_side = "left"
-    if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
-
-    model = AutoModel.from_pretrained(
-        args.model_name,
-        trust_remote_code=True,
-        torch_dtype=torch.float32,
-    ).to(device)
-    model.eval()
+    model, tokenizer, kind = load_embedder(args.model_name, device)
+    if kind == "gemma3" and args.batch_size > 32:
+        print(f"  Gemma 3 embedder: lowering batch size {args.batch_size} -> 32")
+        args.batch_size = 32
 
     with torch.no_grad():
         dummy_enc = tokenizer(
             ["test"],
             padding=True,
             return_tensors="pt",
-        ).to(device)
-        dummy_out = model(**dummy_enc)
+        )
+        dummy_enc = {key: value.to(device) for key, value in dummy_enc.items()}
+        dummy_hidden = _hidden_states(model, dummy_enc, kind)
         embed_dim = int(last_token_pool(
-            dummy_out.last_hidden_state, dummy_enc["attention_mask"]
+            dummy_hidden, dummy_enc["attention_mask"]
         ).shape[-1])
-    print(f"  Embedding dimension: {embed_dim} (pooling=last_token)")
+    print(f"  Embedding dimension: {embed_dim} (pooling=last_token, kind={kind})")
 
     print(f"\nEmbedding {len(phrases):,} unique phrases...")
     embeddings = embed_strings(
@@ -269,6 +312,7 @@ def main(args):
         device=device,
         batch_size=args.batch_size,
         max_length=args.max_length,
+        kind=kind,
     )
     print(f"  Embeddings shape: {tuple(embeddings.shape)}")
     norms = embeddings.norm(dim=-1)
@@ -289,7 +333,9 @@ def main(args):
     }
 
     os.makedirs(os.path.dirname(os.path.abspath(args.output_path)), exist_ok=True)
-    torch.save(save_dict, args.output_path)
+    partial_path = args.output_path + ".partial"
+    torch.save(save_dict, partial_path)
+    os.replace(partial_path, args.output_path)
     print(f"\nSaved phrase embeddings to: {args.output_path}")
     print(f"  File size: {os.path.getsize(args.output_path) / 1e6:.1f} MB")
 

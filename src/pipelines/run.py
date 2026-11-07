@@ -153,7 +153,16 @@ def main() -> None:
     if args.eval_only:
         config.setdefault("wandb", {})["enabled"] = bool(args.wandb_enabled)
         ckpt = _select_eval_checkpoint(args, output_dir, ckpt)
-        check_clobber(output_dir, args.overwrite, spec.eval_result_files)
+        # EVAL_SPLIT=tuning writes validation_results.json only. Do not treat
+        # an existing test_results.json as a reason to refuse or replace it.
+        split = os.environ.get("EVAL_SPLIT", "").strip().lower()
+        if split in {"tuning", "validation", "val"}:
+            clobber_files = ("validation_results.json",)
+        elif split == "both":
+            clobber_files = ("validation_results.json", "test_results.json")
+        else:
+            clobber_files = spec.eval_result_files
+        check_clobber(output_dir, args.overwrite, clobber_files)
 
     runner = _load_class(spec.runner)(config)
     if args.eval_only:

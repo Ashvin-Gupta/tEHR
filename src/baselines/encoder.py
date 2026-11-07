@@ -1,15 +1,18 @@
 """
-Experiments: encoder, encoder_supervised, encoder_frozen.
+Experiments: encoder, encoder_supervised, encoder_frozen, encoder_phrase_init.
 
 Transformer encoder on filtered EHR tokens (same token filter as xgboost_bow).
 """
+import bisect
 import os
+import json
 import copy
+import time
 import torch
 import torch.distributed as dist
 import torch.nn as nn
 import numpy as np
-from typing import Dict, Any, List, Sequence
+from typing import Dict, Any, List, Optional, Sequence, Tuple
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data import Dataset, DataLoader, ConcatDataset
 from torch.utils.data.distributed import DistributedSampler
@@ -382,6 +385,54 @@ class EHRTransformerMLMHead(nn.Module):
         return loss, logits
 
 
+def frozen_phrase_rows(
+    sorted_phrases: Sequence[str],
+    phrase_to_row: Dict[str, int],
+    concept: str,
+) -> List[int]:
+    """Rows whose phrase is this concept, or a value/unit extension of it.
+
+    Diagnoses and medications are stored as the concept string itself.
+    Labs are stored as ``"<concept>; <value>;"``, so a code that the encoder
+    keeps without its value matches every frozen phrase with that prefix.
+    """
+    concept = concept.strip()
+    if not concept:
+        return []
+    lo = bisect.bisect_left(sorted_phrases, concept)
+    hi = bisect.bisect_left(sorted_phrases, concept + "\uffff")
+    return [phrase_to_row[sorted_phrases[i]] for i in range(lo, hi)]
+
+
+def frozen_phrase_basis(
+    embeddings: torch.Tensor,
+    hidden_dim: int,
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    """Return ``(mean, basis)`` with ``(vector - mean) @ basis`` shaped ``hidden_dim``.
+
+    Equal sizes use a zero mean and an identity basis. A smaller hidden size
+    uses the leading principal components of the phrase matrix. That projection
+    is fixed at initialization; it is not a layer the transformer trains.
+    """
+    dim = int(embeddings.shape[1])
+    if dim == hidden_dim:
+        mean = torch.zeros(dim, dtype=embeddings.dtype)
+        basis = torch.eye(dim, dtype=embeddings.dtype)
+        return mean, basis
+    mean = embeddings.mean(dim=0)
+    centered = embeddings - mean
+    cov = (centered.transpose(0, 1) @ centered) / max(centered.shape[0] - 1, 1)
+    _evals, evecs = torch.linalg.eigh(cov)
+    take = min(hidden_dim, dim)
+    basis = evecs[:, -take:].flip(1).contiguous()
+    if take < hidden_dim:
+        basis = torch.cat(
+            [basis, torch.zeros(dim, hidden_dim - take, dtype=basis.dtype)],
+            dim=1,
+        )
+    return mean, basis
+
+
 class EncoderBaseline:
     """
     Encoder transformer baseline for EHR classification.
@@ -435,6 +486,43 @@ class EncoderBaseline:
 
     def _is_rank0(self) -> bool:
         return self._rank == 0
+
+    def _log_cost(self, label: str, t0: float, *, n_examples: int | None = None) -> None:
+        """Wall time, GPU-hours, and peak allocated memory since ``t0``.
+
+        Rank 0 prints one line and appends the same record to
+        ``results/compute_cost.jsonl`` so it survives after the log scrolls.
+        """
+        if not self._is_rank0():
+            return
+        elapsed = time.perf_counter() - t0
+        hours = elapsed / 3600.0
+        gpus = max(1, int(getattr(self, "_world_size", 1)))
+        record = {
+            "label": label,
+            "wall_hours": round(hours, 6),
+            "gpu_hours": round(hours * gpus, 6),
+            "gpus": gpus,
+        }
+        msg = f"  - COST {label}: wall {hours:.3f} h ({hours * gpus:.3f} GPU-h on {gpus} GPU)"
+        if n_examples is not None and elapsed > 0:
+            rate = n_examples / elapsed
+            record["n_examples"] = int(n_examples)
+            record["examples_per_second"] = round(rate, 4)
+            msg += f", {n_examples} examples, {rate:.3f} ex/s"
+        if torch.cuda.is_available():
+            peak_gib = torch.cuda.max_memory_allocated() / (1024 ** 3)
+            record["peak_allocated_gib"] = round(peak_gib, 4)
+            msg += f", peak allocated GPU memory {peak_gib:.2f} GiB"
+            torch.cuda.reset_peak_memory_stats()
+        print(msg, flush=True)
+        out_dir = getattr(self, "output_dir", None)
+        if not out_dir:
+            return
+        path = os.path.join(out_dir, "results", "compute_cost.jsonl")
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "a") as handle:
+            handle.write(json.dumps(record) + "\n")
 
     def _barrier(self) -> None:
         if self._world_size > 1 and dist.is_initialized():
@@ -531,6 +619,33 @@ class EncoderBaseline:
 
     def _stage1_ckpt_basename(self) -> str:
         return "pretrained_encoder_stage1_mlm.pt"
+
+    def _use_per_seed_stage1_checkpoint(self) -> None:
+        """
+        Seed 42 keeps the finished 512-context MLM file. Later seeds train and
+        save their own copy, so they do not reuse or overwrite seed 42.
+        """
+        experiment = str((self.config.get("_meta") or {}).get("experiment") or "")
+        if experiment != "encoder":
+            return
+        seed = int(self.config.get("seed") or self.training_config.get("seed") or 42)
+        if seed == 42:
+            return
+        out = os.path.normpath(self.output_dir)
+        if os.path.basename(out).startswith("seed_"):
+            out = os.path.dirname(out)
+        results_root = os.path.dirname(out)
+        dataset = str((self.config.get("_meta") or {}).get("dataset") or "mimic")
+        path = os.path.join(
+            results_root,
+            f"{dataset}-encoder",
+            f"seed_{seed}",
+            "models",
+            self._stage1_ckpt_basename(),
+        )
+        self.pretrain_config["pretrained_checkpoint"] = path
+        if self._is_rank0():
+            print(f"  - Stage-1 checkpoint for seed {seed}: {path}", flush=True)
 
     def _stage1_weight_key(self) -> str:
         return "encoder_state_dict"
@@ -872,6 +987,127 @@ class EncoderBaseline:
         trainable_params = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
         print(f"  - Total parameters: {total_params:,}")
         print(f"  - Trainable parameters: {trainable_params:,}")
+
+    def _frozen_embedding_path(self) -> Optional[str]:
+        embedder = self.config.get("embedder") or {}
+        path = embedder.get("precomputed_embeddings_path")
+        if not path:
+            return None
+        return str(path)
+
+    def _init_embeddings_from_frozen(self, filtered_dataset: Dataset) -> None:
+        """Copy frozen phrase vectors into ``token_embedding``, then leave it trainable.
+
+        This is the code-transformer table (token ids in, gradients out). It is
+        not the text-embedding experiment, which feeds the frozen vectors in as
+        inputs on every step and has no embedding parameters to update.
+        """
+        path = self._frozen_embedding_path()
+        if not path:
+            return
+        if not os.path.isfile(path):
+            raise FileNotFoundError(
+                f"Frozen phrase embeddings not found at: {path}\n"
+                "Run the text_embedding precompute first "
+                "(src/pipelines/precompute_token_embeddings.py)."
+            )
+        if self.model is None or self.id_to_token is None:
+            raise RuntimeError("Build the vocabulary and model before seeding embeddings.")
+
+        print("\n" + "=" * 80)
+        print("Seeding token embeddings from frozen phrase embeddings...")
+        print("=" * 80)
+        print(f"  - Cache: {path}")
+        cache = torch.load(path, map_location="cpu", weights_only=False)
+        if "phrase_to_row" not in cache:
+            raise ValueError(
+                f"Embeddings at {path} have no 'phrase_to_row'. "
+                "Use the phrase-level cache from precompute_token_embeddings.py."
+            )
+        embeddings = cache["embeddings"].float()
+        phrase_to_row = {str(k): int(v) for k, v in cache["phrase_to_row"].items()}
+        sorted_phrases = sorted(phrase_to_row)
+        hidden_dim = int(self.model.token_embedding.embedding_dim)
+        print(
+            f"  - Frozen matrix: {tuple(embeddings.shape)} "
+            f"from {cache.get('model_name', 'unknown')} → hidden {hidden_dim}"
+        )
+        mean, basis = frozen_phrase_basis(embeddings, hidden_dim)
+
+        base = getattr(filtered_dataset, "base_dataset", filtered_dataset)
+        source = getattr(base, "id_to_token_map", None) or getattr(base, "id_to_token", {})
+        source_id_to_token = {int(k): str(v) for k, v in source.items()}
+        translator = getattr(base, "translator", None)
+        if translator is None:
+            raise ValueError(
+                "Dataset must expose a translator to map code tokens onto phrase embeddings."
+            )
+
+        from src.data.base_dataset import tokens_to_phrases
+
+        weight = self.model.token_embedding.weight
+        ref_norm = weight.detach().norm(dim=1).mean().clamp(min=1e-6)
+        matched_ids: List[int] = []
+        matched_means: List[torch.Tensor] = []
+        n_exact = 0
+        n_prefix = 0
+        n_miss = 0
+        n_special = 0
+
+        for new_id, raw in self.id_to_token.items():
+            token = str(raw)
+            if token in ("<PAD>", "<UNK>", "<MASK>"):
+                n_special += 1
+                continue
+            try:
+                code = source_id_to_token.get(int(token), "")
+            except ValueError:
+                code = ""
+            phrases = tokens_to_phrases([code], translator, include_header_split=False) if code else []
+            concept = phrases[0].strip() if phrases else ""
+            rows = frozen_phrase_rows(sorted_phrases, phrase_to_row, concept)
+            if not rows:
+                n_miss += 1
+                continue
+            if len(rows) == 1 and sorted_phrases[bisect.bisect_left(sorted_phrases, concept)] == concept:
+                n_exact += 1
+            else:
+                n_prefix += 1
+            matched_ids.append(int(new_id))
+            matched_means.append(embeddings[rows].mean(dim=0))
+
+        if matched_ids:
+            means = torch.stack(matched_means)
+            projected = (means - mean) @ basis
+            direction = projected / projected.norm(dim=1, keepdim=True).clamp(min=1e-8)
+            seeded = (direction * ref_norm).to(dtype=weight.dtype)
+            with torch.no_grad():
+                weight[torch.tensor(matched_ids, dtype=torch.long)] = seeded
+
+        # Seeding is initialization only. MLM and supervised training still update the table.
+        weight.requires_grad_(True)
+        n_matched = n_exact + n_prefix
+        n_codes = max(len(self.id_to_token) - n_special, 1)
+        self.embedding_init_stats = {
+            "path": path,
+            "source": cache.get("model_name"),
+            "frozen_dim": int(embeddings.shape[1]),
+            "hidden_dim": hidden_dim,
+            "exact": n_exact,
+            "prefix_average": n_prefix,
+            "unmatched": n_miss,
+            "special_random": n_special,
+            "trainable": True,
+        }
+        print(
+            f"  - Seeded {n_matched:,}/{n_codes:,} code rows "
+            f"(exact {n_exact:,}, value-averaged {n_prefix:,}); "
+            f"unmatched {n_miss:,} stay randomly initialized"
+        )
+        print(
+            "  - token_embedding.weight.requires_grad="
+            f"{bool(weight.requires_grad)} (frozen vectors are the start point only)"
+        )
     
     def create_mlm_model(self):
         """Create MLM head that wraps the encoder."""
@@ -1095,6 +1331,7 @@ class EncoderBaseline:
         device,
         split_name: str = "validation",
         save_artifacts: bool = True,
+        record_throughput: bool = False,
     ) -> Dict[str, float]:
         """
         Evaluate model on a dataset.
@@ -1113,7 +1350,10 @@ class EncoderBaseline:
         eval_model.eval()
         all_labels = []
         all_probs = []
-        
+        if record_throughput and torch.cuda.is_available() and self._is_rank0():
+            torch.cuda.reset_peak_memory_stats()
+        t_eval = time.perf_counter() if record_throughput else None
+
         with torch.no_grad():
             for batch in tqdm(
                 data_loader,
@@ -1133,9 +1373,25 @@ class EncoderBaseline:
         
         all_labels = np.array(self._gather_list(all_labels))
         all_probs = np.array(self._gather_list(all_probs))
+        extra = None
+        if record_throughput and t_eval is not None and self._is_rank0():
+            elapsed = time.perf_counter() - t_eval
+            n_examples = int(all_labels.shape[0])
+            peak_gib = None
+            if torch.cuda.is_available():
+                peak_gib = torch.cuda.max_memory_allocated() / (1024 ** 3)
+            extra = {
+                "eval_runtime_sec": elapsed,
+                "samples_per_second": (n_examples / elapsed) if elapsed > 0 else None,
+                "n_examples": n_examples,
+                "peak_allocated_gib": peak_gib,
+            }
+            self._log_cost("inference", t_eval, n_examples=n_examples)
         if save_artifacts:
             if self._is_rank0():
-                return write_split_artifacts(self.output_dir, split_name, all_labels, all_probs)
+                return write_split_artifacts(
+                    self.output_dir, split_name, all_labels, all_probs, extra=extra
+                )
             return compute_binary_metrics(all_labels, all_probs)
         return compute_binary_metrics(all_labels, all_probs)
     
@@ -1144,6 +1400,9 @@ class EncoderBaseline:
         # Setup
         setup_output_dir(self.output_dir, overwrite=self.training_config.get('overwrite_output_dir', False))
         device = self._setup_distributed()
+        if torch.cuda.is_available() and self._is_rank0():
+            torch.cuda.reset_peak_memory_stats()
+        t_adapt = time.perf_counter()
         
         # Load datasets (for MIMIC stage-2 we force prediction/cohort mode)
         dataset_name = self.data_config.get("dataset", "CPRD")
@@ -1155,6 +1414,7 @@ class EncoderBaseline:
         for split_name, dataset in datasets.items():
             filtered_datasets[split_name] = FilteredTokenDataset(dataset)
         
+        self._use_per_seed_stage1_checkpoint()
         checkpoint_path = self.pretrain_config.get("pretrained_checkpoint")
         force_pretrain = bool(self.pretrain_config.get("force_pretrain", False))
 
@@ -1177,6 +1437,7 @@ class EncoderBaseline:
             # Build vocabulary and create model from scratch when no checkpoint is provided.
             self.build_vocabulary(filtered_datasets)
             self.create_model()
+            self._init_embeddings_from_frozen(filtered_datasets["train"])
             self.model = self.model.to(device)
         
         # Optional Stage 1: token-level pretraining on the backbone
@@ -1308,6 +1569,7 @@ class EncoderBaseline:
                         "model_config": self.model_config,
                         "pretrain_config": self.pretrain_config,
                         "best_pretrain_val_loss": best_mlm_loss,
+                        "embedding_init": getattr(self, "embedding_init_stats", None),
                     },
                     pretrain_model_path,
                 )
@@ -1316,11 +1578,18 @@ class EncoderBaseline:
                     f"{pretrain_model_path}"
                 )
             self._barrier()
-            
+            self._log_cost("stage1", t_adapt)
+            t_adapt = time.perf_counter()
+
             # Re-enable classification head for supervised fine-tuning
             for p in self._unwrap_model(self.model).classifier.parameters():
                 p.requires_grad = True
-        
+
+        if os.environ.get("TEHR_STOP_AFTER_STAGE1", "").strip().lower() in {"1", "true", "yes"}:
+            if self._is_rank0():
+                print("TEHR_STOP_AFTER_STAGE1: checkpoint written; skipping task adaptation", flush=True)
+            return None, None
+
         # Optional: freeze encoder backbone, train head only (LLM-5b analogue).
         freeze_encoder = bool(self.training_config.get("freeze_encoder", False))
         if freeze_encoder:
@@ -1412,7 +1681,13 @@ class EncoderBaseline:
         source = (
             f"{self._experiment_label()}_frozen" if freeze_encoder else self._experiment_label()
         )
-        
+
+        # Clock and peak memory cover the supervised loop only. Data loading
+        # and, when this process also ran it, stage-1 pretraining are separate.
+        if torch.cuda.is_available() and self._is_rank0():
+            torch.cuda.reset_peak_memory_stats()
+        t_adapt = time.perf_counter()
+
         for epoch in range(num_epochs):
             self._set_sampler_epoch(train_loader, epoch)
             if self._is_rank0():
@@ -1471,14 +1746,19 @@ class EncoderBaseline:
             print(f"  - Best model saved to: {final_model_dir}")
         self._barrier()
         
+        self._log_cost("task_adaptation", t_adapt)
+
         if skip_final_eval(self.training_config):
             if self._is_rank0():
                 print("skip_final_eval: leaving after the training loop (smoke)")
             return None, None
 
-        # Final evaluation (on best model)
+        # Final evaluation (on best model). Test throughput is timed on its own
+        # so it is not folded into the task-adaptation GPU-hours.
         val_metrics = self.evaluate(val_loader, device, 'validation')
-        test_metrics = self.evaluate(test_loader, device, 'test')
+        test_metrics = self.evaluate(
+            test_loader, device, 'test', record_throughput=True
+        )
         
         # Save summary
         if self._is_rank0():
@@ -1494,7 +1774,7 @@ class EncoderBaseline:
             print("\n" + "=" * 80)
             print(f"{self._backbone_label().title()} Transformer Baseline Complete!")
             print("=" * 80)
-        
+
         return val_metrics, test_metrics
 
     def run_eval_only(self, checkpoint_path: str):

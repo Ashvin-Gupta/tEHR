@@ -1,3 +1,6 @@
+# Derived MIMIC tokenisation, checkpoints, and results. Not pushed.
+/tEHR-Data/
+
 # Run artifacts
 HPC_Pretrain/
 HPC_Classifier/
@@ -53,3 +56,5 @@ src/analysis/*
 src/resources/lab_reference_ranges.py
 src/resources/lab_terms.py
 src/resources/my_terms.py
+
+mimic_ehrshot_downstream_ci.csv

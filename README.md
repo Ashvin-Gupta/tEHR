@@ -30,7 +30,7 @@ Append `evaluate` to score a checkpoint instead of training (any experiment that
 | Kind | Values |
 |---|---|
 | **dataset** | `mimic` \| `cprd` \| `ehrshot` |
-| **model** (LLM experiments) | `mistral` \| `qwen0.6` \| `qwen8` |
+| **model** (LLM experiments) | `mistral` \| `qwen0.6` \| `qwen8` \| `medgemma` (zero-shot only) |
 | **mimic task** | `icu_mortality` \| `hospital_mortality` \| `hospital_readmission` \| `icu_readmission` |
 | **cprd task** | pancreatic cancer cutoffs `1m` \| `3m` \| `6m` \| `12m` (default `6m`) |
 | **ehrshot task** | `icu_admission` \| `readmission_30d` \| `pancreatic_cancer` |
@@ -59,7 +59,9 @@ YAML lives in `configs/experiments/<name>.yaml`. How it runs is listed once in `
 | `decoder` | `src/baselines/decoder.py` | Transformer decoder, NTP + supervised |
 | `encoder_supervised` | `src/baselines/encoder.py` | Encoder + head from scratch |
 | `encoder_frozen` | `src/baselines/encoder.py` | Freeze MLM encoder; train head |
+| `encoder_phrase_init` | `src/baselines/encoder.py` | Code transformer; embedding table seeded from frozen phrases, then trained |
 | `text_embedding` | `src/baselines/text_embedding.py` | Phrase embeddings → transformer |
+| `llm_phrase` | `src/baselines/llm_phrase.py` | Frozen event embeddings projected into the LLM; supervised only, 2048 events |
 
 ### MIMIC / EHRSHOT lexical and training ablations
 

@@ -10,7 +10,7 @@ model:
   num_heads: 8
   ff_dim: 2048
   dropout: 0.1
-  max_seq_length: 512
+  max_seq_length: 2048
   num_labels: 2
   head_type: "linear"
   head_hidden_size: 256

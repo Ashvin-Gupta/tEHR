@@ -72,6 +72,12 @@ echo "   host       : $(hostname)"
 if [[ -n "${EVAL_SHARD:-}" ]]; then
     echo "   eval shard : ${EVAL_SHARD}"
 fi
+if [[ -n "${EVAL_SPLIT:-}" ]]; then
+    echo "   eval split : ${EVAL_SPLIT}"
+fi
+if [[ -n "${CHECKPOINT:-}" ]]; then
+    echo "   checkpoint : ${CHECKPOINT}"
+fi
 echo "============================================================"
 nvidia-smi || true
 
